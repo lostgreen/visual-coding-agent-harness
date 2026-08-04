@@ -1,0 +1,3774 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "At the end of the Flaming Mountains (火焰山) chapter, in the Foundation (根器) 'Grieved Body (身本忧)', which effect upgrade did the player choose, and what does it do?",
+        "火焰山"
+      ],
+      "query_fingerprint": "ab022e1cd26b085a7f5fe5e044af228b2adb3274f9980c7ac7d8944a46369482",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0190",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 153,
+        "content_chars": 528,
+        "finish_reason": "stop",
+        "prompt_tokens": 576,
+        "provider_request_id": "78d9b275be147c54fd2960bc7b95e213",
+        "reasoning_tokens": 52,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 0,
+      "retry_count": 0,
+      "score": 0.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.0,
+      "ref_60": 0.0,
+      "ref_600": 0.0,
+      "reference_intervals": [
+        [
+          76690.0,
+          76719.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [],
+      "errors": [
+        "supporting_claim_missing:c2,c3,c4",
+        "supporting_claims_require_observation"
+      ],
+      "passed": false,
+      "reason": "supporting_claim_missing",
+      "round": 4,
+      "supporting_claim_ids": [
+        "c2",
+        "c3",
+        "c4"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "cited_attempt_ids": [
+        "attempt_03420139270393a669f81c0d"
+      ],
+      "errors": [
+        "supporting_claim_missing:c5"
+      ],
+      "passed": false,
+      "reason": "supporting_claim_missing",
+      "round": 6,
+      "supporting_claim_ids": [
+        "c3",
+        "c4",
+        "c5"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [
+        "supporting_claim_missing:c5"
+      ],
+      "candidate_answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0190/observation_log.jsonl",
+      "raw_reasoner_answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+      "reference_reason": "supporting_claim_missing",
+      "reference_valid": false,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c3",
+        "c4",
+        "c5"
+      ],
+      "supporting_intervals": [
+        [
+          75245.034,
+          75245.534
+        ]
+      ],
+      "type": "answer_outcome",
+      "verification_status": "candidate_only",
+      "verified_answer": "",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0190/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0190/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000001",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 623.525,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75187.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000002",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 624.714,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75188.189
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000003",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 625.904,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75189.379
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000004",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 627.093,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75190.568
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000005",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 628.283,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75191.758
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000006",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 629.472,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75192.947
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000007",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 630.662,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75194.137
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000008",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 631.851,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75195.326
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000009",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 633.041,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75196.516
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000010",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 634.23,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75197.705
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000011",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 635.42,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75198.895
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000012",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 636.609,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75200.084
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000013",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 637.799,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75201.274
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000014",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 638.988,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75202.463
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000015",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 640.178,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75203.653
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000016",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 641.367,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75204.842
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000017",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 642.557,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75206.032
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000018",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 643.746,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75207.221
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000019",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 644.936,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75208.411
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000020",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 646.125,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75209.6
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000021",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 647.314,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75210.789
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000022",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 648.504,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75211.979
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000023",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 649.693,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75213.168
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000024",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 650.883,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75214.358
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000025",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 652.072,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75215.547
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000026",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 653.262,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75216.737
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000027",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 654.451,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75217.926
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000028",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 655.641,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75219.116
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000029",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 656.83,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75220.305
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000030",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 658.02,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75221.495
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000031",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 659.209,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75222.684
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000032",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 660.399,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75223.874
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000033",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 661.588,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75225.063
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000034",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 662.778,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75226.253
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000035",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 663.967,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75227.442
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000036",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 665.157,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75228.632
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000037",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 666.346,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75229.821
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000038",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 667.536,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75231.011
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000039",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 668.725,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75232.2
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000040",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 669.914,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75233.389
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000041",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 671.104,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75234.579
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000042",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 672.293,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75235.768
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000043",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 673.483,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75236.958
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000044",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 674.672,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75238.147
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000045",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 675.862,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75239.337
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000046",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 677.051,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75240.526
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000047",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 678.241,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75241.716
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000048",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 679.43,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75242.905
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000049",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 680.62,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75244.095
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000050",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 681.809,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75245.284
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000051",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 682.999,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75246.474
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000052",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 684.188,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75247.663
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000053",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 685.378,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75248.853
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000054",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 686.567,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75250.042
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000055",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 687.757,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75251.232
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000056",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 688.946,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75252.421
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000057",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 690.136,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75253.611
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000058",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 691.325,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75254.8
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000059",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 692.514,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75255.989
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000060",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 693.704,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75257.179
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000061",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 694.893,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75258.368
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000062",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 696.083,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75259.558
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000063",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 697.272,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75260.747
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000064",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 698.462,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75261.937
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000065",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 699.651,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75263.126
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000066",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 700.841,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75264.316
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000067",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 702.03,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75265.505
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000068",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 703.22,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75266.695
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000069",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 704.409,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75267.884
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000070",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 705.599,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75269.074
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000071",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 706.788,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75270.263
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000072",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 707.978,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75271.453
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000073",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 709.167,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75272.642
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000074",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 710.357,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75273.832
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000075",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 711.546,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75275.021
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000076",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 712.736,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75276.211
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000077",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 713.925,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75277.4
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000078",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 715.114,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75278.589
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000079",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 716.304,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75279.779
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000080",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 717.493,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75280.968
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000081",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 718.683,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75282.158
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000082",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 719.872,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75283.347
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000083",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 721.062,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75284.537
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000084",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 722.251,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75285.726
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000085",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 723.441,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75286.916
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000086",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 724.63,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75288.105
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000087",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 725.82,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75289.295
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000088",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 727.009,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75290.484
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000089",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 728.199,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75291.674
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000090",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 729.388,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75292.863
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000091",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 730.578,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75294.053
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000092",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 731.767,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75295.242
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000093",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 732.957,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75296.432
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000094",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 734.146,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75297.621
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000095",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 735.336,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75298.811
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000096",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 736.525,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75300.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_c17ed375b55117aecf8eaf72",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_51b94806742899ec1a05",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "2abb8bdd17ecf6dc5d1a",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000250_05f6ddf6228b\", \"dense_score\": 0.5675390958786011, \"fused_score\": 0.03278688524590164, \"interval_precision\": \"anchor\", \"lexical_score\": 63.46549292811757, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\", \"火焰山\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000250_05f6ddf6228b:p0009\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009\", \"text\": \"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\", \"virtual_end_sec\": 75300.0, \"virtual_start_sec\": 75187.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000231_e9ec0fe17941\", \"dense_score\": 0.5649547576904297, \"fused_score\": 0.03225806451612903, \"interval_precision\": \"anchor\", \"lexical_score\": 49.637103609022304, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\", \"火焰山\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000231_e9ec0fe17941:p0003\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000231_e9ec0fe17941:p0003\", \"text\": \"The man in the hat speaks, and the subtitles say, \\\"但泽儿找到我，说天命人已到了火焰山\\\" (But Ze'er found me and said the Destined One has arrived at the Flaming Mountain).\", \"virtual_end_sec\": 69352.0, \"virtual_start_sec\": 69333.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000027_de07ee6e1aa2\", \"dense_score\": 0.5274048447608948, \"fused_score\": 0.029138513513513514, \"interval_precision\": \"anchor\", \"lexical_score\": 14.208266487917394, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 14, \"matched_queries\": [\"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\", \"火焰山\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0004\", \"seg_0005\"], \"source_video_ids\": [\"004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【\", \"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000027_de07ee6e1aa2:p0000\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000027_de07ee6e1aa2:p0000\", \"text\": \"The video begins with a close-up of a traditional Chinese-style painting depicting a demonic figure surrounded by flames atop a pagoda. The camera pans out to reveal a larger, chaotic scene of battle and destruction. The text \\\"第一回 火眼黑云\\\" (Chapter 1: Fiery Eyes, Black Cloud) is visible at the top.\", \"virtual_end_sec\": 8111.0, \"virtual_start_sec\": 8100.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000237_ecbf9bcad4b6\", \"dense_score\": 0.4958891272544861, \"fused_score\": 0.02871794871794872, \"interval_precision\": \"anchor\", \"lexical_score\": 13.883934975026788, \"metadata\": {\"dense_rank\": 5, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 15, \"matched_queries\": [\"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\", \"火焰山\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000237_ecbf9bcad4b6:p0003\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000237_ecbf9bcad4b6:p0003\", \"text\": \"The warrior approaches a small, burning shrine and interacts with it, opening a menu titled \\\"火炼三关\\\" (Three Passes of Fire Forging). The player navigates through the menu, selecting different items and abilities.\", \"virtual_end_sec\": 71184.0, \"virtual_start_sec\": 71154.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000221_c02ab9509122\", \"dense_score\": 0.5566058158874512, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0024\", \"seg_0025\"], \"source_video_ids\": [\"024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", \"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000221_c02ab9509122:p0001\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000221_c02ab9509122:p0001\", \"text\": \"The scene transitions to a dark, cavernous area where the character materializes next to a small, ornate shrine with a fire in front of it. Chinese text on the screen identifies the location as \\\"火燎二关\\\" (Huǒ Liáo Èr Guān).\", \"virtual_end_sec\": 66310.0, \"virtual_start_sec\": 66304.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 5, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [1], \"max_score\": 0.03278688524590164, \"occurrence_id\": \"occ_50fd548fb72de551e5c1\", \"passage_ids\": [\"cap_000250_05f6ddf6228b:p0009\"], \"query_matches\": [{\"query\": \"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\"}, {\"query\": \"火焰山\"}], \"rank\": 1, \"segment_ids\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"status\": \"uninspected\", \"time_range\": [75187.0, 75300.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.03225806451612903, \"occurrence_id\": \"occ_2645387d3cec61d7af52\", \"passage_ids\": [\"cap_000231_e9ec0fe17941:p0003\"], \"query_matches\": [{\"query\": \"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\"}, {\"query\": \"火焰山\"}], \"rank\": 2, \"segment_ids\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"status\": \"uninspected\", \"time_range\": [69333.0, 69352.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.029138513513513514, \"occurrence_id\": \"occ_7e434a8b2c094ae85236\", \"passage_ids\": [\"cap_000027_de07ee6e1aa2:p0000\"], \"query_matches\": [{\"query\": \"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\"}, {\"query\": \"火焰山\"}], \"rank\": 3, \"segment_ids\": [\"seg_0004\", \"seg_0005\"], \"source_video_ids\": [\"004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【\", \"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"status\": \"uninspected\", \"time_range\": [8100.0, 8111.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.02871794871794872, \"occurrence_id\": \"occ_d92ef89537cfef5a5142\", \"passage_ids\": [\"cap_000237_ecbf9bcad4b6:p0003\"], \"query_matches\": [{\"query\": \"at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?\"}, {\"query\": \"火焰山\"}], \"rank\": 4, \"segment_ids\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"status\": \"uninspected\", \"time_range\": [71154.0, 71184.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_b49027a3096ddb469ce8\", \"passage_ids\": [\"cap_000221_c02ab9509122:p0001\"], \"query_matches\": [], \"rank\": 5, \"segment_ids\": [\"seg_0024\", \"seg_0025\"], \"source_video_ids\": [\"024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", \"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\"], \"status\": \"uninspected\", \"time_range\": [66304.0, 66310.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0190/caption_search/attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 5, \"novel_result_ids\": [\"cap_000250_05f6ddf6228b:p0009\", \"cap_000231_e9ec0fe17941:p0003\", \"cap_000027_de07ee6e1aa2:p0000\", \"cap_000237_ecbf9bcad4b6:p0003\", \"cap_000221_c02ab9509122:p0001\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"ab022e1cd26b085a7f5fe5e044af228b2adb3274f9980c7ac7d8944a46369482\", \"returned_result_count\": 5}, \"search_queries\": [\"At the end of the Flaming Mountains (火焰山) chapter, in the Foundation (根器) 'Grieved Body (身本忧)', which effect upgrade did the player choose, and what does it do?\", \"火焰山\"], \"summary\": \"Caption search: 5 hits\\n1. [20:53:07-20:55:00] score=0.0328 passage=cap_000250_05f6ddf6228b:p0009\\n   \\\"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\\\"\\n   matched queries: at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?; 火焰山\\n2. [19:15:33-19:15:52] score=0.0323 passage=cap_000231_e9ec0fe17941:p0003\\n   \\\"The man in the hat speaks, and the subtitles say, \\\"但泽儿找到我，说天命人已到了火焰山\\\" (But Ze'er found me and said the Destined One has arrived at the Flaming Mountain).\\\"\\n   matched queries: at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?; 火焰山\\n3. [02:15:00-02:15:11] score=0.0291 passage=cap_000027_de07ee6e1aa2:p0000\\n   \\\"The video begins with a close-up of a traditional Chinese-style painting depicting a demonic figure surrounded by flames atop a pagoda. The camera pans out to reveal a larger, chaotic scene of battle and destruction. The text \\\"第一回 火眼黑云\\\" (Chapter 1: Fiery Eyes, Black Cloud) is visible at the top.\\\"\\n   matched queries: at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?; 火焰山\\n4. [19:45:54-19:46:24] score=0.0287 passage=cap_000237_ecbf9bcad4b6:p0003\\n   \\\"The warrior approaches a small, burning shrine and interacts with it, opening a menu titled \\\"火炼三关\\\" (Three Passes of Fire Forging). The player navigates through the menu, selecting different items and abilities.\\\"\\n   matched queries: at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?; 火焰山\\n5. [18:25:04-18:25:10] score=0.0159 passage=cap_000221_c02ab9509122:p0001\\n   \\\"The scene transitions to a dark, cavernous area where the character materializes next to a small, ornate shrine with a fire in front of it. Chinese text on the screen identifies the location as \\\"火燎二关\\\" (Huǒ Liáo Èr Guān).\\\"\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000231_e9ec0fe17941:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000027_de07ee6e1aa2:p0000",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000237_ecbf9bcad4b6:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000221_c02ab9509122:p0001"
+          ],
+          "passage_ids": [
+            "cap_000250_05f6ddf6228b:p0009",
+            "cap_000231_e9ec0fe17941:p0003",
+            "cap_000027_de07ee6e1aa2:p0000",
+            "cap_000237_ecbf9bcad4b6:p0003",
+            "cap_000221_c02ab9509122:p0001"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "At the end of the Flaming Mountains (火焰山) chapter, in the Foundation (根器) 'Grieved Body (身本忧)', which effect upgrade did the player choose, and what does it do?",
+          "火焰山"
+        ],
+        "query_fingerprint": "ab022e1cd26b085a7f5fe5e044af228b2adb3274f9980c7ac7d8944a46369482",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 5,
+          "novel_result_ids": [
+            "cap_000250_05f6ddf6228b:p0009",
+            "cap_000231_e9ec0fe17941:p0003",
+            "cap_000027_de07ee6e1aa2:p0000",
+            "cap_000237_ecbf9bcad4b6:p0003",
+            "cap_000221_c02ab9509122:p0001"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "ab022e1cd26b085a7f5fe5e044af228b2adb3274f9980c7ac7d8944a46369482",
+          "returned_result_count": 5
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+          "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+          "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+          "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.",
+          "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+          "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.",
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_03420139270393a669f81c0d",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        75187.0,
+        75188.189,
+        75189.379,
+        75190.568,
+        75191.758,
+        75192.947,
+        75194.137,
+        75195.326,
+        75196.516,
+        75197.705,
+        75198.895,
+        75200.084,
+        75201.274,
+        75202.463,
+        75203.653,
+        75204.842,
+        75206.032,
+        75207.221,
+        75208.411,
+        75209.6,
+        75210.789,
+        75211.979,
+        75213.168,
+        75214.358,
+        75215.547,
+        75216.737,
+        75217.926,
+        75219.116,
+        75220.305,
+        75221.495,
+        75222.684,
+        75223.874,
+        75225.063,
+        75226.253,
+        75227.442,
+        75228.632,
+        75229.821,
+        75231.011,
+        75232.2,
+        75233.389,
+        75234.579,
+        75235.768,
+        75236.958,
+        75238.147,
+        75239.337,
+        75240.526,
+        75241.716,
+        75242.905,
+        75244.095,
+        75245.284,
+        75246.474,
+        75247.663,
+        75248.853,
+        75250.042,
+        75251.232,
+        75252.421,
+        75253.611,
+        75254.8,
+        75255.989,
+        75257.179,
+        75258.368,
+        75259.558,
+        75260.747,
+        75261.937,
+        75263.126,
+        75264.316,
+        75265.505,
+        75266.695,
+        75267.884,
+        75269.074,
+        75270.263,
+        75271.453,
+        75272.642,
+        75273.832,
+        75275.021,
+        75276.211,
+        75277.4,
+        75278.589,
+        75279.779,
+        75280.968,
+        75282.158,
+        75283.347,
+        75284.537,
+        75285.726,
+        75286.916,
+        75288.105,
+        75289.295,
+        75290.484,
+        75291.674,
+        75292.863,
+        75294.053,
+        75295.242,
+        75296.432,
+        75297.621,
+        75298.811,
+        75300.0
+      ],
+      "inspected_ranges": [
+        [
+          75187.0,
+          75187.25
+        ],
+        [
+          75187.939,
+          75188.439
+        ],
+        [
+          75189.129,
+          75189.629
+        ],
+        [
+          75190.318,
+          75190.818
+        ],
+        [
+          75191.508,
+          75192.008
+        ],
+        [
+          75192.697,
+          75193.197
+        ],
+        [
+          75193.887,
+          75194.387
+        ],
+        [
+          75195.076,
+          75195.576
+        ],
+        [
+          75196.266,
+          75196.766
+        ],
+        [
+          75197.455,
+          75197.955
+        ],
+        [
+          75198.645,
+          75199.145
+        ],
+        [
+          75199.834,
+          75200.334
+        ],
+        [
+          75201.024,
+          75201.524
+        ],
+        [
+          75202.213,
+          75202.713
+        ],
+        [
+          75203.403,
+          75203.903
+        ],
+        [
+          75204.592,
+          75205.092
+        ],
+        [
+          75205.782,
+          75206.282
+        ],
+        [
+          75206.971,
+          75207.471
+        ],
+        [
+          75208.161,
+          75208.661
+        ],
+        [
+          75209.35,
+          75209.85
+        ],
+        [
+          75210.539,
+          75211.039
+        ],
+        [
+          75211.729,
+          75212.229
+        ],
+        [
+          75212.918,
+          75213.418
+        ],
+        [
+          75214.108,
+          75214.608
+        ],
+        [
+          75215.297,
+          75215.797
+        ],
+        [
+          75216.487,
+          75216.987
+        ],
+        [
+          75217.676,
+          75218.176
+        ],
+        [
+          75218.866,
+          75219.366
+        ],
+        [
+          75220.055,
+          75220.555
+        ],
+        [
+          75221.245,
+          75221.745
+        ],
+        [
+          75222.434,
+          75222.934
+        ],
+        [
+          75223.624,
+          75224.124
+        ],
+        [
+          75224.813,
+          75225.313
+        ],
+        [
+          75226.003,
+          75226.503
+        ],
+        [
+          75227.192,
+          75227.692
+        ],
+        [
+          75228.382,
+          75228.882
+        ],
+        [
+          75229.571,
+          75230.071
+        ],
+        [
+          75230.761,
+          75231.261
+        ],
+        [
+          75231.95,
+          75232.45
+        ],
+        [
+          75233.139,
+          75233.639
+        ],
+        [
+          75234.329,
+          75234.829
+        ],
+        [
+          75235.518,
+          75236.018
+        ],
+        [
+          75236.708,
+          75237.208
+        ],
+        [
+          75237.897,
+          75238.397
+        ],
+        [
+          75239.087,
+          75239.587
+        ],
+        [
+          75240.276,
+          75240.776
+        ],
+        [
+          75241.466,
+          75241.966
+        ],
+        [
+          75242.655,
+          75243.155
+        ],
+        [
+          75243.845,
+          75244.345
+        ],
+        [
+          75245.034,
+          75245.534
+        ],
+        [
+          75246.224,
+          75246.724
+        ],
+        [
+          75247.413,
+          75247.913
+        ],
+        [
+          75248.603,
+          75249.103
+        ],
+        [
+          75249.792,
+          75250.292
+        ],
+        [
+          75250.982,
+          75251.482
+        ],
+        [
+          75252.171,
+          75252.671
+        ],
+        [
+          75253.361,
+          75253.861
+        ],
+        [
+          75254.55,
+          75255.05
+        ],
+        [
+          75255.739,
+          75256.239
+        ],
+        [
+          75256.929,
+          75257.429
+        ],
+        [
+          75258.118,
+          75258.618
+        ],
+        [
+          75259.308,
+          75259.808
+        ],
+        [
+          75260.497,
+          75260.997
+        ],
+        [
+          75261.687,
+          75262.187
+        ],
+        [
+          75262.876,
+          75263.376
+        ],
+        [
+          75264.066,
+          75264.566
+        ],
+        [
+          75265.255,
+          75265.755
+        ],
+        [
+          75266.445,
+          75266.945
+        ],
+        [
+          75267.634,
+          75268.134
+        ],
+        [
+          75268.824,
+          75269.324
+        ],
+        [
+          75270.013,
+          75270.513
+        ],
+        [
+          75271.203,
+          75271.703
+        ],
+        [
+          75272.392,
+          75272.892
+        ],
+        [
+          75273.582,
+          75274.082
+        ],
+        [
+          75274.771,
+          75275.271
+        ],
+        [
+          75275.961,
+          75276.461
+        ],
+        [
+          75277.15,
+          75277.65
+        ],
+        [
+          75278.339,
+          75278.839
+        ],
+        [
+          75279.529,
+          75280.029
+        ],
+        [
+          75280.718,
+          75281.218
+        ],
+        [
+          75281.908,
+          75282.408
+        ],
+        [
+          75283.097,
+          75283.597
+        ],
+        [
+          75284.287,
+          75284.787
+        ],
+        [
+          75285.476,
+          75285.976
+        ],
+        [
+          75286.666,
+          75287.166
+        ],
+        [
+          75287.855,
+          75288.355
+        ],
+        [
+          75289.045,
+          75289.545
+        ],
+        [
+          75290.234,
+          75290.734
+        ],
+        [
+          75291.424,
+          75291.924
+        ],
+        [
+          75292.613,
+          75293.113
+        ],
+        [
+          75293.803,
+          75294.303
+        ],
+        [
+          75294.992,
+          75295.492
+        ],
+        [
+          75296.182,
+          75296.682
+        ],
+        [
+          75297.371,
+          75297.871
+        ],
+        [
+          75298.561,
+          75299.061
+        ],
+        [
+          75299.75,
+          75300.0
+        ]
+      ],
+      "interpretation_id": "interpretation_0e4dc7b9dc0f6291deec",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "b8ecf80939bae7195f7c",
+      "raw_output": "```json\n{\n  \"summary\": \"The player approaches a shrine in a volcanic area, opens a menu, and selects an option. The menu is titled 'Foundation (根器)' and the selected option is 'Grieved Body (身本忧)'. The description for this option is 'Restore the body, the mana is full, and the heavy blow will be triggered'.\",\n  \"observations\": [\n    {\n      \"time_sec\": 75286.916,\n      \"description\": \"A menu appears on the left side of the screen. The title is 'Foundation (根器)' and below it is 'Grieved Body (身本忧)'. A description reads 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤). The first option in a list below is 'Tune the rest (调息)' which is highlighted.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Foundation (根器) menu\",\n      \"description\": \"A game menu with a title 'Foundation (根器)' and a sub-heading 'Grieved Body (身本忧)'. It lists several options including 'Tune the rest (调息)', 'Shrine (缩地)', 'Make offerings (供奉)', 'Cast (铸造)', 'Refine (炼制)', 'Smelt (黄庭)', and 'Leave (离开)'.\"\n    },\n    {\n      \"name\": \"Grieved Body (身本忧)\",\n      \"description\": \"An item or effect within the 'Foundation (根器)' menu. Its description is 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤).\"\n    },\n    {\n      \"name\": \"Tune the rest (调息)\",\n      \"description\": \"The first and highlighted option in the 'Foundation (根器)' menu.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        75285.726,\n        75286.916\n      ],\n      \"description\": \"The player character approaches a shrine and interacts with it, causing the 'Foundation (根器)' menu to appear.\"\n    },\n    {\n      \"time_range\": [\n        75286.916,\n        75288.105\n      ],\n      \"description\": \"The player selects the 'Tune the rest (调息)' option from the menu.\"\n    },\n    {\n      \"time_range\": [\n        75288.105,\n        75289.295\n      ],\n      \"description\": \"The menu disappears and the player character is shown standing near the shrine again.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The full list of options in the 'Foundation (根器)' menu is only partially visible and becomes obscured quickly.\"\n  ]\n}\n```",
+      "requested_range": [
+        75187.0,
+        75300.0
+      ],
+      "round_id": "2",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 96,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.420354,
+          "effective_fps": 0.849558,
+          "frame_times": [
+            75187.0,
+            75188.189,
+            75189.379,
+            75190.568,
+            75191.758,
+            75192.947,
+            75194.137,
+            75195.326,
+            75196.516,
+            75197.705,
+            75198.895,
+            75200.084,
+            75201.274,
+            75202.463,
+            75203.653,
+            75204.842,
+            75206.032,
+            75207.221,
+            75208.411,
+            75209.6,
+            75210.789,
+            75211.979,
+            75213.168,
+            75214.358,
+            75215.547,
+            75216.737,
+            75217.926,
+            75219.116,
+            75220.305,
+            75221.495,
+            75222.684,
+            75223.874,
+            75225.063,
+            75226.253,
+            75227.442,
+            75228.632,
+            75229.821,
+            75231.011,
+            75232.2,
+            75233.389,
+            75234.579,
+            75235.768,
+            75236.958,
+            75238.147,
+            75239.337,
+            75240.526,
+            75241.716,
+            75242.905,
+            75244.095,
+            75245.284,
+            75246.474,
+            75247.663,
+            75248.853,
+            75250.042,
+            75251.232,
+            75252.421,
+            75253.611,
+            75254.8,
+            75255.989,
+            75257.179,
+            75258.368,
+            75259.558,
+            75260.747,
+            75261.937,
+            75263.126,
+            75264.316,
+            75265.505,
+            75266.695,
+            75267.884,
+            75269.074,
+            75270.263,
+            75271.453,
+            75272.642,
+            75273.832,
+            75275.021,
+            75276.211,
+            75277.4,
+            75278.589,
+            75279.779,
+            75280.968,
+            75282.158,
+            75283.347,
+            75284.537,
+            75285.726,
+            75286.916,
+            75288.105,
+            75289.295,
+            75290.484,
+            75291.674,
+            75292.863,
+            75294.053,
+            75295.242,
+            75296.432,
+            75297.621,
+            75298.811,
+            75300.0
+          ],
+          "max_gap": 1.19,
+          "observed_subranges": [
+            [
+              75187.0,
+              75187.25
+            ],
+            [
+              75187.939,
+              75188.439
+            ],
+            [
+              75189.129,
+              75189.629
+            ],
+            [
+              75190.318,
+              75190.818
+            ],
+            [
+              75191.508,
+              75192.008
+            ],
+            [
+              75192.697,
+              75193.197
+            ],
+            [
+              75193.887,
+              75194.387
+            ],
+            [
+              75195.076,
+              75195.576
+            ],
+            [
+              75196.266,
+              75196.766
+            ],
+            [
+              75197.455,
+              75197.955
+            ],
+            [
+              75198.645,
+              75199.145
+            ],
+            [
+              75199.834,
+              75200.334
+            ],
+            [
+              75201.024,
+              75201.524
+            ],
+            [
+              75202.213,
+              75202.713
+            ],
+            [
+              75203.403,
+              75203.903
+            ],
+            [
+              75204.592,
+              75205.092
+            ],
+            [
+              75205.782,
+              75206.282
+            ],
+            [
+              75206.971,
+              75207.471
+            ],
+            [
+              75208.161,
+              75208.661
+            ],
+            [
+              75209.35,
+              75209.85
+            ],
+            [
+              75210.539,
+              75211.039
+            ],
+            [
+              75211.729,
+              75212.229
+            ],
+            [
+              75212.918,
+              75213.418
+            ],
+            [
+              75214.108,
+              75214.608
+            ],
+            [
+              75215.297,
+              75215.797
+            ],
+            [
+              75216.487,
+              75216.987
+            ],
+            [
+              75217.676,
+              75218.176
+            ],
+            [
+              75218.866,
+              75219.366
+            ],
+            [
+              75220.055,
+              75220.555
+            ],
+            [
+              75221.245,
+              75221.745
+            ],
+            [
+              75222.434,
+              75222.934
+            ],
+            [
+              75223.624,
+              75224.124
+            ],
+            [
+              75224.813,
+              75225.313
+            ],
+            [
+              75226.003,
+              75226.503
+            ],
+            [
+              75227.192,
+              75227.692
+            ],
+            [
+              75228.382,
+              75228.882
+            ],
+            [
+              75229.571,
+              75230.071
+            ],
+            [
+              75230.761,
+              75231.261
+            ],
+            [
+              75231.95,
+              75232.45
+            ],
+            [
+              75233.139,
+              75233.639
+            ],
+            [
+              75234.329,
+              75234.829
+            ],
+            [
+              75235.518,
+              75236.018
+            ],
+            [
+              75236.708,
+              75237.208
+            ],
+            [
+              75237.897,
+              75238.397
+            ],
+            [
+              75239.087,
+              75239.587
+            ],
+            [
+              75240.276,
+              75240.776
+            ],
+            [
+              75241.466,
+              75241.966
+            ],
+            [
+              75242.655,
+              75243.155
+            ],
+            [
+              75243.845,
+              75244.345
+            ],
+            [
+              75245.034,
+              75245.534
+            ],
+            [
+              75246.224,
+              75246.724
+            ],
+            [
+              75247.413,
+              75247.913
+            ],
+            [
+              75248.603,
+              75249.103
+            ],
+            [
+              75249.792,
+              75250.292
+            ],
+            [
+              75250.982,
+              75251.482
+            ],
+            [
+              75252.171,
+              75252.671
+            ],
+            [
+              75253.361,
+              75253.861
+            ],
+            [
+              75254.55,
+              75255.05
+            ],
+            [
+              75255.739,
+              75256.239
+            ],
+            [
+              75256.929,
+              75257.429
+            ],
+            [
+              75258.118,
+              75258.618
+            ],
+            [
+              75259.308,
+              75259.808
+            ],
+            [
+              75260.497,
+              75260.997
+            ],
+            [
+              75261.687,
+              75262.187
+            ],
+            [
+              75262.876,
+              75263.376
+            ],
+            [
+              75264.066,
+              75264.566
+            ],
+            [
+              75265.255,
+              75265.755
+            ],
+            [
+              75266.445,
+              75266.945
+            ],
+            [
+              75267.634,
+              75268.134
+            ],
+            [
+              75268.824,
+              75269.324
+            ],
+            [
+              75270.013,
+              75270.513
+            ],
+            [
+              75271.203,
+              75271.703
+            ],
+            [
+              75272.392,
+              75272.892
+            ],
+            [
+              75273.582,
+              75274.082
+            ],
+            [
+              75274.771,
+              75275.271
+            ],
+            [
+              75275.961,
+              75276.461
+            ],
+            [
+              75277.15,
+              75277.65
+            ],
+            [
+              75278.339,
+              75278.839
+            ],
+            [
+              75279.529,
+              75280.029
+            ],
+            [
+              75280.718,
+              75281.218
+            ],
+            [
+              75281.908,
+              75282.408
+            ],
+            [
+              75283.097,
+              75283.597
+            ],
+            [
+              75284.287,
+              75284.787
+            ],
+            [
+              75285.476,
+              75285.976
+            ],
+            [
+              75286.666,
+              75287.166
+            ],
+            [
+              75287.855,
+              75288.355
+            ],
+            [
+              75289.045,
+              75289.545
+            ],
+            [
+              75290.234,
+              75290.734
+            ],
+            [
+              75291.424,
+              75291.924
+            ],
+            [
+              75292.613,
+              75293.113
+            ],
+            [
+              75293.803,
+              75294.303
+            ],
+            [
+              75294.992,
+              75295.492
+            ],
+            [
+              75296.182,
+              75296.682
+            ],
+            [
+              75297.371,
+              75297.871
+            ],
+            [
+              75298.561,
+              75299.061
+            ],
+            [
+              75299.75,
+              75300.0
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            75187.0,
+            75300.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.420521
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0028",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩.mp4",
+          "source_time_range": [
+            623.525,
+            736.525
+          ],
+          "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+          "virtual_time_range": [
+            75187.0,
+            75300.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "task_id": "r1_t2"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        1
+      ],
+      "max_score": 0.03278688524590164,
+      "occurrence_id": "occ_50fd548fb72de551e5c1",
+      "passage_ids": [
+        "cap_000250_05f6ddf6228b:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?"
+        },
+        {
+          "query": "火焰山"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0028"
+      ],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        75187.0,
+        75300.0
+      ]
+    },
+    {
+      "artifact": "attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.03225806451612903,
+      "occurrence_id": "occ_2645387d3cec61d7af52",
+      "passage_ids": [
+        "cap_000231_e9ec0fe17941:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?"
+        },
+        {
+          "query": "火焰山"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0026"
+      ],
+      "source_video_ids": [
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        69333.0,
+        69352.0
+      ]
+    },
+    {
+      "artifact": "attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.029138513513513514,
+      "occurrence_id": "occ_7e434a8b2c094ae85236",
+      "passage_ids": [
+        "cap_000027_de07ee6e1aa2:p0000"
+      ],
+      "query_matches": [
+        {
+          "query": "at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?"
+        },
+        {
+          "query": "火焰山"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0004",
+        "seg_0005"
+      ],
+      "source_video_ids": [
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        8100.0,
+        8111.0
+      ]
+    },
+    {
+      "artifact": "attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.02871794871794872,
+      "occurrence_id": "occ_d92ef89537cfef5a5142",
+      "passage_ids": [
+        "cap_000237_ecbf9bcad4b6:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "at the end of the flaming mountains (火焰山) chapter, in the foundation (根器) 'grieved body (身本忧)', which effect upgrade did the player choose, and what does it do?"
+        },
+        {
+          "query": "火焰山"
+        }
+      ],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0026"
+      ],
+      "source_video_ids": [
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        71154.0,
+        71184.0
+      ]
+    },
+    {
+      "artifact": "attempt_c17ed375b55117aecf8eaf72.ab022e1cd26b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_b49027a3096ddb469ce8",
+      "passage_ids": [
+        "cap_000221_c02ab9509122:p0001"
+      ],
+      "query_matches": [],
+      "rank": 5,
+      "segment_ids": [
+        "seg_0024",
+        "seg_0025"
+      ],
+      "source_video_ids": [
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        66304.0,
+        66310.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+    "case_id": "mmlifelong-game-test-0190",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 190,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [
+      "attempt_03420139270393a669f81c0d"
+    ],
+    "supporting_intervals": [
+      [
+        75245.034,
+        75245.534
+      ]
+    ],
+    "verification_status": "candidate_only",
+    "verified_answer": ""
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 469,
+        "content_chars": 1439,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9670,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "3182421fa762c94e13bb3e860c68b5ac",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 88,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "火焰山"
+            ],
+            "goal": "Find the 'Flaming Mountains' (火焰山) chapter to narrow down the search area.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "source_video_ids": [],
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "火焰山"
+            ],
+            "goal": "Find the 'Flaming Mountains' (火焰山) chapter to narrow down the search area.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "source_video_ids": [],
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "895521285ff222b7f61787e4a257c46a579bea7f6266be76afb64bf9bc004045",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 530,
+        "content_chars": 1659,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15973,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "b4433068f65f3ed487d1cf6cefc2cd5e",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 82,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the 'Foundation (根器)' menu, then the 'Grieved Body (身本忧)' item, and identify the selected upgrade at the end of the Flaming Mountains chapter.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              75187.0,
+              75300.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The video contains mentions of 'Flaming Mountains (火焰山)'."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the 'Foundation (根器)' menu, then the 'Grieved Body (身本忧)' item, and identify the selected upgrade at the end of the Flaming Mountains chapter.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              75187.0,
+              75300.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The video contains mentions of 'Flaming Mountains (火焰山)'."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "8a6f6c7ed8cdc03d84252a34960d49f92aa0c8adaecab097c0372c7643a5ac95",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 607,
+        "content_chars": 1778,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 1260,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "ba79418dc9a7cb50ffe9ef482624c515",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 110,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "At a shrine in the Flaming Mountains, the player opens the 'Foundation (根器)' menu, which has a sub-heading 'Grieved Body (身本忧)'.",
+              "time_anchor": [
+                75286,
+                75287
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The description for 'Grieved Body (身本忧)' is 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤).",
+              "time_anchor": [
+                75286,
+                75287
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The player chooses the 'Tune the rest (调息)' option from the menu.",
+              "time_anchor": [
+                75287,
+                75288
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "parsed": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "At a shrine in the Flaming Mountains, the player opens the 'Foundation (根器)' menu, which has a sub-heading 'Grieved Body (身本忧)'.",
+              "time_anchor": [
+                75286,
+                75287
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The description for 'Grieved Body (身本忧)' is 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤).",
+              "time_anchor": [
+                75286,
+                75287
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The player chooses the 'Tune the rest (调息)' option from the menu.",
+              "time_anchor": [
+                75287,
+                75288
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_excerpt": "```json\n{\n    \"action\": \"update_workspace\",\n    \"workspace_ops\": [\n        {\n            \"op\": \"add_claim\",\n            \"claim\": {\n                \"claim_id\": \"c2\",\n                \"text\": \"At a shrine in the Flaming Mountains, the player opens the 'Foundation (根器)' menu, which has a sub-heading 'Grieved Body (身本忧)'.\",\n                \"source\": \"observation\",\n                \"cites\": [\n                    \"ev_r1_t2_69f81c0d\"\n                ],\n                \"time_anchor\": [\n                    75286,\n                    75287\n                ],\n                \"status\": \"active\",\n                \"confidence\": \"high\"\n            }\n        },\n        {\n            \"op\": \"add_claim\",\n            \"claim\": {\n                \"claim_id\": \"c3\",\n                \"text\": \"The description for 'Grieved Body (身本忧)' is 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤).\",\n                \"source\": \"observation\",\n                \"cites\": [\n                    \"ev_r1_t2_69f81c0d\"\n                ],\n                \"time_anchor\": [\n                    75286,\n                    75287\n                ],\n                \"status\": \"active\",\n               ",
+      "raw_sha256": "ab6d844ded43cf8bb478bc6d937bd1dd3f72ad4836ee43e6a214ae113fa5f503",
+      "round": 3,
+      "type": "reasoner_json_repair"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1292,
+        "content_chars": 4012,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 21367,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "e81fdac347cfd278f8b19120babc1c3d",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 91,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "At a shrine in the Flaming Mountains, the player opens the 'Foundation (根器)' menu, which has a sub-heading 'Grieved Body (身本忧)'.",
+              "time_anchor": [
+                75286,
+                75287
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The description for 'Grieved Body (身本忧)' is 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤).",
+              "time_anchor": [
+                75286,
+                75287
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "ev_r1_t2_69f81c0d"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The player chooses the 'Tune the rest (调息)' option from the menu.",
+              "time_anchor": [
+                75287,
+                75288
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": true,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {},
+      "raw_sha256": "ae614d41aaabddd2d64e3dbe13d84c4554177682518bf0459c02b6691843eee0",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": true,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 350,
+        "content_chars": 821,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18519,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "1f97fb347049a563d57008fc69481584",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 128,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "The player chose the 'Grieved Body (身本忧)' upgrade. This upgrade causes the player's mana to be fully restored and triggers a heavy blow attack upon revival.",
+        "supporting_claim_ids": [
+          "c2",
+          "c3",
+          "c4"
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "The player chose the 'Grieved Body (身本忧)' upgrade. This upgrade causes the player's mana to be fully restored and triggers a heavy blow attack upon revival.",
+        "supporting_claim_ids": [
+          "c2",
+          "c3",
+          "c4"
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "cbf30db06f6b6bc130a61aa9ee622308403d2bcf9c719651f2b72d1bec2c83e0",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 874,
+        "content_chars": 2195,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18559,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "b56b5d86aff5afa2997f6de9f881e7b5",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 89,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_03420139270393a669f81c0d"
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_03420139270393a669f81c0d"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "At the end of the Flaming Mountains chapter, the player interacts with a shrine and opens the 'Foundation (根器)' menu.",
+              "time_anchor": [
+                75242.655,
+                75243.155
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_03420139270393a669f81c0d"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "In the 'Foundation (根器)' menu, the player selects the 'Grieved Body (身本忧)' upgrade.",
+              "time_anchor": [
+                75245.034,
+                75245.534
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_03420139270393a669f81c0d"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The description for the 'Grieved Body (身本忧)' upgrade is 'Restore the body, the mana is full, and the heavy blow will be triggered' (复活时，法力回满，并触发一次重击).",
+              "time_anchor": [
+                75245.034,
+                75245.534
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c2",
+              "c3",
+              "c4"
+            ],
+            "label": "Player selects 'Grieved Body' upgrade",
+            "op": "note_interval",
+            "role": "supporting",
+            "time_range": [
+              75242.0,
+              75246.0
+            ]
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_03420139270393a669f81c0d"
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_03420139270393a669f81c0d"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "At the end of the Flaming Mountains chapter, the player interacts with a shrine and opens the 'Foundation (根器)' menu.",
+              "time_anchor": [
+                75242.655,
+                75243.155
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_03420139270393a669f81c0d"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "In the 'Foundation (根器)' menu, the player selects the 'Grieved Body (身本忧)' upgrade.",
+              "time_anchor": [
+                75245.034,
+                75245.534
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_03420139270393a669f81c0d"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The description for the 'Grieved Body (身本忧)' upgrade is 'Restore the body, the mana is full, and the heavy blow will be triggered' (复活时，法力回满，并触发一次重击).",
+              "time_anchor": [
+                75245.034,
+                75245.534
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c2",
+              "c3",
+              "c4"
+            ],
+            "label": "Player selects 'Grieved Body' upgrade",
+            "op": "note_interval",
+            "role": "supporting",
+            "time_range": [
+              75242.0,
+              75246.0
+            ]
+          }
+        ]
+      },
+      "raw_sha256": "c4ba86797c331033d60ee9bfd4458ef1be11720bac6e234295af06fcda2b3ea9",
+      "repair_failed": false,
+      "round": 5,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 189,
+        "content_chars": 368,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 21649,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "f27bc0337d6cecf0ee41632efd690563",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 78,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+        "supporting_claim_ids": [
+          "c3",
+          "c4",
+          "c5"
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+        "supporting_claim_ids": [
+          "c3",
+          "c4",
+          "c5"
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "9a8b651447923d26650ea2c28f4d5b7078455cb3d1e78624760f46db90e7b789",
+      "repair_failed": false,
+      "round": 6,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [
+      "supporting_claim_missing:c5"
+    ],
+    "candidate_answer": "The player did not choose an upgrade for 'Grieved Body (身本忧)'. This is a passive effect that triggers upon resurrection, fully restoring mana and activating a heavy blow. The player instead chose the 'Tune the rest (调息)' option from the menu.",
+    "case_id": "mmlifelong-game-test-0190",
+    "investigation_count": 2,
+    "reference_reason": "supporting_claim_missing",
+    "reference_valid": false,
+    "residual_uncertainty": "",
+    "rounds": 6,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.2,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 5,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 1,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 0.0,
+      "rounds": 6,
+      "unique_visual_material_attempts": 1,
+      "visual_confirmations": 1,
+      "visual_frames_inspected": 96,
+      "visual_interpretation_count": 1,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c3",
+      "c4",
+      "c5"
+    ],
+    "supporting_intervals": [
+      [
+        75245.034,
+        75245.534
+      ]
+    ],
+    "verification_status": "candidate_only",
+    "verified_answer": ""
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_03420139270393a669f81c0d",
+      "round_id": "2",
+      "sampling_manifest": {
+        "coverage_ratio": 0.420354,
+        "effective_fps": 0.849558,
+        "frame_times": [
+          75187.0,
+          75188.189,
+          75189.379,
+          75190.568,
+          75191.758,
+          75192.947,
+          75194.137,
+          75195.326,
+          75196.516,
+          75197.705,
+          75198.895,
+          75200.084,
+          75201.274,
+          75202.463,
+          75203.653,
+          75204.842,
+          75206.032,
+          75207.221,
+          75208.411,
+          75209.6,
+          75210.789,
+          75211.979,
+          75213.168,
+          75214.358,
+          75215.547,
+          75216.737,
+          75217.926,
+          75219.116,
+          75220.305,
+          75221.495,
+          75222.684,
+          75223.874,
+          75225.063,
+          75226.253,
+          75227.442,
+          75228.632,
+          75229.821,
+          75231.011,
+          75232.2,
+          75233.389,
+          75234.579,
+          75235.768,
+          75236.958,
+          75238.147,
+          75239.337,
+          75240.526,
+          75241.716,
+          75242.905,
+          75244.095,
+          75245.284,
+          75246.474,
+          75247.663,
+          75248.853,
+          75250.042,
+          75251.232,
+          75252.421,
+          75253.611,
+          75254.8,
+          75255.989,
+          75257.179,
+          75258.368,
+          75259.558,
+          75260.747,
+          75261.937,
+          75263.126,
+          75264.316,
+          75265.505,
+          75266.695,
+          75267.884,
+          75269.074,
+          75270.263,
+          75271.453,
+          75272.642,
+          75273.832,
+          75275.021,
+          75276.211,
+          75277.4,
+          75278.589,
+          75279.779,
+          75280.968,
+          75282.158,
+          75283.347,
+          75284.537,
+          75285.726,
+          75286.916,
+          75288.105,
+          75289.295,
+          75290.484,
+          75291.674,
+          75292.863,
+          75294.053,
+          75295.242,
+          75296.432,
+          75297.621,
+          75298.811,
+          75300.0
+        ],
+        "max_gap": 1.19,
+        "observed_subranges": [
+          [
+            75187.0,
+            75187.25
+          ],
+          [
+            75187.939,
+            75188.439
+          ],
+          [
+            75189.129,
+            75189.629
+          ],
+          [
+            75190.318,
+            75190.818
+          ],
+          [
+            75191.508,
+            75192.008
+          ],
+          [
+            75192.697,
+            75193.197
+          ],
+          [
+            75193.887,
+            75194.387
+          ],
+          [
+            75195.076,
+            75195.576
+          ],
+          [
+            75196.266,
+            75196.766
+          ],
+          [
+            75197.455,
+            75197.955
+          ],
+          [
+            75198.645,
+            75199.145
+          ],
+          [
+            75199.834,
+            75200.334
+          ],
+          [
+            75201.024,
+            75201.524
+          ],
+          [
+            75202.213,
+            75202.713
+          ],
+          [
+            75203.403,
+            75203.903
+          ],
+          [
+            75204.592,
+            75205.092
+          ],
+          [
+            75205.782,
+            75206.282
+          ],
+          [
+            75206.971,
+            75207.471
+          ],
+          [
+            75208.161,
+            75208.661
+          ],
+          [
+            75209.35,
+            75209.85
+          ],
+          [
+            75210.539,
+            75211.039
+          ],
+          [
+            75211.729,
+            75212.229
+          ],
+          [
+            75212.918,
+            75213.418
+          ],
+          [
+            75214.108,
+            75214.608
+          ],
+          [
+            75215.297,
+            75215.797
+          ],
+          [
+            75216.487,
+            75216.987
+          ],
+          [
+            75217.676,
+            75218.176
+          ],
+          [
+            75218.866,
+            75219.366
+          ],
+          [
+            75220.055,
+            75220.555
+          ],
+          [
+            75221.245,
+            75221.745
+          ],
+          [
+            75222.434,
+            75222.934
+          ],
+          [
+            75223.624,
+            75224.124
+          ],
+          [
+            75224.813,
+            75225.313
+          ],
+          [
+            75226.003,
+            75226.503
+          ],
+          [
+            75227.192,
+            75227.692
+          ],
+          [
+            75228.382,
+            75228.882
+          ],
+          [
+            75229.571,
+            75230.071
+          ],
+          [
+            75230.761,
+            75231.261
+          ],
+          [
+            75231.95,
+            75232.45
+          ],
+          [
+            75233.139,
+            75233.639
+          ],
+          [
+            75234.329,
+            75234.829
+          ],
+          [
+            75235.518,
+            75236.018
+          ],
+          [
+            75236.708,
+            75237.208
+          ],
+          [
+            75237.897,
+            75238.397
+          ],
+          [
+            75239.087,
+            75239.587
+          ],
+          [
+            75240.276,
+            75240.776
+          ],
+          [
+            75241.466,
+            75241.966
+          ],
+          [
+            75242.655,
+            75243.155
+          ],
+          [
+            75243.845,
+            75244.345
+          ],
+          [
+            75245.034,
+            75245.534
+          ],
+          [
+            75246.224,
+            75246.724
+          ],
+          [
+            75247.413,
+            75247.913
+          ],
+          [
+            75248.603,
+            75249.103
+          ],
+          [
+            75249.792,
+            75250.292
+          ],
+          [
+            75250.982,
+            75251.482
+          ],
+          [
+            75252.171,
+            75252.671
+          ],
+          [
+            75253.361,
+            75253.861
+          ],
+          [
+            75254.55,
+            75255.05
+          ],
+          [
+            75255.739,
+            75256.239
+          ],
+          [
+            75256.929,
+            75257.429
+          ],
+          [
+            75258.118,
+            75258.618
+          ],
+          [
+            75259.308,
+            75259.808
+          ],
+          [
+            75260.497,
+            75260.997
+          ],
+          [
+            75261.687,
+            75262.187
+          ],
+          [
+            75262.876,
+            75263.376
+          ],
+          [
+            75264.066,
+            75264.566
+          ],
+          [
+            75265.255,
+            75265.755
+          ],
+          [
+            75266.445,
+            75266.945
+          ],
+          [
+            75267.634,
+            75268.134
+          ],
+          [
+            75268.824,
+            75269.324
+          ],
+          [
+            75270.013,
+            75270.513
+          ],
+          [
+            75271.203,
+            75271.703
+          ],
+          [
+            75272.392,
+            75272.892
+          ],
+          [
+            75273.582,
+            75274.082
+          ],
+          [
+            75274.771,
+            75275.271
+          ],
+          [
+            75275.961,
+            75276.461
+          ],
+          [
+            75277.15,
+            75277.65
+          ],
+          [
+            75278.339,
+            75278.839
+          ],
+          [
+            75279.529,
+            75280.029
+          ],
+          [
+            75280.718,
+            75281.218
+          ],
+          [
+            75281.908,
+            75282.408
+          ],
+          [
+            75283.097,
+            75283.597
+          ],
+          [
+            75284.287,
+            75284.787
+          ],
+          [
+            75285.476,
+            75285.976
+          ],
+          [
+            75286.666,
+            75287.166
+          ],
+          [
+            75287.855,
+            75288.355
+          ],
+          [
+            75289.045,
+            75289.545
+          ],
+          [
+            75290.234,
+            75290.734
+          ],
+          [
+            75291.424,
+            75291.924
+          ],
+          [
+            75292.613,
+            75293.113
+          ],
+          [
+            75293.803,
+            75294.303
+          ],
+          [
+            75294.992,
+            75295.492
+          ],
+          [
+            75296.182,
+            75296.682
+          ],
+          [
+            75297.371,
+            75297.871
+          ],
+          [
+            75298.561,
+            75299.061
+          ],
+          [
+            75299.75,
+            75300.0
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          75187.0,
+          75300.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.420521
+      },
+      "task_id": "r1_t2"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_c17ed375b55117aecf8eaf72"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_03420139270393a669f81c0d"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t2_69f81c0d"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t2",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "火焰山"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t2",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [
+            75187.0,
+            75300.0
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": [
+    {
+      "action": "update_workspace",
+      "round": 3,
+      "source": "run_trace",
+      "tasks": [],
+      "workspace_errors": [
+        "claim_cites_unknown_attempt:c2:ev_r1_t2_69f81c0d",
+        "claim_cites_unknown_attempt:c3:ev_r1_t2_69f81c0d",
+        "claim_cites_unknown_attempt:c4:ev_r1_t2_69f81c0d"
+      ]
+    },
+    {
+      "operations": [
+        {
+          "claim": {
+            "cites": [
+              "ev_r1_t2_69f81c0d"
+            ],
+            "claim_id": "c2",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "text": "At a shrine in the Flaming Mountains, the player opens the 'Foundation (根器)' menu, which has a sub-heading 'Grieved Body (身本忧)'.",
+            "time_anchor": [
+              75286,
+              75287
+            ]
+          },
+          "op": "add_claim"
+        },
+        {
+          "claim": {
+            "cites": [
+              "ev_r1_t2_69f81c0d"
+            ],
+            "claim_id": "c3",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "text": "The description for 'Grieved Body (身本忧)' is 'Restore the body, the mana is full, and the heavy blow will be triggered' (还原身体、法力回满, 同时会引出重锤).",
+            "time_anchor": [
+              75286,
+              75287
+            ]
+          },
+          "op": "add_claim"
+        },
+        {
+          "claim": {
+            "cites": [
+              "ev_r1_t2_69f81c0d"
+            ],
+            "claim_id": "c4",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "text": "The player chooses the 'Tune the rest (调息)' option from the menu.",
+            "time_anchor": [
+              75287,
+              75288
+            ]
+          },
+          "op": "add_claim"
+        }
+      ],
+      "result": {
+        "accepted": false,
+        "applied_count": 0,
+        "errors": [
+          "claim_cites_unknown_attempt:c2:ev_r1_t2_69f81c0d",
+          "claim_cites_unknown_attempt:c3:ev_r1_t2_69f81c0d",
+          "claim_cites_unknown_attempt:c4:ev_r1_t2_69f81c0d"
+        ],
+        "revision": 1
+      },
+      "round": "3",
+      "source": "workspace_history"
+    }
+  ]
+}

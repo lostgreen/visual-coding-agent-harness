@@ -1,0 +1,3566 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "Which of the following statements are correct? 1. When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat 2. When the player fights against Daoist Mi (糜道人), the transformation they carry is Little Yellow Dragon 3. When the player fights against Non-Pure (不净), the transformation they carry is Guangzhi (广智) 4. When the player fights against Yaksha King (夜叉王), the transformation used is Yin Tiger",
+        "妙音",
+        "魔将 妙音"
+      ],
+      "query_fingerprint": "1736475db9e7a45e19f21361b9fb3445d98619e52ea61e1b581cd9053f22bb14",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0097",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 110,
+        "content_chars": 381,
+        "finish_reason": "stop",
+        "prompt_tokens": 608,
+        "provider_request_id": "20790858d392b3d74dd8649d77c2986b",
+        "reasoning_tokens": 36,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 0,
+      "retry_count": 0,
+      "score": 0.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.14285714285714285,
+      "ref_60": 0.08333333333333333,
+      "ref_600": 0.2,
+      "reference_intervals": [
+        [
+          25114.0,
+          25269.0
+        ],
+        [
+          60945.0,
+          61058.0
+        ],
+        [
+          38660.0,
+          38708.0
+        ],
+        [
+          75850.0,
+          75966.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [
+        "attempt_1d433215e738b39c975ddfee"
+      ],
+      "errors": [],
+      "passed": true,
+      "reason": "reference_integrity_verified",
+      "round": 6,
+      "supporting_claim_ids": [
+        "c5"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [],
+      "candidate_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0097/observation_log.jsonl",
+      "raw_reasoner_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+      "reference_reason": "reference_integrity_verified",
+      "reference_valid": true,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c5"
+      ],
+      "supporting_intervals": [
+        [
+          25140.0,
+          25150.0
+        ]
+      ],
+      "type": "answer_outcome",
+      "verification_status": "verified",
+      "verified_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0097/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0097/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000001",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 979.955,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25072.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000002",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 981.987,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25074.032
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000003",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 984.018,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25076.063
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000004",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 986.05,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25078.095
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000005",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 988.082,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25080.127
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000006",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 990.114,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25082.159
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000007",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 992.145,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25084.19
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000008",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 994.177,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25086.222
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000009",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 996.209,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25088.254
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000010",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 998.241,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25090.286
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000011",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1000.272,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25092.317
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000012",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1002.304,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25094.349
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000013",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1004.336,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25096.381
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000014",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1006.368,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25098.413
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000015",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1008.399,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25100.444
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000016",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1010.431,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25102.476
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000017",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1012.463,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25104.508
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000018",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1014.495,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25106.54
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000019",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1016.526,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25108.571
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000020",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1018.558,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25110.603
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000021",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1020.59,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25112.635
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000022",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1022.622,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25114.667
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000023",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1024.653,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25116.698
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000024",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1026.685,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25118.73
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000025",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1028.717,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25120.762
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000026",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1030.749,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25122.794
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000027",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1032.78,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25124.825
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000028",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1034.812,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25126.857
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000029",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1036.844,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25128.889
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000030",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1038.876,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25130.921
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000031",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1040.907,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25132.952
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000032",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1042.939,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25134.984
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000033",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1044.971,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25137.016
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000034",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1047.003,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25139.048
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000035",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1049.034,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25141.079
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000036",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1051.066,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25143.111
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000037",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1053.098,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25145.143
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000038",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1055.13,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25147.175
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000039",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1057.161,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25149.206
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000040",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1059.193,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25151.238
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000041",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1061.225,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25153.27
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000042",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1063.257,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25155.302
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000043",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1065.288,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25157.333
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000044",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1067.32,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25159.365
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000045",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1069.352,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25161.397
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000046",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1071.384,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25163.429
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000047",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1073.415,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25165.46
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000048",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1075.447,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25167.492
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000049",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1077.479,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25169.524
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000050",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1079.511,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25171.556
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000051",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1081.542,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25173.587
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000052",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1083.574,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25175.619
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000053",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1085.606,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25177.651
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000054",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1087.638,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25179.683
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000055",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1089.669,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25181.714
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000056",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1091.701,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25183.746
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000057",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1093.733,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25185.778
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000058",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1095.765,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25187.81
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000059",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1097.796,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25189.841
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000060",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1099.828,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25191.873
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000061",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1101.86,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25193.905
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000062",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1103.892,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25195.937
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000063",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1105.923,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25197.968
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000064",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1107.955,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25200.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000001",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1047.955,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25140.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000002",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1048.481,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25140.526
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000003",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1049.008,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25141.053
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000004",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1049.534,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25141.579
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000005",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1050.06,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25142.105
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000006",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1050.587,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25142.632
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000007",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1051.113,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25143.158
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000008",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1051.639,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25143.684
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000009",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1052.166,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25144.211
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000010",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1052.692,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25144.737
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000011",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1053.218,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25145.263
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000012",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1053.744,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25145.789
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000013",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1054.271,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25146.316
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000014",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1054.797,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25146.842
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000015",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1055.323,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25147.368
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000016",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1055.85,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25147.895
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000017",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1056.376,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25148.421
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000018",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1056.902,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25148.947
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000019",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1057.429,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25149.474
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000020",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0010",
+      "source_time_sec": 1057.955,
+      "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+      "virtual_time_sec": 25150.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_11a21a8abfabb8e8b18ffac4",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_269c90b64678e80198e0",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "f4b25c21586895d4c51e",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000190_41f64a0d8266\", \"dense_score\": 0.47054001688957214, \"fused_score\": 0.030330882352941176, \"interval_precision\": \"anchor\", \"lexical_score\": 33.73917596726181, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 8, \"matched_queries\": [\"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0022\"], \"source_video_ids\": [\"022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000190_41f64a0d8266:p0007\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000190_41f64a0d8266:p0007\", \"text\": \"The player then enters a skill tree menu, also in Chinese, which displays different transformation abilities.\", \"virtual_end_sec\": 57185.0, \"virtual_start_sec\": 57146.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000230_92ffb003f434\", \"dense_score\": 0.4514073133468628, \"fused_score\": 0.027984344422700584, \"interval_precision\": \"anchor\", \"lexical_score\": 31.86561367824543, \"metadata\": {\"dense_rank\": 13, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 10, \"matched_queries\": [\"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0025\", \"seg_0026\"], \"source_video_ids\": [\"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\", \"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000230_92ffb003f434:p0007\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000230_92ffb003f434:p0007\", \"text\": \"The player navigates to a skill tree menu, which displays various transformation abilities represented by Chinese characters like \\\"狼\\\" (Wolf), \\\"石\\\" (Stone), and \\\"虎\\\" (Tiger).\", \"virtual_end_sec\": 69205.0, \"virtual_start_sec\": 69158.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000140_dff5f16cbe06\", \"dense_score\": 0.43679487705230713, \"fused_score\": 0.026171741361614778, \"interval_precision\": \"anchor\", \"lexical_score\": 30.63164215146587, \"metadata\": {\"dense_rank\": 19, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 14, \"matched_queries\": [\"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0016\"], \"source_video_ids\": [\"016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000140_dff5f16cbe06:p0005\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000140_dff5f16cbe06:p0005\", \"text\": \"Another large, muscular enemy is engaged in combat, and the character uses a transformation ability to turn into a beast-like creature to attack.\", \"virtual_end_sec\": 42145.0, \"virtual_start_sec\": 42113.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000083_5569b47a277e\", \"dense_score\": null, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": 86.69574184958473, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\", \"妙音\", \"魔将 妙音\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0010\"], \"source_video_ids\": [\"010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000083_5569b47a277e:p0009\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000083_5569b47a277e:p0009\", \"text\": \"A cutscene begins, revealing a colossal, multi-limbed, monstrous boss. The boss's name, \\\"魔将·妙音\\\" (Demon General Miaoyin), appears on screen as it transforms and prepares for battle. The fight then commences in a shallow pool of water.\", \"virtual_end_sec\": 25200.0, \"virtual_start_sec\": 25072.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000108_8f68d67b9bb2\", \"dense_score\": 0.5136914849281311, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0013\"], \"source_video_ids\": [\"013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000108_8f68d67b9bb2:p0001\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000108_8f68d67b9bb2:p0001\", \"text\": \"The character transforms into a different form, a warrior with a golden dragon-themed helmet, before changing back.\", \"virtual_end_sec\": 32419.0, \"virtual_start_sec\": 32408.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 5, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [1], \"max_score\": 0.030330882352941176, \"occurrence_id\": \"occ_4c65345519c957152340\", \"passage_ids\": [\"cap_000190_41f64a0d8266:p0007\"], \"query_matches\": [{\"query\": \"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"}], \"rank\": 1, \"segment_ids\": [\"seg_0022\"], \"source_video_ids\": [\"022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人\"], \"status\": \"uninspected\", \"time_range\": [57146.0, 57185.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.027984344422700584, \"occurrence_id\": \"occ_47d6ec1c70f672986956\", \"passage_ids\": [\"cap_000230_92ffb003f434:p0007\"], \"query_matches\": [{\"query\": \"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"}], \"rank\": 2, \"segment_ids\": [\"seg_0025\", \"seg_0026\"], \"source_video_ids\": [\"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\", \"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"status\": \"uninspected\", \"time_range\": [69158.0, 69205.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.026171741361614778, \"occurrence_id\": \"occ_c812056b6ccb672df355\", \"passage_ids\": [\"cap_000140_dff5f16cbe06:p0005\"], \"query_matches\": [{\"query\": \"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"}], \"rank\": 3, \"segment_ids\": [\"seg_0016\"], \"source_video_ids\": [\"016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集\"], \"status\": \"uninspected\", \"time_range\": [42113.0, 42145.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_15a8c37fa2ef085dd90d\", \"passage_ids\": [\"cap_000083_5569b47a277e:p0009\"], \"query_matches\": [{\"query\": \"which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\"}, {\"query\": \"妙音\"}, {\"query\": \"魔将 妙音\"}], \"rank\": 4, \"segment_ids\": [\"seg_0010\"], \"source_video_ids\": [\"010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨\"], \"status\": \"uninspected\", \"time_range\": [25072.0, 25200.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_538dcdec5d5d8e3a1463\", \"passage_ids\": [\"cap_000108_8f68d67b9bb2:p0001\"], \"query_matches\": [], \"rank\": 5, \"segment_ids\": [\"seg_0013\"], \"source_video_ids\": [\"013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）\"], \"status\": \"uninspected\", \"time_range\": [32408.0, 32419.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0097/caption_search/attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 5, \"novel_result_ids\": [\"cap_000190_41f64a0d8266:p0007\", \"cap_000230_92ffb003f434:p0007\", \"cap_000140_dff5f16cbe06:p0005\", \"cap_000083_5569b47a277e:p0009\", \"cap_000108_8f68d67b9bb2:p0001\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"1736475db9e7a45e19f21361b9fb3445d98619e52ea61e1b581cd9053f22bb14\", \"returned_result_count\": 5}, \"search_queries\": [\"Which of the following statements are correct? 1. When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat 2. When the player fights against Daoist Mi (糜道人), the transformation they carry is Little Yellow Dragon 3. When the player fights against Non-Pure (不净), the transformation they carry is Guangzhi (广智) 4. When the player fights against Yaksha King (夜叉王), the transformation used is Yin Tiger\", \"妙音\", \"魔将 妙音\"], \"summary\": \"Caption search: 5 hits\\n1. [15:52:26-15:53:05] score=0.0303 passage=cap_000190_41f64a0d8266:p0007\\n   \\\"The player then enters a skill tree menu, also in Chinese, which displays different transformation abilities.\\\"\\n   matched queries: which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\\n2. [19:12:38-19:13:25] score=0.0280 passage=cap_000230_92ffb003f434:p0007\\n   \\\"The player navigates to a skill tree menu, which displays various transformation abilities represented by Chinese characters like \\\"狼\\\" (Wolf), \\\"石\\\" (Stone), and \\\"虎\\\" (Tiger).\\\"\\n   matched queries: which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\\n3. [11:41:53-11:42:25] score=0.0262 passage=cap_000140_dff5f16cbe06:p0005\\n   \\\"Another large, muscular enemy is engaged in combat, and the character uses a transformation ability to turn into a beast-like creature to attack.\\\"\\n   matched queries: which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger\\n4. [06:57:52-07:00:00] score=0.0164 passage=cap_000083_5569b47a277e:p0009\\n   \\\"A cutscene begins, revealing a colossal, multi-limbed, monstrous boss. The boss's name, \\\"魔将·妙音\\\" (Demon General Miaoyin), appears on screen as it transforms and prepares for battle. The fight then commences in a shallow pool of water.\\\"\\n   matched queries: which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger; 妙音; 魔将 妙音\\n5. [09:00:08-09:00:19] score=0.0164 passage=cap_000108_8f68d67b9bb2:p0001\\n   \\\"The character transforms into a different form, a warrior with a golden dragon-themed helmet, before changing back.\\\"\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000190_41f64a0d8266:p0007",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000230_92ffb003f434:p0007",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000140_dff5f16cbe06:p0005",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000083_5569b47a277e:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000108_8f68d67b9bb2:p0001"
+          ],
+          "passage_ids": [
+            "cap_000190_41f64a0d8266:p0007",
+            "cap_000230_92ffb003f434:p0007",
+            "cap_000140_dff5f16cbe06:p0005",
+            "cap_000083_5569b47a277e:p0009",
+            "cap_000108_8f68d67b9bb2:p0001"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "Which of the following statements are correct? 1. When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat 2. When the player fights against Daoist Mi (糜道人), the transformation they carry is Little Yellow Dragon 3. When the player fights against Non-Pure (不净), the transformation they carry is Guangzhi (广智) 4. When the player fights against Yaksha King (夜叉王), the transformation used is Yin Tiger",
+          "妙音",
+          "魔将 妙音"
+        ],
+        "query_fingerprint": "1736475db9e7a45e19f21361b9fb3445d98619e52ea61e1b581cd9053f22bb14",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 5,
+          "novel_result_ids": [
+            "cap_000190_41f64a0d8266:p0007",
+            "cap_000230_92ffb003f434:p0007",
+            "cap_000140_dff5f16cbe06:p0005",
+            "cap_000083_5569b47a277e:p0009",
+            "cap_000108_8f68d67b9bb2:p0001"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "1736475db9e7a45e19f21361b9fb3445d98619e52ea61e1b581cd9053f22bb14",
+          "returned_result_count": 5
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人",
+          "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+          "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+          "016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集",
+          "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+          "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）"
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+        "016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集",
+        "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+        "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）"
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_47f1af2f63cda3f50511e587",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [
+        25072.0,
+        25074.032,
+        25076.063,
+        25078.095,
+        25080.127,
+        25082.159,
+        25084.19,
+        25086.222,
+        25088.254,
+        25090.286,
+        25092.317,
+        25094.349,
+        25096.381,
+        25098.413,
+        25100.444,
+        25102.476,
+        25104.508,
+        25106.54,
+        25108.571,
+        25110.603,
+        25112.635,
+        25114.667,
+        25116.698,
+        25118.73,
+        25120.762,
+        25122.794,
+        25124.825,
+        25126.857,
+        25128.889,
+        25130.921,
+        25132.952,
+        25134.984,
+        25137.016,
+        25139.048,
+        25141.079,
+        25143.111,
+        25145.143,
+        25147.175,
+        25149.206,
+        25151.238,
+        25153.27,
+        25155.302,
+        25157.333,
+        25159.365,
+        25161.397,
+        25163.429,
+        25165.46,
+        25167.492,
+        25169.524,
+        25171.556,
+        25173.587,
+        25175.619,
+        25177.651,
+        25179.683,
+        25181.714,
+        25183.746,
+        25185.778,
+        25187.81,
+        25189.841,
+        25191.873,
+        25193.905,
+        25195.937,
+        25197.968,
+        25200.0
+      ],
+      "inspected_ranges": [
+        [
+          25072.0,
+          25073.0
+        ],
+        [
+          25073.032,
+          25075.032
+        ],
+        [
+          25075.063,
+          25077.063
+        ],
+        [
+          25077.095,
+          25079.095
+        ],
+        [
+          25079.127,
+          25081.127
+        ],
+        [
+          25081.159,
+          25083.159
+        ],
+        [
+          25083.19,
+          25085.19
+        ],
+        [
+          25085.222,
+          25087.222
+        ],
+        [
+          25087.254,
+          25089.254
+        ],
+        [
+          25089.286,
+          25091.286
+        ],
+        [
+          25091.317,
+          25093.317
+        ],
+        [
+          25093.349,
+          25095.349
+        ],
+        [
+          25095.381,
+          25097.381
+        ],
+        [
+          25097.413,
+          25099.413
+        ],
+        [
+          25099.444,
+          25101.444
+        ],
+        [
+          25101.476,
+          25103.476
+        ],
+        [
+          25103.508,
+          25105.508
+        ],
+        [
+          25105.54,
+          25107.54
+        ],
+        [
+          25107.571,
+          25109.571
+        ],
+        [
+          25109.603,
+          25111.603
+        ],
+        [
+          25111.635,
+          25113.635
+        ],
+        [
+          25113.667,
+          25115.667
+        ],
+        [
+          25115.698,
+          25117.698
+        ],
+        [
+          25117.73,
+          25119.73
+        ],
+        [
+          25119.762,
+          25121.762
+        ],
+        [
+          25121.794,
+          25123.794
+        ],
+        [
+          25123.825,
+          25125.825
+        ],
+        [
+          25125.857,
+          25127.857
+        ],
+        [
+          25127.889,
+          25129.889
+        ],
+        [
+          25129.921,
+          25131.921
+        ],
+        [
+          25131.952,
+          25133.952
+        ],
+        [
+          25133.984,
+          25135.984
+        ],
+        [
+          25136.016,
+          25138.016
+        ],
+        [
+          25138.048,
+          25140.048
+        ],
+        [
+          25140.079,
+          25142.079
+        ],
+        [
+          25142.111,
+          25144.111
+        ],
+        [
+          25144.143,
+          25146.143
+        ],
+        [
+          25146.175,
+          25148.175
+        ],
+        [
+          25148.206,
+          25150.206
+        ],
+        [
+          25150.238,
+          25152.238
+        ],
+        [
+          25152.27,
+          25154.27
+        ],
+        [
+          25154.302,
+          25156.302
+        ],
+        [
+          25156.333,
+          25158.333
+        ],
+        [
+          25158.365,
+          25160.365
+        ],
+        [
+          25160.397,
+          25162.397
+        ],
+        [
+          25162.429,
+          25164.429
+        ],
+        [
+          25164.46,
+          25166.46
+        ],
+        [
+          25166.492,
+          25168.492
+        ],
+        [
+          25168.524,
+          25170.524
+        ],
+        [
+          25170.556,
+          25172.556
+        ],
+        [
+          25172.587,
+          25174.587
+        ],
+        [
+          25174.619,
+          25176.619
+        ],
+        [
+          25176.651,
+          25178.651
+        ],
+        [
+          25178.683,
+          25180.683
+        ],
+        [
+          25180.714,
+          25182.714
+        ],
+        [
+          25182.746,
+          25184.746
+        ],
+        [
+          25184.778,
+          25186.778
+        ],
+        [
+          25186.81,
+          25188.81
+        ],
+        [
+          25188.841,
+          25190.841
+        ],
+        [
+          25190.873,
+          25192.873
+        ],
+        [
+          25192.905,
+          25194.905
+        ],
+        [
+          25194.937,
+          25196.937
+        ],
+        [
+          25196.968,
+          25198.968
+        ],
+        [
+          25199.0,
+          25200.0
+        ]
+      ],
+      "interpretation_id": "interpretation_29307891654e0c9cbb27",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "4fa7bdadfce0fa20170e",
+      "raw_output": "```json\n{\n  \"summary\": \"A player character fights a large, multi-limbed boss named Demon General, Captain Wise-Voice (魔将·妙音) in a dark, stone chamber. The player's UI shows an equipped transformation icon depicting a humanoid figure with a rat-like head and two tails.\",\n  \"observations\": [\n    {\n      \"time_sec\": 25072.0,\n      \"description\": \"A large, bipedal creature with multiple grey, branch-like limbs extending from its back and shoulders stands in a dark, stone chamber. Its torso appears to be a large, golden, ornate sphere. Chinese characters reading \\\"魔将·妙音\\\" (Demon General, Captain Wise-Voice) are visible on screen.\"\n    },\n    {\n      \"time_sec\": 25143.111,\n      \"description\": \"The player character, a humanoid figure wielding a staff, appears and begins to fight the boss. The game's UI is visible at the bottom of the screen.\"\n    },\n    {\n      \"time_sec\": 25145.143,\n      \"description\": \"The UI at the bottom right of the screen shows several icons. The largest, selected icon is circular and depicts a silhouette of a humanoid figure with a rat-like head and two tails, holding a weapon.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid figure wearing dark clothing and wielding a staff-like weapon.\"\n    },\n    {\n      \"name\": \"Demon General, Captain Wise-Voice (魔将·妙音)\",\n      \"description\": \"A large, bipedal boss with a grey, textured body, multiple branch-like limbs on its back, and a central, golden, ornate sphere for a torso. Its name, \\\"魔将·妙音\\\", is displayed above its health bar.\"\n    },\n    {\n      \"name\": \"Equipped Transformation Icon\",\n      \"description\": \"A circular icon in the bottom right UI, showing a silhouette of a humanoid figure with a rat-like head and two tails, holding a weapon. This icon is highlighted, indicating it is selected.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        25072.0,\n        25141.079\n      ],\n      \"description\": \"A cutscene introduces the boss, Demon General, Captain Wise-Voice (魔将·妙音), showing it in a dark chamber.\"\n    },\n    {\n      \"time_range\": [\n        25143.111,\n        25200.0\n      ],\n      \"description\": \"The player character engages in combat with the boss, dodging and attacking with a staff.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The specific name of the transformation depicted in the UI icon is not stated.\"\n  ]\n}\n```",
+      "requested_range": [
+        25072.0,
+        25200.0
+      ],
+      "round_id": "2",
+      "sampling_config": {
+        "fps": 0.5,
+        "max_frames": 64,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.984375,
+          "effective_fps": 0.5,
+          "frame_times": [
+            25072.0,
+            25074.032,
+            25076.063,
+            25078.095,
+            25080.127,
+            25082.159,
+            25084.19,
+            25086.222,
+            25088.254,
+            25090.286,
+            25092.317,
+            25094.349,
+            25096.381,
+            25098.413,
+            25100.444,
+            25102.476,
+            25104.508,
+            25106.54,
+            25108.571,
+            25110.603,
+            25112.635,
+            25114.667,
+            25116.698,
+            25118.73,
+            25120.762,
+            25122.794,
+            25124.825,
+            25126.857,
+            25128.889,
+            25130.921,
+            25132.952,
+            25134.984,
+            25137.016,
+            25139.048,
+            25141.079,
+            25143.111,
+            25145.143,
+            25147.175,
+            25149.206,
+            25151.238,
+            25153.27,
+            25155.302,
+            25157.333,
+            25159.365,
+            25161.397,
+            25163.429,
+            25165.46,
+            25167.492,
+            25169.524,
+            25171.556,
+            25173.587,
+            25175.619,
+            25177.651,
+            25179.683,
+            25181.714,
+            25183.746,
+            25185.778,
+            25187.81,
+            25189.841,
+            25191.873,
+            25193.905,
+            25195.937,
+            25197.968,
+            25200.0
+          ],
+          "max_gap": 2.032,
+          "observed_subranges": [
+            [
+              25072.0,
+              25073.0
+            ],
+            [
+              25073.032,
+              25075.032
+            ],
+            [
+              25075.063,
+              25077.063
+            ],
+            [
+              25077.095,
+              25079.095
+            ],
+            [
+              25079.127,
+              25081.127
+            ],
+            [
+              25081.159,
+              25083.159
+            ],
+            [
+              25083.19,
+              25085.19
+            ],
+            [
+              25085.222,
+              25087.222
+            ],
+            [
+              25087.254,
+              25089.254
+            ],
+            [
+              25089.286,
+              25091.286
+            ],
+            [
+              25091.317,
+              25093.317
+            ],
+            [
+              25093.349,
+              25095.349
+            ],
+            [
+              25095.381,
+              25097.381
+            ],
+            [
+              25097.413,
+              25099.413
+            ],
+            [
+              25099.444,
+              25101.444
+            ],
+            [
+              25101.476,
+              25103.476
+            ],
+            [
+              25103.508,
+              25105.508
+            ],
+            [
+              25105.54,
+              25107.54
+            ],
+            [
+              25107.571,
+              25109.571
+            ],
+            [
+              25109.603,
+              25111.603
+            ],
+            [
+              25111.635,
+              25113.635
+            ],
+            [
+              25113.667,
+              25115.667
+            ],
+            [
+              25115.698,
+              25117.698
+            ],
+            [
+              25117.73,
+              25119.73
+            ],
+            [
+              25119.762,
+              25121.762
+            ],
+            [
+              25121.794,
+              25123.794
+            ],
+            [
+              25123.825,
+              25125.825
+            ],
+            [
+              25125.857,
+              25127.857
+            ],
+            [
+              25127.889,
+              25129.889
+            ],
+            [
+              25129.921,
+              25131.921
+            ],
+            [
+              25131.952,
+              25133.952
+            ],
+            [
+              25133.984,
+              25135.984
+            ],
+            [
+              25136.016,
+              25138.016
+            ],
+            [
+              25138.048,
+              25140.048
+            ],
+            [
+              25140.079,
+              25142.079
+            ],
+            [
+              25142.111,
+              25144.111
+            ],
+            [
+              25144.143,
+              25146.143
+            ],
+            [
+              25146.175,
+              25148.175
+            ],
+            [
+              25148.206,
+              25150.206
+            ],
+            [
+              25150.238,
+              25152.238
+            ],
+            [
+              25152.27,
+              25154.27
+            ],
+            [
+              25154.302,
+              25156.302
+            ],
+            [
+              25156.333,
+              25158.333
+            ],
+            [
+              25158.365,
+              25160.365
+            ],
+            [
+              25160.397,
+              25162.397
+            ],
+            [
+              25162.429,
+              25164.429
+            ],
+            [
+              25164.46,
+              25166.46
+            ],
+            [
+              25166.492,
+              25168.492
+            ],
+            [
+              25168.524,
+              25170.524
+            ],
+            [
+              25170.556,
+              25172.556
+            ],
+            [
+              25172.587,
+              25174.587
+            ],
+            [
+              25174.619,
+              25176.619
+            ],
+            [
+              25176.651,
+              25178.651
+            ],
+            [
+              25178.683,
+              25180.683
+            ],
+            [
+              25180.714,
+              25182.714
+            ],
+            [
+              25182.746,
+              25184.746
+            ],
+            [
+              25184.778,
+              25186.778
+            ],
+            [
+              25186.81,
+              25188.81
+            ],
+            [
+              25188.841,
+              25190.841
+            ],
+            [
+              25190.873,
+              25192.873
+            ],
+            [
+              25192.905,
+              25194.905
+            ],
+            [
+              25194.937,
+              25196.937
+            ],
+            [
+              25196.968,
+              25198.968
+            ],
+            [
+              25199.0,
+              25200.0
+            ]
+          ],
+          "requested_fps": 0.5,
+          "requested_range": [
+            25072.0,
+            25200.0
+          ],
+          "requires_refinement": true,
+          "sampling_fidelity": 0.984252
+        }
+      },
+      "sampling_fps": 0.5,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0010",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨.mp4",
+          "source_time_range": [
+            979.955,
+            1107.955
+          ],
+          "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+          "virtual_time_range": [
+            25072.0,
+            25200.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨"
+      ],
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_1d433215e738b39c975ddfee",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        25140.0,
+        25140.526,
+        25141.053,
+        25141.579,
+        25142.105,
+        25142.632,
+        25143.158,
+        25143.684,
+        25144.211,
+        25144.737,
+        25145.263,
+        25145.789,
+        25146.316,
+        25146.842,
+        25147.368,
+        25147.895,
+        25148.421,
+        25148.947,
+        25149.474,
+        25150.0
+      ],
+      "inspected_ranges": [
+        [
+          25140.0,
+          25140.25
+        ],
+        [
+          25140.276,
+          25140.776
+        ],
+        [
+          25140.803,
+          25141.303
+        ],
+        [
+          25141.329,
+          25141.829
+        ],
+        [
+          25141.855,
+          25142.355
+        ],
+        [
+          25142.382,
+          25142.882
+        ],
+        [
+          25142.908,
+          25143.408
+        ],
+        [
+          25143.434,
+          25143.934
+        ],
+        [
+          25143.961,
+          25144.461
+        ],
+        [
+          25144.487,
+          25144.987
+        ],
+        [
+          25145.013,
+          25145.513
+        ],
+        [
+          25145.539,
+          25146.039
+        ],
+        [
+          25146.066,
+          25146.566
+        ],
+        [
+          25146.592,
+          25147.092
+        ],
+        [
+          25147.118,
+          25147.618
+        ],
+        [
+          25147.645,
+          25148.145
+        ],
+        [
+          25148.171,
+          25148.671
+        ],
+        [
+          25148.697,
+          25149.197
+        ],
+        [
+          25149.224,
+          25149.724
+        ],
+        [
+          25149.75,
+          25150.0
+        ]
+      ],
+      "interpretation_id": "interpretation_85e96cdd135eb0d11f01",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "79523c819d744fce8eca",
+      "raw_output": "```json\n{\n  \"summary\": \"A player character is engaged in a fight with a large, monstrous boss named Demon General, Captain Wise-Voice (魔将·妙音). The player character attacks the boss with a staff that emits fire. The game's user interface is visible at the bottom of the screen, showing the player's health, the boss's health, and various ability icons. One of these icons, in the lower right, indicates the currently equipped transformation.\",\n  \"observations\": [\n    {\n      \"time_sec\": 25140.0,\n      \"description\": \"The player character is facing a large boss in a dark environment. The boss's health bar at the bottom of the screen identifies it as \\\"魔将·妙音\\\" (Demon General, Captain Wise-Voice). The player's UI shows an icon for an equipped transformation in the lower right corner, which depicts a humanoid figure with a red face and a fiery head.\"\n    },\n    {\n      \"time_sec\": 25141.053,\n      \"description\": \"The player character attacks the boss, creating a bright flash of fire at the point of impact.\"\n    },\n    {\n      \"time_sec\": 25144.737,\n      \"description\": \"The player character continues to attack the boss with a fiery staff.\"\n    },\n    {\n      \"time_sec\": 25148.421,\n      \"description\": \"The player character is positioned under the large boss, which has a dark, gnarled body with red and gold accents.\"\n    },\n    {\n      \"time_sec\": 25150.0,\n      \"description\": \"The boss rears up, revealing more of its form, which includes multiple tendril-like appendages. The player's equipped transformation icon remains unchanged.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid figure wielding a staff that can be imbued with fire. The character is fighting a large boss.\"\n    },\n    {\n      \"name\": \"Demon General, Captain Wise-Voice (魔将·妙音)\",\n      \"description\": \"A very large, dark-colored monster with a gnarled, tree-like body, red patches, and gold highlights. Its name and health bar are displayed at the bottom of the screen.\"\n    },\n    {\n      \"name\": \"Equipped Transformation Icon\",\n      \"description\": \"An icon in the lower right of the UI, inside a circular frame. It shows a portrait of a red-faced humanoid figure with what appears to be a fiery head or hair. The name \\\"赤尻马猴\\\" (Chijiri Mahou / Red-Bottomed Horse-Ape) is written below the icon.\"\n    },\n    {\n      \"name\": \"User Interface (UI)\",\n      \"description\": \"Elements at the bottom of the screen including health bars for the player and the boss, and icons for abilities and transformations.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        25140.0,\n        25150.0\n      ],\n      \"description\": \"The player character continuously fights the boss, Demon General, Captain Wise-Voice, using a staff that produces fire on impact. The equipped transformation, indicated by the icon for \\\"赤尻马猴\\\" (Chijiri Mahou), remains selected throughout the duration.\"\n    }\n  ],\n  \"uncertainties\": []\n}\n```",
+      "requested_range": [
+        25140.0,
+        25150.0
+      ],
+      "round_id": "4",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 20,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.95,
+          "effective_fps": 2.0,
+          "frame_times": [
+            25140.0,
+            25140.526,
+            25141.053,
+            25141.579,
+            25142.105,
+            25142.632,
+            25143.158,
+            25143.684,
+            25144.211,
+            25144.737,
+            25145.263,
+            25145.789,
+            25146.316,
+            25146.842,
+            25147.368,
+            25147.895,
+            25148.421,
+            25148.947,
+            25149.474,
+            25150.0
+          ],
+          "max_gap": 0.527,
+          "observed_subranges": [
+            [
+              25140.0,
+              25140.25
+            ],
+            [
+              25140.276,
+              25140.776
+            ],
+            [
+              25140.803,
+              25141.303
+            ],
+            [
+              25141.329,
+              25141.829
+            ],
+            [
+              25141.855,
+              25142.355
+            ],
+            [
+              25142.382,
+              25142.882
+            ],
+            [
+              25142.908,
+              25143.408
+            ],
+            [
+              25143.434,
+              25143.934
+            ],
+            [
+              25143.961,
+              25144.461
+            ],
+            [
+              25144.487,
+              25144.987
+            ],
+            [
+              25145.013,
+              25145.513
+            ],
+            [
+              25145.539,
+              25146.039
+            ],
+            [
+              25146.066,
+              25146.566
+            ],
+            [
+              25146.592,
+              25147.092
+            ],
+            [
+              25147.118,
+              25147.618
+            ],
+            [
+              25147.645,
+              25148.145
+            ],
+            [
+              25148.171,
+              25148.671
+            ],
+            [
+              25148.697,
+              25149.197
+            ],
+            [
+              25149.224,
+              25149.724
+            ],
+            [
+              25149.75,
+              25150.0
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            25140.0,
+            25150.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.95057
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0010",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨.mp4",
+          "source_time_range": [
+            1047.955,
+            1057.955
+          ],
+          "source_video_id": "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+          "virtual_time_range": [
+            25140.0,
+            25150.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨"
+      ],
+      "task_id": "r1_t1"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        1
+      ],
+      "max_score": 0.030330882352941176,
+      "occurrence_id": "occ_4c65345519c957152340",
+      "passage_ids": [
+        "cap_000190_41f64a0d8266:p0007"
+      ],
+      "query_matches": [
+        {
+          "query": "which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0022"
+      ],
+      "source_video_ids": [
+        "022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        57146.0,
+        57185.0
+      ]
+    },
+    {
+      "artifact": "attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.027984344422700584,
+      "occurrence_id": "occ_47d6ec1c70f672986956",
+      "passage_ids": [
+        "cap_000230_92ffb003f434:p0007"
+      ],
+      "query_matches": [
+        {
+          "query": "which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0025",
+        "seg_0026"
+      ],
+      "source_video_ids": [
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        69158.0,
+        69205.0
+      ]
+    },
+    {
+      "artifact": "attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.026171741361614778,
+      "occurrence_id": "occ_c812056b6ccb672df355",
+      "passage_ids": [
+        "cap_000140_dff5f16cbe06:p0005"
+      ],
+      "query_matches": [
+        {
+          "query": "which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0016"
+      ],
+      "source_video_ids": [
+        "016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        42113.0,
+        42145.0
+      ]
+    },
+    {
+      "artifact": "attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_15a8c37fa2ef085dd90d",
+      "passage_ids": [
+        "cap_000083_5569b47a277e:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "which of the following statements are correct? 1. when the player fights against the demon general, captain wise-voice (妙音), the transformation they carry is two-headed rat 2. when the player fights against daoist mi (糜道人), the transformation they carry is little yellow dragon 3. when the player fights against non-pure (不净), the transformation they carry is guangzhi (广智) 4. when the player fights against yaksha king (夜叉王), the transformation used is yin tiger"
+        },
+        {
+          "query": "妙音"
+        },
+        {
+          "query": "魔将 妙音"
+        }
+      ],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0010"
+      ],
+      "source_video_ids": [
+        "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        25072.0,
+        25200.0
+      ]
+    },
+    {
+      "artifact": "attempt_11a21a8abfabb8e8b18ffac4.1736475db9e7.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_538dcdec5d5d8e3a1463",
+      "passage_ids": [
+        "cap_000108_8f68d67b9bb2:p0001"
+      ],
+      "query_matches": [],
+      "rank": 5,
+      "segment_ids": [
+        "seg_0013"
+      ],
+      "source_video_ids": [
+        "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        32408.0,
+        32419.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+    "case_id": "mmlifelong-game-test-0097",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 97,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [
+      "attempt_1d433215e738b39c975ddfee"
+    ],
+    "supporting_intervals": [
+      [
+        25140.0,
+        25150.0
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat."
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 546,
+        "content_chars": 1568,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9804,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "2b83f2485739e5610c4ee4fe5df9c24a",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 93,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "妙音",
+              "魔将 妙音"
+            ],
+            "goal": "Find the fight against Demon General, Captain Wise-Voice (妙音) and check the player's transformation.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "妙音",
+              "魔将 妙音"
+            ],
+            "goal": "Find the fight against Demon General, Captain Wise-Voice (妙音) and check the player's transformation.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "a5fd359cb4c087bd7c62a797928cfb3b0f4e4b44bb69da99efe241b443691c98",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 475,
+        "content_chars": 1193,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 786,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "084d7cddf1e84fd9ddaa952fdc751d06",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 67,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Observe the fight against Demon General, Captain Wise-Voice (妙音) and identify the equipped transformation.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "segment_id": "seg_0010",
+            "time_range": [
+              25072.0,
+              25200.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "claim_id": "c1",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Demon General, Captain Wise-Voice (妙音)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c2",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Daoist Mi (糜道人)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c3",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Non-Pure (不净)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c4",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Yaksha King (夜叉王)."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Observe the fight against Demon General, Captain Wise-Voice (妙音) and identify the equipped transformation.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "segment_id": "seg_0010",
+            "time_range": [
+              25072.0,
+              25200.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "claim_id": "c1",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Demon General, Captain Wise-Voice (妙音)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c2",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Daoist Mi (糜道人)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c3",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Non-Pure (不净)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c4",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Yaksha King (夜叉王)."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_excerpt": "```json\n{\n  \"action\": \"investigate\",\n  \"tasks\": [\n    {\n      \"query_id\": \"r1_t2\",\n      \"goal\": \"Observe the fight against Demon General, Captain Wise-Voice (妙音) and identify the equipped transformation.\",\n      \"segment_id\": \"seg_0010\",\n      \"time_range\": [\n        25072.0,\n        25200.0\n      ],\n      \"inspection_mode\": \"window\",\n      \"expected_evidence\": \"direct observation\"\n    }\n  ],\n  \"workspace_ops\": [\n    {\n      \"op\": \"add_claim\",\n      \"claim\": {\n        \"claim_id\": \"c1\",\n        \"text\": \"Investigate the fight against Demon General, Captain Wise-Voice (妙音).\",\n        \"source\": \"hypothesis\"\n      }\n    },\n    {\n      \"op\": \"add_claim\",\n      \"claim\": {\n        \"claim_id\": \"c2\",\n        \"text\": \"Investigate the fight against Daoist Mi (糜道人).\",\n        \"source\": \"hypothesis\"\n      }\n    },\n    {\n      \"op\": \"add_claim\",\n      \"claim\": {\n        \"claim_id\": \"c3\",\n        \"text\": \"Investigate the fight against Non-Pure (不净).\",\n        \"source\": \"hypothesis\"\n      }\n    },\n    {\n      \"op\": \"add_claim\",\n      \"claim\": {\n        \"claim_id\": \"c4\",\n        \"text\": \"Investigate the fight against Yaksha King (夜叉王).\",\n        \"source\": \"hypothesis\"\n      }\n    }\n  ]\n}\n```",
+      "raw_sha256": "2e0f9528bcce77be698d0cd37408d35fb4b7a81baaf54638fcea1db473fcd175",
+      "round": 2,
+      "type": "reasoner_json_repair"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 815,
+        "content_chars": 2287,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15955,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "e250f36f2aa1568ca23d970364ead7ab",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 87,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Observe the fight against Demon General, Captain Wise-Voice (妙音) and identify the equipped transformation.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "segment_id": "seg_0010",
+            "time_range": [
+              25072.0,
+              25200.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "claim_id": "c1",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Demon General, Captain Wise-Voice (妙音)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c2",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Daoist Mi (糜道人)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c3",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Non-Pure (不净)."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c4",
+              "source": "hypothesis",
+              "text": "Investigate the fight against Yaksha King (夜叉王)."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": true,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {},
+      "raw_sha256": "cc2e185551ac0c6aa4f0996ffe7b84bf6db433859409f06bdf273799aa7895e2",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": true,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 358,
+        "content_chars": 1027,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 20043,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "17aa7d5b2087e74090170989b767927e",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 81,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_47f1af2f63cda3f50511e587"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_47f1af2f63cda3f50511e587"
+          }
+        ]
+      },
+      "raw_sha256": "110fb2dc6047ee51dad8de5440bba6b171aa0f7a08a07fd5afd6629b10be97aa",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 405,
+        "content_chars": 1228,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 19958,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "0f38495a023e6103403d60439d08fd3c",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 82,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Verify the player's equipped transformation during the fight with Demon General, Captain Wise-Voice (魔将·妙音).",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "sampling_floor_fps": 2,
+            "segment_id": "seg_0010",
+            "time_range": [
+              25140,
+              25150
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Verify the player's equipped transformation during the fight with Demon General, Captain Wise-Voice (魔将·妙音).",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "sampling_floor_fps": 2,
+            "segment_id": "seg_0010",
+            "time_range": [
+              25140,
+              25150
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "2c900d321bb5e12bdc49e9400e0794a10aca0edbda42e7d052e33367b186d6de",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 656,
+        "content_chars": 1834,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 19698,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "5cb0efc951a9a24ccaca47e407a8f0e9",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 91,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_1d433215e738b39c975ddfee"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "During the fight with Demon General, Captain Wise-Voice (魔将·妙音), the player has the Red-Bottomed Horse-Ape (赤尻马猴) transformation equipped.",
+              "time_anchor": [
+                25140,
+                25150
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c6",
+              "confidence": "high",
+              "derived_from": [
+                "c5",
+                "premise:question"
+              ],
+              "source": "derived",
+              "status": "active",
+              "text": "Statement 1, which claims the player uses the Two-Headed Rat transformation against Demon General, Captain Wise-Voice, is incorrect."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_id": "c1",
+            "op": "supersede",
+            "superseded_by": "c6"
+          },
+          {
+            "op": "investigate",
+            "tasks": [
+              {
+                "caption_queries": [
+                  "Daoist Mi",
+                  "糜道人"
+                ],
+                "goal": "Find the fight against Daoist Mi (糜道人) and identify the equipped transformation.",
+                "inspection_mode": "search_caption",
+                "query_id": "r1_t2",
+                "top_k": 5
+              }
+            ]
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_1d433215e738b39c975ddfee"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "During the fight with Demon General, Captain Wise-Voice (魔将·妙音), the player has the Red-Bottomed Horse-Ape (赤尻马猴) transformation equipped.",
+              "time_anchor": [
+                25140,
+                25150
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c6",
+              "confidence": "high",
+              "derived_from": [
+                "c5",
+                "premise:question"
+              ],
+              "source": "derived",
+              "status": "active",
+              "text": "Statement 1, which claims the player uses the Two-Headed Rat transformation against Demon General, Captain Wise-Voice, is incorrect."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_id": "c1",
+            "op": "supersede",
+            "superseded_by": "c6"
+          },
+          {
+            "op": "investigate",
+            "tasks": [
+              {
+                "caption_queries": [
+                  "Daoist Mi",
+                  "糜道人"
+                ],
+                "goal": "Find the fight against Daoist Mi (糜道人) and identify the equipped transformation.",
+                "inspection_mode": "search_caption",
+                "query_id": "r1_t2",
+                "top_k": 5
+              }
+            ]
+          }
+        ]
+      },
+      "raw_sha256": "6d0416df5bd9bcdd052d9431a2b13abb4141a0ddacb448c0e30ada8b7f48417c",
+      "repair_failed": false,
+      "round": 5,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 490,
+        "content_chars": 1210,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18406,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "0c09df19f6822812dba60e9cf35c2d2b",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 80,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+        "supporting_claim_ids": [
+          "c5"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_1d433215e738b39c975ddfee"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "entity_ids": [],
+              "metadata": {},
+              "source": "observation",
+              "status": "active",
+              "text": "During the fight with the boss Demon General, Captain Wise-Voice (魔将·妙音), the player has the Two-Headed Rat (双头鼠) transformation equipped.",
+              "time_anchor": [
+                25140.0,
+                25150.0
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c5"
+            ],
+            "label": "Player fights Demon General, Captain Wise-Voice with Two-Headed Rat transformation equipped.",
+            "metadata": {},
+            "op": "note_interval",
+            "role": "supporting",
+            "time_range": [
+              25140.0,
+              25150.0
+            ]
+          },
+          {
+            "claim_id": "c1",
+            "op": "supersede",
+            "superseded_by": "c5"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+        "supporting_claim_ids": [
+          "c5"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_1d433215e738b39c975ddfee"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "entity_ids": [],
+              "metadata": {},
+              "source": "observation",
+              "status": "active",
+              "text": "During the fight with the boss Demon General, Captain Wise-Voice (魔将·妙音), the player has the Two-Headed Rat (双头鼠) transformation equipped.",
+              "time_anchor": [
+                25140.0,
+                25150.0
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c5"
+            ],
+            "label": "Player fights Demon General, Captain Wise-Voice with Two-Headed Rat transformation equipped.",
+            "metadata": {},
+            "op": "note_interval",
+            "role": "supporting",
+            "time_range": [
+              25140.0,
+              25150.0
+            ]
+          },
+          {
+            "claim_id": "c1",
+            "op": "supersede",
+            "superseded_by": "c5"
+          }
+        ]
+      },
+      "raw_sha256": "3fe8c81a215f313553e1a18ca03c0ef2a5adff7f3bcb82d7f272fcc3b2eeff99",
+      "repair_failed": false,
+      "round": 6,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [],
+    "candidate_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat.",
+    "case_id": "mmlifelong-game-test-0097",
+    "investigation_count": 3,
+    "reference_reason": "reference_integrity_verified",
+    "reference_valid": true,
+    "residual_uncertainty": "",
+    "rounds": 6,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.2,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 5,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 1,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 1.0,
+      "rounds": 6,
+      "unique_visual_material_attempts": 2,
+      "visual_confirmations": 2,
+      "visual_frames_inspected": 84,
+      "visual_interpretation_count": 2,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c5"
+    ],
+    "supporting_intervals": [
+      [
+        25140.0,
+        25150.0
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "The statement that is correct is: When the player fights against the Demon General, Captain Wise-Voice (妙音), the transformation they carry is Two-Headed Rat."
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_47f1af2f63cda3f50511e587",
+      "round_id": "2",
+      "sampling_manifest": {
+        "coverage_ratio": 0.984375,
+        "effective_fps": 0.5,
+        "frame_times": [
+          25072.0,
+          25074.032,
+          25076.063,
+          25078.095,
+          25080.127,
+          25082.159,
+          25084.19,
+          25086.222,
+          25088.254,
+          25090.286,
+          25092.317,
+          25094.349,
+          25096.381,
+          25098.413,
+          25100.444,
+          25102.476,
+          25104.508,
+          25106.54,
+          25108.571,
+          25110.603,
+          25112.635,
+          25114.667,
+          25116.698,
+          25118.73,
+          25120.762,
+          25122.794,
+          25124.825,
+          25126.857,
+          25128.889,
+          25130.921,
+          25132.952,
+          25134.984,
+          25137.016,
+          25139.048,
+          25141.079,
+          25143.111,
+          25145.143,
+          25147.175,
+          25149.206,
+          25151.238,
+          25153.27,
+          25155.302,
+          25157.333,
+          25159.365,
+          25161.397,
+          25163.429,
+          25165.46,
+          25167.492,
+          25169.524,
+          25171.556,
+          25173.587,
+          25175.619,
+          25177.651,
+          25179.683,
+          25181.714,
+          25183.746,
+          25185.778,
+          25187.81,
+          25189.841,
+          25191.873,
+          25193.905,
+          25195.937,
+          25197.968,
+          25200.0
+        ],
+        "max_gap": 2.032,
+        "observed_subranges": [
+          [
+            25072.0,
+            25073.0
+          ],
+          [
+            25073.032,
+            25075.032
+          ],
+          [
+            25075.063,
+            25077.063
+          ],
+          [
+            25077.095,
+            25079.095
+          ],
+          [
+            25079.127,
+            25081.127
+          ],
+          [
+            25081.159,
+            25083.159
+          ],
+          [
+            25083.19,
+            25085.19
+          ],
+          [
+            25085.222,
+            25087.222
+          ],
+          [
+            25087.254,
+            25089.254
+          ],
+          [
+            25089.286,
+            25091.286
+          ],
+          [
+            25091.317,
+            25093.317
+          ],
+          [
+            25093.349,
+            25095.349
+          ],
+          [
+            25095.381,
+            25097.381
+          ],
+          [
+            25097.413,
+            25099.413
+          ],
+          [
+            25099.444,
+            25101.444
+          ],
+          [
+            25101.476,
+            25103.476
+          ],
+          [
+            25103.508,
+            25105.508
+          ],
+          [
+            25105.54,
+            25107.54
+          ],
+          [
+            25107.571,
+            25109.571
+          ],
+          [
+            25109.603,
+            25111.603
+          ],
+          [
+            25111.635,
+            25113.635
+          ],
+          [
+            25113.667,
+            25115.667
+          ],
+          [
+            25115.698,
+            25117.698
+          ],
+          [
+            25117.73,
+            25119.73
+          ],
+          [
+            25119.762,
+            25121.762
+          ],
+          [
+            25121.794,
+            25123.794
+          ],
+          [
+            25123.825,
+            25125.825
+          ],
+          [
+            25125.857,
+            25127.857
+          ],
+          [
+            25127.889,
+            25129.889
+          ],
+          [
+            25129.921,
+            25131.921
+          ],
+          [
+            25131.952,
+            25133.952
+          ],
+          [
+            25133.984,
+            25135.984
+          ],
+          [
+            25136.016,
+            25138.016
+          ],
+          [
+            25138.048,
+            25140.048
+          ],
+          [
+            25140.079,
+            25142.079
+          ],
+          [
+            25142.111,
+            25144.111
+          ],
+          [
+            25144.143,
+            25146.143
+          ],
+          [
+            25146.175,
+            25148.175
+          ],
+          [
+            25148.206,
+            25150.206
+          ],
+          [
+            25150.238,
+            25152.238
+          ],
+          [
+            25152.27,
+            25154.27
+          ],
+          [
+            25154.302,
+            25156.302
+          ],
+          [
+            25156.333,
+            25158.333
+          ],
+          [
+            25158.365,
+            25160.365
+          ],
+          [
+            25160.397,
+            25162.397
+          ],
+          [
+            25162.429,
+            25164.429
+          ],
+          [
+            25164.46,
+            25166.46
+          ],
+          [
+            25166.492,
+            25168.492
+          ],
+          [
+            25168.524,
+            25170.524
+          ],
+          [
+            25170.556,
+            25172.556
+          ],
+          [
+            25172.587,
+            25174.587
+          ],
+          [
+            25174.619,
+            25176.619
+          ],
+          [
+            25176.651,
+            25178.651
+          ],
+          [
+            25178.683,
+            25180.683
+          ],
+          [
+            25180.714,
+            25182.714
+          ],
+          [
+            25182.746,
+            25184.746
+          ],
+          [
+            25184.778,
+            25186.778
+          ],
+          [
+            25186.81,
+            25188.81
+          ],
+          [
+            25188.841,
+            25190.841
+          ],
+          [
+            25190.873,
+            25192.873
+          ],
+          [
+            25192.905,
+            25194.905
+          ],
+          [
+            25194.937,
+            25196.937
+          ],
+          [
+            25196.968,
+            25198.968
+          ],
+          [
+            25199.0,
+            25200.0
+          ]
+        ],
+        "requested_fps": 0.5,
+        "requested_range": [
+          25072.0,
+          25200.0
+        ],
+        "requires_refinement": true,
+        "sampling_fidelity": 0.984252
+      },
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_1d433215e738b39c975ddfee",
+      "round_id": "4",
+      "sampling_manifest": {
+        "coverage_ratio": 0.95,
+        "effective_fps": 2.0,
+        "frame_times": [
+          25140.0,
+          25140.526,
+          25141.053,
+          25141.579,
+          25142.105,
+          25142.632,
+          25143.158,
+          25143.684,
+          25144.211,
+          25144.737,
+          25145.263,
+          25145.789,
+          25146.316,
+          25146.842,
+          25147.368,
+          25147.895,
+          25148.421,
+          25148.947,
+          25149.474,
+          25150.0
+        ],
+        "max_gap": 0.527,
+        "observed_subranges": [
+          [
+            25140.0,
+            25140.25
+          ],
+          [
+            25140.276,
+            25140.776
+          ],
+          [
+            25140.803,
+            25141.303
+          ],
+          [
+            25141.329,
+            25141.829
+          ],
+          [
+            25141.855,
+            25142.355
+          ],
+          [
+            25142.382,
+            25142.882
+          ],
+          [
+            25142.908,
+            25143.408
+          ],
+          [
+            25143.434,
+            25143.934
+          ],
+          [
+            25143.961,
+            25144.461
+          ],
+          [
+            25144.487,
+            25144.987
+          ],
+          [
+            25145.013,
+            25145.513
+          ],
+          [
+            25145.539,
+            25146.039
+          ],
+          [
+            25146.066,
+            25146.566
+          ],
+          [
+            25146.592,
+            25147.092
+          ],
+          [
+            25147.118,
+            25147.618
+          ],
+          [
+            25147.645,
+            25148.145
+          ],
+          [
+            25148.171,
+            25148.671
+          ],
+          [
+            25148.697,
+            25149.197
+          ],
+          [
+            25149.224,
+            25149.724
+          ],
+          [
+            25149.75,
+            25150.0
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          25140.0,
+          25150.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.95057
+      },
+      "task_id": "r1_t1"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_11a21a8abfabb8e8b18ffac4"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_47f1af2f63cda3f50511e587"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t2_0511e587"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t2",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_1d433215e738b39c975ddfee"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t1_975ddfee"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 4,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "妙音",
+            "魔将 妙音"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t2",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "seg_0010",
+          "source_video_ids": [],
+          "time_range": [
+            25072.0,
+            25200.0
+          ],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 4,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "seg_0010",
+          "source_video_ids": [],
+          "time_range": [
+            25140.0,
+            25150.0
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": [
+    {
+      "action": "update_workspace",
+      "round": 5,
+      "source": "run_trace",
+      "tasks": [],
+      "workspace_errors": [
+        "op[4]: unsupported_workspace_op:investigate"
+      ]
+    },
+    {
+      "operations": [
+        {
+          "claim": {
+            "cites": [
+              "attempt_1d433215e738b39c975ddfee"
+            ],
+            "claim_id": "c5",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "text": "During the fight with Demon General, Captain Wise-Voice (魔将·妙音), the player has the Red-Bottomed Horse-Ape (赤尻马猴) transformation equipped.",
+            "time_anchor": [
+              25140,
+              25150
+            ]
+          },
+          "op": "add_claim"
+        },
+        {
+          "claim": {
+            "claim_id": "c6",
+            "confidence": "high",
+            "derived_from": [
+              "c5",
+              "premise:question"
+            ],
+            "source": "derived",
+            "status": "active",
+            "text": "Statement 1, which claims the player uses the Two-Headed Rat transformation against Demon General, Captain Wise-Voice, is incorrect."
+          },
+          "op": "add_claim"
+        },
+        {
+          "claim_id": "c1",
+          "op": "supersede",
+          "superseded_by": "c6"
+        },
+        {
+          "op": "investigate",
+          "tasks": [
+            {
+              "caption_queries": [
+                "Daoist Mi",
+                "糜道人"
+              ],
+              "goal": "Find the fight against Daoist Mi (糜道人) and identify the equipped transformation.",
+              "inspection_mode": "search_caption",
+              "query_id": "r1_t2",
+              "top_k": 5
+            }
+          ]
+        }
+      ],
+      "result": {
+        "accepted": false,
+        "applied_count": 0,
+        "errors": [
+          "op[4]: unsupported_workspace_op:investigate"
+        ],
+        "revision": 1
+      },
+      "round": "5",
+      "source": "workspace_history"
+    }
+  ]
+}

@@ -1,0 +1,2754 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_a0032fa86ead4d37ad08c6d3.ded3cb71660b.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "After the player defeats the Tiger Vanguard (虎先锋), what is the first line the Headless One (无头人) sings?",
+        "Tiger Vanguard",
+        "虎先锋"
+      ],
+      "query_fingerprint": "ded3cb71660bca3b058d7555f2a439ee3eb257b793b5ec0129e48aab79fa96c5",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [
+        "seg_0008"
+      ],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0031",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 236,
+        "content_chars": 654,
+        "finish_reason": "stop",
+        "prompt_tokens": 539,
+        "provider_request_id": "bdde2930d3d9f564d14555b20a6f5237",
+        "reasoning_tokens": 72,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 4,
+      "retry_count": 0,
+      "score": 1.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 1.0,
+      "ref_60": 1.0,
+      "ref_600": 1.0,
+      "reference_intervals": [
+        [
+          18025.0,
+          18033.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [
+        "attempt_ac1c8a3ef78d2cf1e78ab229"
+      ],
+      "errors": [],
+      "passed": true,
+      "reason": "reference_integrity_verified",
+      "round": 4,
+      "supporting_claim_ids": [
+        "c5"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [],
+      "candidate_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0031/observation_log.jsonl",
+      "raw_reasoner_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+      "reference_reason": "reference_integrity_verified",
+      "reference_valid": true,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c5"
+      ],
+      "supporting_intervals": [
+        [
+          18028.746,
+          18038.887
+        ]
+      ],
+      "type": "answer_outcome",
+      "verification_status": "verified",
+      "verified_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0031/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0031/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000001",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 336.123,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18011.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000002",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 336.63,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18011.507
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000003",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 337.137,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18012.014
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000004",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 337.644,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18012.521
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000005",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 338.151,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18013.028
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000006",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 338.658,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18013.535
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000007",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 339.165,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18014.042
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000008",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 339.672,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18014.549
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000009",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 340.179,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18015.056
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000010",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 340.686,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18015.563
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000011",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 341.193,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18016.07
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000012",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 341.7,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18016.577
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000013",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 342.208,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18017.085
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000014",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 342.715,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18017.592
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000015",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 343.222,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18018.099
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000016",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 343.729,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18018.606
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000017",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 344.236,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18019.113
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000018",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 344.743,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18019.62
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000019",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 345.25,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18020.127
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000020",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 345.757,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18020.634
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000021",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 346.264,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18021.141
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000022",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 346.771,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18021.648
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000023",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 347.278,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18022.155
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000024",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 347.785,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18022.662
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000025",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 348.292,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18023.169
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000026",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 348.799,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18023.676
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000027",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 349.306,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18024.183
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000028",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 349.813,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18024.69
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000029",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 350.32,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18025.197
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000030",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 350.827,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18025.704
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000031",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 351.334,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18026.211
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000032",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 351.841,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18026.718
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000033",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 352.348,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18027.225
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000034",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 352.855,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18027.732
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000035",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 353.362,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18028.239
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000036",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 353.869,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18028.746
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000037",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 354.377,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18029.254
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000038",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 354.884,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18029.761
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000039",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 355.391,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18030.268
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000040",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 355.898,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18030.775
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000041",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 356.405,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18031.282
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000042",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 356.912,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18031.789
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000043",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 357.419,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18032.296
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000044",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 357.926,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18032.803
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000045",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 358.433,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18033.31
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000046",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 358.94,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18033.817
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000047",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 359.447,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18034.324
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000048",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 359.954,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18034.831
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000049",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 360.461,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18035.338
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000050",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 360.968,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18035.845
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000051",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 361.475,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18036.352
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000052",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 361.982,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18036.859
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000053",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 362.489,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18037.366
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000054",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 362.996,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18037.873
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000055",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 363.503,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18038.38
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000056",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 364.01,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18038.887
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000057",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 364.517,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18039.394
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000058",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 365.024,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18039.901
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000059",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 365.531,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18040.408
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000060",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 366.038,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18040.915
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000061",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 366.546,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18041.423
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000062",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 367.053,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18041.93
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000063",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 367.56,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18042.437
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000064",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 368.067,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18042.944
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000065",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 368.574,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18043.451
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000066",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 369.081,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18043.958
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000067",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 369.588,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18044.465
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000068",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 370.095,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18044.972
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000069",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 370.602,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18045.479
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000070",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 371.109,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18045.986
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000071",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 371.616,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18046.493
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r2_t1_000072",
+      "query_id": "r2_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0008",
+      "source_time_sec": 372.123,
+      "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+      "virtual_time_sec": 18047.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_a0032fa86ead4d37ad08c6d3",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_077e7f275c9d8bf07636",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "beb35a0dc671c7edca13",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000059_6353cc08f2a5\", \"dense_score\": 0.5181599259376526, \"fused_score\": 0.032266458495966696, \"interval_precision\": \"anchor\", \"lexical_score\": 67.90914628885777, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\", \"tiger vanguard\", \"虎先锋\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000059_6353cc08f2a5:p0000\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000059_6353cc08f2a5:p0000\", \"text\": \"In a video game, a large, bipedal tiger-like monster with glowing yellow eyes and a bloody face stands in a pool of blood, speaking. The monster, named \\\"虎先锋\\\" (Tiger Vanguard), has a large sword strapped to its back. Chinese subtitles appear at the bottom of the screen.\", \"virtual_end_sec\": 17731.0, \"virtual_start_sec\": 17700.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000060_586298424979\", \"dense_score\": 0.48880285024642944, \"fused_score\": 0.031754032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": 20.858179747519962, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\", \"tiger vanguard\", \"虎先锋\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000060_586298424979:p0002\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000060_586298424979:p0002\", \"text\": \"A headless figure wearing green beads and holding a stringed instrument appears, with subtitles reading \\\"金钱未石全无力，大圣天蓬遭虎欺\\\" (Without the golden circlet, even the Great Sage and Marshal Tianpeng are bullied by a tiger).\", \"virtual_end_sec\": 18047.0, \"virtual_start_sec\": 18025.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000059_6353cc08f2a5\", \"dense_score\": 0.44510653614997864, \"fused_score\": 0.028594771241830064, \"interval_precision\": \"anchor\", \"lexical_score\": 8.948633618172034, \"metadata\": {\"dense_rank\": 8, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 12, \"matched_queries\": [\"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\", \"tiger vanguard\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000059_6353cc08f2a5:p0001\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000059_6353cc08f2a5:p0001\", \"text\": \"The player character, a monkey-like warrior, enters the bloody pool to confront the tiger monster. The monster leaps high into the air and crashes down, initiating the boss battle.\", \"virtual_end_sec\": 17749.0, \"virtual_start_sec\": 17731.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000070_51dd67cc4f56\", \"dense_score\": 0.40622562170028687, \"fused_score\": 0.027479766610201392, \"interval_precision\": \"anchor\", \"lexical_score\": 10.231315223472109, \"metadata\": {\"dense_rank\": 17, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 9, \"matched_queries\": [\"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000070_51dd67cc4f56:p0006\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000070_51dd67cc4f56:p0006\", \"text\": \"The headless monk's body reforms, and he picks up one of the severed heads, placing it back on his neck. He is revealed to be a large, divine-looking figure with a serene expression.\", \"virtual_end_sec\": 21152.0, \"virtual_start_sec\": 21129.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000060_586298424979\", \"dense_score\": 0.42731648683547974, \"fused_score\": 0.027417840375586856, \"interval_precision\": \"anchor\", \"lexical_score\": 8.28324382470185, \"metadata\": {\"dense_rank\": 11, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 15, \"matched_queries\": [\"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\", \"tiger vanguard\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000060_586298424979:p0001\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000060_586298424979:p0001\", \"text\": \"Large black characters reading \\\"得胜\\\" (Victory) appear on screen as the tiger monster explodes in a fiery burst, then turns to stone and crumbles.\", \"virtual_end_sec\": 18025.0, \"virtual_start_sec\": 18011.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 3, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 2, \"hit_ranks\": [1, 3], \"max_score\": 0.032266458495966696, \"occurrence_id\": \"occ_64565ddf63b2cddbefed\", \"passage_ids\": [\"cap_000059_6353cc08f2a5:p0000\", \"cap_000059_6353cc08f2a5:p0001\"], \"query_matches\": [{\"query\": \"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\"}, {\"query\": \"tiger vanguard\"}, {\"query\": \"虎先锋\"}], \"rank\": 1, \"segment_ids\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"status\": \"uninspected\", \"time_range\": [17700.0, 17749.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 2, \"hit_ranks\": [5, 2], \"max_score\": 0.031754032258064516, \"occurrence_id\": \"occ_e4ef43bc5b8d4c3525bf\", \"passage_ids\": [\"cap_000060_586298424979:p0001\", \"cap_000060_586298424979:p0002\"], \"query_matches\": [{\"query\": \"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\"}, {\"query\": \"tiger vanguard\"}, {\"query\": \"虎先锋\"}], \"rank\": 2, \"segment_ids\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"status\": \"uninspected\", \"time_range\": [18011.0, 18047.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.027479766610201392, \"occurrence_id\": \"occ_ad11841ae84df256868a\", \"passage_ids\": [\"cap_000070_51dd67cc4f56:p0006\"], \"query_matches\": [{\"query\": \"after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\"}], \"rank\": 3, \"segment_ids\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"status\": \"uninspected\", \"time_range\": [21129.0, 21152.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0031/caption_search/attempt_a0032fa86ead4d37ad08c6d3.ded3cb71660b.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 5, \"novel_result_ids\": [\"cap_000059_6353cc08f2a5:p0000\", \"cap_000060_586298424979:p0002\", \"cap_000059_6353cc08f2a5:p0001\", \"cap_000070_51dd67cc4f56:p0006\", \"cap_000060_586298424979:p0001\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"ded3cb71660bca3b058d7555f2a439ee3eb257b793b5ec0129e48aab79fa96c5\", \"returned_result_count\": 5}, \"search_queries\": [\"After the player defeats the Tiger Vanguard (虎先锋), what is the first line the Headless One (无头人) sings?\", \"Tiger Vanguard\", \"虎先锋\"], \"summary\": \"Caption search: 5 hits\\n1. [04:55:00-04:55:31] score=0.0323 passage=cap_000059_6353cc08f2a5:p0000\\n   \\\"In a video game, a large, bipedal tiger-like monster with glowing yellow eyes and a bloody face stands in a pool of blood, speaking. The monster, named \\\"虎先锋\\\" (Tiger Vanguard), has a large sword strapped to its back. Chinese subtitles appear at the bottom of the screen.\\\"\\n   matched queries: after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?; tiger vanguard; 虎先锋\\n2. [05:00:25-05:00:47] score=0.0318 passage=cap_000060_586298424979:p0002\\n   \\\"A headless figure wearing green beads and holding a stringed instrument appears, with subtitles reading \\\"金钱未石全无力，大圣天蓬遭虎欺\\\" (Without the golden circlet, even the Great Sage and Marshal Tianpeng are bullied by a tiger).\\\"\\n   matched queries: after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?; tiger vanguard; 虎先锋\\n3. [04:55:31-04:55:49] score=0.0286 passage=cap_000059_6353cc08f2a5:p0001\\n   \\\"The player character, a monkey-like warrior, enters the bloody pool to confront the tiger monster. The monster leaps high into the air and crashes down, initiating the boss battle.\\\"\\n   matched queries: after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?; tiger vanguard\\n4. [05:52:09-05:52:32] score=0.0275 passage=cap_000070_51dd67cc4f56:p0006\\n   \\\"The headless monk's body reforms, and he picks up one of the severed heads, placing it back on his neck. He is revealed to be a large, divine-looking figure with a serene expression.\\\"\\n   matched queries: after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?\\n5. [05:00:11-05:00:25] score=0.0274 passage=cap_000060_586298424979:p0001\\n   \\\"Large black characters reading \\\"得胜\\\" (Victory) appear on screen as the tiger monster explodes in a fiery burst, then turns to stone and crumbles.\\\"\\n   matched queries: after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?; tiger vanguard\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000059_6353cc08f2a5:p0000",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000060_586298424979:p0002",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000059_6353cc08f2a5:p0001",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000070_51dd67cc4f56:p0006",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000060_586298424979:p0001"
+          ],
+          "passage_ids": [
+            "cap_000059_6353cc08f2a5:p0000",
+            "cap_000060_586298424979:p0002",
+            "cap_000059_6353cc08f2a5:p0001",
+            "cap_000070_51dd67cc4f56:p0006",
+            "cap_000060_586298424979:p0001"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "After the player defeats the Tiger Vanguard (虎先锋), what is the first line the Headless One (无头人) sings?",
+          "Tiger Vanguard",
+          "虎先锋"
+        ],
+        "query_fingerprint": "ded3cb71660bca3b058d7555f2a439ee3eb257b793b5ec0129e48aab79fa96c5",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 5,
+          "novel_result_ids": [
+            "cap_000059_6353cc08f2a5:p0000",
+            "cap_000060_586298424979:p0002",
+            "cap_000059_6353cc08f2a5:p0001",
+            "cap_000070_51dd67cc4f56:p0006",
+            "cap_000060_586298424979:p0001"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "ded3cb71660bca3b058d7555f2a439ee3eb257b793b5ec0129e48aab79fa96c5",
+          "returned_result_count": 5
+        },
+        "segment_ids": [
+          "seg_0008"
+        ],
+        "source_video_ids": [
+          "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_ac1c8a3ef78d2cf1e78ab229",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        18011.0,
+        18011.507,
+        18012.014,
+        18012.521,
+        18013.028,
+        18013.535,
+        18014.042,
+        18014.549,
+        18015.056,
+        18015.563,
+        18016.07,
+        18016.577,
+        18017.085,
+        18017.592,
+        18018.099,
+        18018.606,
+        18019.113,
+        18019.62,
+        18020.127,
+        18020.634,
+        18021.141,
+        18021.648,
+        18022.155,
+        18022.662,
+        18023.169,
+        18023.676,
+        18024.183,
+        18024.69,
+        18025.197,
+        18025.704,
+        18026.211,
+        18026.718,
+        18027.225,
+        18027.732,
+        18028.239,
+        18028.746,
+        18029.254,
+        18029.761,
+        18030.268,
+        18030.775,
+        18031.282,
+        18031.789,
+        18032.296,
+        18032.803,
+        18033.31,
+        18033.817,
+        18034.324,
+        18034.831,
+        18035.338,
+        18035.845,
+        18036.352,
+        18036.859,
+        18037.366,
+        18037.873,
+        18038.38,
+        18038.887,
+        18039.394,
+        18039.901,
+        18040.408,
+        18040.915,
+        18041.423,
+        18041.93,
+        18042.437,
+        18042.944,
+        18043.451,
+        18043.958,
+        18044.465,
+        18044.972,
+        18045.479,
+        18045.986,
+        18046.493,
+        18047.0
+      ],
+      "inspected_ranges": [
+        [
+          18011.0,
+          18011.25
+        ],
+        [
+          18011.257,
+          18011.757
+        ],
+        [
+          18011.764,
+          18012.264
+        ],
+        [
+          18012.271,
+          18012.771
+        ],
+        [
+          18012.778,
+          18013.278
+        ],
+        [
+          18013.285,
+          18013.785
+        ],
+        [
+          18013.792,
+          18014.292
+        ],
+        [
+          18014.299,
+          18014.799
+        ],
+        [
+          18014.806,
+          18015.306
+        ],
+        [
+          18015.313,
+          18015.813
+        ],
+        [
+          18015.82,
+          18016.32
+        ],
+        [
+          18016.327,
+          18016.827
+        ],
+        [
+          18016.835,
+          18017.335
+        ],
+        [
+          18017.342,
+          18017.842
+        ],
+        [
+          18017.849,
+          18018.349
+        ],
+        [
+          18018.356,
+          18018.856
+        ],
+        [
+          18018.863,
+          18019.363
+        ],
+        [
+          18019.37,
+          18019.87
+        ],
+        [
+          18019.877,
+          18020.377
+        ],
+        [
+          18020.384,
+          18020.884
+        ],
+        [
+          18020.891,
+          18021.391
+        ],
+        [
+          18021.398,
+          18021.898
+        ],
+        [
+          18021.905,
+          18022.405
+        ],
+        [
+          18022.412,
+          18022.912
+        ],
+        [
+          18022.919,
+          18023.419
+        ],
+        [
+          18023.426,
+          18023.926
+        ],
+        [
+          18023.933,
+          18024.433
+        ],
+        [
+          18024.44,
+          18024.94
+        ],
+        [
+          18024.947,
+          18025.447
+        ],
+        [
+          18025.454,
+          18025.954
+        ],
+        [
+          18025.961,
+          18026.461
+        ],
+        [
+          18026.468,
+          18026.968
+        ],
+        [
+          18026.975,
+          18027.475
+        ],
+        [
+          18027.482,
+          18027.982
+        ],
+        [
+          18027.989,
+          18028.489
+        ],
+        [
+          18028.496,
+          18028.996
+        ],
+        [
+          18029.004,
+          18029.504
+        ],
+        [
+          18029.511,
+          18030.011
+        ],
+        [
+          18030.018,
+          18030.518
+        ],
+        [
+          18030.525,
+          18031.025
+        ],
+        [
+          18031.032,
+          18031.532
+        ],
+        [
+          18031.539,
+          18032.039
+        ],
+        [
+          18032.046,
+          18032.546
+        ],
+        [
+          18032.553,
+          18033.053
+        ],
+        [
+          18033.06,
+          18033.56
+        ],
+        [
+          18033.567,
+          18034.067
+        ],
+        [
+          18034.074,
+          18034.574
+        ],
+        [
+          18034.581,
+          18035.081
+        ],
+        [
+          18035.088,
+          18035.588
+        ],
+        [
+          18035.595,
+          18036.095
+        ],
+        [
+          18036.102,
+          18036.602
+        ],
+        [
+          18036.609,
+          18037.109
+        ],
+        [
+          18037.116,
+          18037.616
+        ],
+        [
+          18037.623,
+          18038.123
+        ],
+        [
+          18038.13,
+          18038.63
+        ],
+        [
+          18038.637,
+          18039.137
+        ],
+        [
+          18039.144,
+          18039.644
+        ],
+        [
+          18039.651,
+          18040.151
+        ],
+        [
+          18040.158,
+          18040.658
+        ],
+        [
+          18040.665,
+          18041.165
+        ],
+        [
+          18041.173,
+          18041.673
+        ],
+        [
+          18041.68,
+          18042.18
+        ],
+        [
+          18042.187,
+          18042.687
+        ],
+        [
+          18042.694,
+          18043.194
+        ],
+        [
+          18043.201,
+          18043.701
+        ],
+        [
+          18043.708,
+          18044.208
+        ],
+        [
+          18044.215,
+          18044.715
+        ],
+        [
+          18044.722,
+          18045.222
+        ],
+        [
+          18045.229,
+          18045.729
+        ],
+        [
+          18045.736,
+          18046.236
+        ],
+        [
+          18046.243,
+          18046.743
+        ],
+        [
+          18046.75,
+          18047.0
+        ]
+      ],
+      "interpretation_id": "interpretation_d55c7ad48a709a974674",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "c58796b8bfba94f23e29",
+      "raw_output": "```json\n{\n  \"summary\": \"After a large tiger-like creature is defeated and turns into a golden statue, a headless figure appears playing an instrument. Subtitles appear at the bottom of the screen as the headless figure is shown.\",\n  \"observations\": [\n    {\n      \"time_sec\": 18011.0,\n      \"description\": \"A large explosion of fire and sparks is shown, with large black Chinese characters for \\\"得胜\\\" (Victory) on either side. In the center, smaller white text reads \\\"已击败\\\" (Defeated) and below it, \\\"妖王·虎先锋\\\" (Demon King · Tiger Vanguard).\"\n    },\n    {\n      \"time_sec\": 18014.549,\n      \"description\": \"The explosion subsides, revealing a large, muscular, tiger-striped humanoid creature staggering in a pool of red liquid.\"\n    },\n    {\n      \"time_sec\": 18023.676,\n      \"description\": \"The tiger creature's body begins to turn into a golden, rock-like substance.\"\n    },\n    {\n      \"time_sec\": 18028.239,\n      \"description\": \"A headless, muscular human figure wearing robes and green prayer beads enters the frame from the right, holding a stringed instrument. The tiger creature is now a complete golden statue in the background.\"\n    },\n    {\n      \"time_sec\": 18028.746,\n      \"description\": \"As the headless figure stands in the red liquid, subtitles appear at the bottom of the screen reading \\\"金钱勇石全无力，大圣天涯遣虎愁\\\".\"\n    },\n    {\n      \"time_sec\": 18038.887,\n      \"description\": \"The subtitles change to \\\"他刀剑教诲不通，石猴纵你不服你\\\".\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Tiger Vanguard (虎先锋)\",\n      \"description\": \"A large, muscular, bipedal creature with orange and black tiger stripes, wearing some armor pieces. It is shown being defeated and turning into a golden statue.\"\n    },\n    {\n      \"name\": \"Headless One (无头人)\",\n      \"description\": \"A muscular human figure without a head, wearing loose robes, green prayer beads, and holding a long-necked stringed instrument. The neck stump is visible.\"\n    },\n    {\n      \"name\": \"On-screen text\",\n      \"description\": \"White text with a black outline. At 18011.0, it reads \\\"已击败\\\" and \\\"妖王·虎先锋\\\". At 18028.746, it reads \\\"金钱勇石全无力，大圣天涯遣虎愁\\\". At 18038.887, it reads \\\"他刀剑教诲不通，石猴纵你不服你\\\".\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        18011.0,\n        18014.042\n      ],\n      \"description\": \"A victory message appears on screen, confirming the defeat of the Tiger Vanguard.\"\n    },\n    {\n      \"time_range\": [\n        18014.549,\n        18028.239\n      ],\n      \"description\": \"The defeated Tiger Vanguard staggers and its body transforms into a golden statue.\"\n    },\n    {\n      \"time_range\": [\n        18028.239,\n        18038.38\n      ],\n      \"description\": \"A headless figure appears, and subtitles reading \\\"金钱勇石全无力，大圣天涯遣虎愁\\\" are displayed on screen.\"\n    },\n    {\n      \"time_range\": [\n        18038.887,\n        18047.0\n      ],\n      \"description\": \"The subtitles change to a new line of text.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"It is not explicitly stated that the headless figure is singing; the text appears as subtitles while the figure is on screen.\"\n  ]\n}\n```",
+      "requested_range": [
+        18011.0,
+        18047.0
+      ],
+      "round_id": "2",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 72,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.986111,
+          "effective_fps": 2.0,
+          "frame_times": [
+            18011.0,
+            18011.507,
+            18012.014,
+            18012.521,
+            18013.028,
+            18013.535,
+            18014.042,
+            18014.549,
+            18015.056,
+            18015.563,
+            18016.07,
+            18016.577,
+            18017.085,
+            18017.592,
+            18018.099,
+            18018.606,
+            18019.113,
+            18019.62,
+            18020.127,
+            18020.634,
+            18021.141,
+            18021.648,
+            18022.155,
+            18022.662,
+            18023.169,
+            18023.676,
+            18024.183,
+            18024.69,
+            18025.197,
+            18025.704,
+            18026.211,
+            18026.718,
+            18027.225,
+            18027.732,
+            18028.239,
+            18028.746,
+            18029.254,
+            18029.761,
+            18030.268,
+            18030.775,
+            18031.282,
+            18031.789,
+            18032.296,
+            18032.803,
+            18033.31,
+            18033.817,
+            18034.324,
+            18034.831,
+            18035.338,
+            18035.845,
+            18036.352,
+            18036.859,
+            18037.366,
+            18037.873,
+            18038.38,
+            18038.887,
+            18039.394,
+            18039.901,
+            18040.408,
+            18040.915,
+            18041.423,
+            18041.93,
+            18042.437,
+            18042.944,
+            18043.451,
+            18043.958,
+            18044.465,
+            18044.972,
+            18045.479,
+            18045.986,
+            18046.493,
+            18047.0
+          ],
+          "max_gap": 0.508,
+          "observed_subranges": [
+            [
+              18011.0,
+              18011.25
+            ],
+            [
+              18011.257,
+              18011.757
+            ],
+            [
+              18011.764,
+              18012.264
+            ],
+            [
+              18012.271,
+              18012.771
+            ],
+            [
+              18012.778,
+              18013.278
+            ],
+            [
+              18013.285,
+              18013.785
+            ],
+            [
+              18013.792,
+              18014.292
+            ],
+            [
+              18014.299,
+              18014.799
+            ],
+            [
+              18014.806,
+              18015.306
+            ],
+            [
+              18015.313,
+              18015.813
+            ],
+            [
+              18015.82,
+              18016.32
+            ],
+            [
+              18016.327,
+              18016.827
+            ],
+            [
+              18016.835,
+              18017.335
+            ],
+            [
+              18017.342,
+              18017.842
+            ],
+            [
+              18017.849,
+              18018.349
+            ],
+            [
+              18018.356,
+              18018.856
+            ],
+            [
+              18018.863,
+              18019.363
+            ],
+            [
+              18019.37,
+              18019.87
+            ],
+            [
+              18019.877,
+              18020.377
+            ],
+            [
+              18020.384,
+              18020.884
+            ],
+            [
+              18020.891,
+              18021.391
+            ],
+            [
+              18021.398,
+              18021.898
+            ],
+            [
+              18021.905,
+              18022.405
+            ],
+            [
+              18022.412,
+              18022.912
+            ],
+            [
+              18022.919,
+              18023.419
+            ],
+            [
+              18023.426,
+              18023.926
+            ],
+            [
+              18023.933,
+              18024.433
+            ],
+            [
+              18024.44,
+              18024.94
+            ],
+            [
+              18024.947,
+              18025.447
+            ],
+            [
+              18025.454,
+              18025.954
+            ],
+            [
+              18025.961,
+              18026.461
+            ],
+            [
+              18026.468,
+              18026.968
+            ],
+            [
+              18026.975,
+              18027.475
+            ],
+            [
+              18027.482,
+              18027.982
+            ],
+            [
+              18027.989,
+              18028.489
+            ],
+            [
+              18028.496,
+              18028.996
+            ],
+            [
+              18029.004,
+              18029.504
+            ],
+            [
+              18029.511,
+              18030.011
+            ],
+            [
+              18030.018,
+              18030.518
+            ],
+            [
+              18030.525,
+              18031.025
+            ],
+            [
+              18031.032,
+              18031.532
+            ],
+            [
+              18031.539,
+              18032.039
+            ],
+            [
+              18032.046,
+              18032.546
+            ],
+            [
+              18032.553,
+              18033.053
+            ],
+            [
+              18033.06,
+              18033.56
+            ],
+            [
+              18033.567,
+              18034.067
+            ],
+            [
+              18034.074,
+              18034.574
+            ],
+            [
+              18034.581,
+              18035.081
+            ],
+            [
+              18035.088,
+              18035.588
+            ],
+            [
+              18035.595,
+              18036.095
+            ],
+            [
+              18036.102,
+              18036.602
+            ],
+            [
+              18036.609,
+              18037.109
+            ],
+            [
+              18037.116,
+              18037.616
+            ],
+            [
+              18037.623,
+              18038.123
+            ],
+            [
+              18038.13,
+              18038.63
+            ],
+            [
+              18038.637,
+              18039.137
+            ],
+            [
+              18039.144,
+              18039.644
+            ],
+            [
+              18039.651,
+              18040.151
+            ],
+            [
+              18040.158,
+              18040.658
+            ],
+            [
+              18040.665,
+              18041.165
+            ],
+            [
+              18041.173,
+              18041.673
+            ],
+            [
+              18041.68,
+              18042.18
+            ],
+            [
+              18042.187,
+              18042.687
+            ],
+            [
+              18042.694,
+              18043.194
+            ],
+            [
+              18043.201,
+              18043.701
+            ],
+            [
+              18043.708,
+              18044.208
+            ],
+            [
+              18044.215,
+              18044.715
+            ],
+            [
+              18044.722,
+              18045.222
+            ],
+            [
+              18045.229,
+              18045.729
+            ],
+            [
+              18045.736,
+              18046.236
+            ],
+            [
+              18046.243,
+              18046.743
+            ],
+            [
+              18046.75,
+              18047.0
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            18011.0,
+            18047.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.986193
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0008",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪.mp4",
+          "source_time_range": [
+            336.123,
+            372.123
+          ],
+          "source_video_id": "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+          "virtual_time_range": [
+            18011.0,
+            18047.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "task_id": "r2_t1"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_a0032fa86ead4d37ad08c6d3.ded3cb71660b.json",
+      "evidence_role": "candidate",
+      "hit_count": 2,
+      "hit_ranks": [
+        1,
+        3
+      ],
+      "max_score": 0.032266458495966696,
+      "occurrence_id": "occ_64565ddf63b2cddbefed",
+      "passage_ids": [
+        "cap_000059_6353cc08f2a5:p0000",
+        "cap_000059_6353cc08f2a5:p0001"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?"
+        },
+        {
+          "query": "tiger vanguard"
+        },
+        {
+          "query": "虎先锋"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0008"
+      ],
+      "source_video_ids": [
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        17700.0,
+        17749.0
+      ]
+    },
+    {
+      "artifact": "attempt_a0032fa86ead4d37ad08c6d3.ded3cb71660b.json",
+      "evidence_role": "candidate",
+      "hit_count": 2,
+      "hit_ranks": [
+        5,
+        2
+      ],
+      "max_score": 0.031754032258064516,
+      "occurrence_id": "occ_e4ef43bc5b8d4c3525bf",
+      "passage_ids": [
+        "cap_000060_586298424979:p0001",
+        "cap_000060_586298424979:p0002"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?"
+        },
+        {
+          "query": "tiger vanguard"
+        },
+        {
+          "query": "虎先锋"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0008"
+      ],
+      "source_video_ids": [
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        18011.0,
+        18047.0
+      ]
+    },
+    {
+      "artifact": "attempt_a0032fa86ead4d37ad08c6d3.ded3cb71660b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.027479766610201392,
+      "occurrence_id": "occ_ad11841ae84df256868a",
+      "passage_ids": [
+        "cap_000070_51dd67cc4f56:p0006"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player defeats the tiger vanguard (虎先锋), what is the first line the headless one (无头人) sings?"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0008"
+      ],
+      "source_video_ids": [
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        21129.0,
+        21152.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+    "case_id": "mmlifelong-game-test-0031",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 31,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [
+      "attempt_ac1c8a3ef78d2cf1e78ab229"
+    ],
+    "supporting_intervals": [
+      [
+        18028.746,
+        18038.887
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\"."
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 433,
+        "content_chars": 1086,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9640,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "5bf4df79b0144cebbe29977256abb5be",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 87,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Tiger Vanguard",
+              "虎先锋"
+            ],
+            "goal": "Find the defeat of the Tiger Vanguard (虎先锋) and the subsequent appearance of the Headless One (无头人).",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0008",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "hypothesis",
+              "text": "The video segment containing the fight with the Tiger Vanguard (虎先锋) is likely segment 8, based on its title."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Tiger Vanguard",
+              "虎先锋"
+            ],
+            "goal": "Find the defeat of the Tiger Vanguard (虎先锋) and the subsequent appearance of the Headless One (无头人).",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0008",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "hypothesis",
+              "text": "The video segment containing the fight with the Tiger Vanguard (虎先锋) is likely segment 8, based on its title."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "3a7ed0be5fc4b08481129a3c633ab2a8a026746726d77802dff07a3730ff5ffe",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 542,
+        "content_chars": 1866,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 14403,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "c0526056860da82cc3a2b4849ddb01ee",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 54,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Visually confirm the defeat of the Tiger Vanguard and identify the first line sung by the Headless One that appears immediately after.",
+            "inspection_mode": "window",
+            "query_id": "r2_t1",
+            "sampling_floor_fps": 2.0,
+            "time_range": [
+              18011.0,
+              18047.0
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Visually confirm the defeat of the Tiger Vanguard and identify the first line sung by the Headless One that appears immediately after.",
+            "inspection_mode": "window",
+            "query_id": "r2_t1",
+            "sampling_floor_fps": 2.0,
+            "time_range": [
+              18011.0,
+              18047.0
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "0cef539b871d51be0f4aac07717b7e0935c8c225392174bc7371cfc0738ed98f",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1065,
+        "content_chars": 3526,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18055,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "7983df149db9d034061ef1a1724c134c",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 94,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_ac1c8a3ef78d2cf1e78ab229"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "entity_ids": [
+                "person_1"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "After the player defeats the Tiger Vanguard (虎先锋), a victory message appears on screen at 18011.0.",
+              "time_anchor": [
+                18011.0,
+                18011.0
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_ac1c8a3ef78d2cf1e78ab229"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "derived_from": [
+                "c3"
+              ],
+              "entity_ids": [
+                "person_2"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "Following the defeat of the Tiger Vanguard, a headless figure appears at 18028.239.",
+              "time_anchor": [
+                18028.239,
+                18028.239
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_ac1c8a3ef78d2cf1e78ab229"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "derived_from": [
+                "c4"
+              ],
+              "entity_ids": [
+                "person_2"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "The first line of subtitles that appears as the Headless One plays its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+              "time_anchor": [
+                18028.746,
+                18038.887
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "aliases": [
+              "Tiger Vanguard",
+              "虎先锋"
+            ],
+            "description": "Tiger Vanguard (虎先锋), a boss character in the game.",
+            "entity_id": "person_1",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Headless One",
+              "无头人"
+            ],
+            "description": "Headless One (无头人), a character who appears after the Tiger Vanguard is defeated.",
+            "entity_id": "person_2",
+            "op": "update_entity"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_ac1c8a3ef78d2cf1e78ab229"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "entity_ids": [
+                "person_1"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "After the player defeats the Tiger Vanguard (虎先锋), a victory message appears on screen at 18011.0.",
+              "time_anchor": [
+                18011.0,
+                18011.0
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_ac1c8a3ef78d2cf1e78ab229"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "derived_from": [
+                "c3"
+              ],
+              "entity_ids": [
+                "person_2"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "Following the defeat of the Tiger Vanguard, a headless figure appears at 18028.239.",
+              "time_anchor": [
+                18028.239,
+                18028.239
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_ac1c8a3ef78d2cf1e78ab229"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "derived_from": [
+                "c4"
+              ],
+              "entity_ids": [
+                "person_2"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "The first line of subtitles that appears as the Headless One plays its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+              "time_anchor": [
+                18028.746,
+                18038.887
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "aliases": [
+              "Tiger Vanguard",
+              "虎先锋"
+            ],
+            "description": "Tiger Vanguard (虎先锋), a boss character in the game.",
+            "entity_id": "person_1",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Headless One",
+              "无头人"
+            ],
+            "description": "Headless One (无头人), a character who appears after the Tiger Vanguard is defeated.",
+            "entity_id": "person_2",
+            "op": "update_entity"
+          }
+        ]
+      },
+      "raw_sha256": "0d0c30625a38f226e329bd5f775b5ab381aa3a73315acca615c80fad4d7c555d",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 311,
+        "content_chars": 759,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15877,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "e19435195cddfb2bdfdf044f2c58542a",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 103,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+        "supporting_claim_ids": [
+          "c5"
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+        "supporting_claim_ids": [
+          "c5"
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "f1f48884365e0902cfa1c440d5cca2f64215f9ca6436cb71ec016524576ec0fe",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [],
+    "candidate_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\".",
+    "case_id": "mmlifelong-game-test-0031",
+    "investigation_count": 2,
+    "reference_reason": "reference_integrity_verified",
+    "reference_valid": true,
+    "residual_uncertainty": "",
+    "rounds": 4,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.2,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 3,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 0,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 1.0,
+      "rounds": 4,
+      "unique_visual_material_attempts": 1,
+      "visual_confirmations": 1,
+      "visual_frames_inspected": 72,
+      "visual_interpretation_count": 1,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c5"
+    ],
+    "supporting_intervals": [
+      [
+        18028.746,
+        18038.887
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "The first line that appears as the Headless One begins to play its instrument is \"金钱勇石全无力，大圣天涯遣虎愁\"."
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_ac1c8a3ef78d2cf1e78ab229",
+      "round_id": "2",
+      "sampling_manifest": {
+        "coverage_ratio": 0.986111,
+        "effective_fps": 2.0,
+        "frame_times": [
+          18011.0,
+          18011.507,
+          18012.014,
+          18012.521,
+          18013.028,
+          18013.535,
+          18014.042,
+          18014.549,
+          18015.056,
+          18015.563,
+          18016.07,
+          18016.577,
+          18017.085,
+          18017.592,
+          18018.099,
+          18018.606,
+          18019.113,
+          18019.62,
+          18020.127,
+          18020.634,
+          18021.141,
+          18021.648,
+          18022.155,
+          18022.662,
+          18023.169,
+          18023.676,
+          18024.183,
+          18024.69,
+          18025.197,
+          18025.704,
+          18026.211,
+          18026.718,
+          18027.225,
+          18027.732,
+          18028.239,
+          18028.746,
+          18029.254,
+          18029.761,
+          18030.268,
+          18030.775,
+          18031.282,
+          18031.789,
+          18032.296,
+          18032.803,
+          18033.31,
+          18033.817,
+          18034.324,
+          18034.831,
+          18035.338,
+          18035.845,
+          18036.352,
+          18036.859,
+          18037.366,
+          18037.873,
+          18038.38,
+          18038.887,
+          18039.394,
+          18039.901,
+          18040.408,
+          18040.915,
+          18041.423,
+          18041.93,
+          18042.437,
+          18042.944,
+          18043.451,
+          18043.958,
+          18044.465,
+          18044.972,
+          18045.479,
+          18045.986,
+          18046.493,
+          18047.0
+        ],
+        "max_gap": 0.508,
+        "observed_subranges": [
+          [
+            18011.0,
+            18011.25
+          ],
+          [
+            18011.257,
+            18011.757
+          ],
+          [
+            18011.764,
+            18012.264
+          ],
+          [
+            18012.271,
+            18012.771
+          ],
+          [
+            18012.778,
+            18013.278
+          ],
+          [
+            18013.285,
+            18013.785
+          ],
+          [
+            18013.792,
+            18014.292
+          ],
+          [
+            18014.299,
+            18014.799
+          ],
+          [
+            18014.806,
+            18015.306
+          ],
+          [
+            18015.313,
+            18015.813
+          ],
+          [
+            18015.82,
+            18016.32
+          ],
+          [
+            18016.327,
+            18016.827
+          ],
+          [
+            18016.835,
+            18017.335
+          ],
+          [
+            18017.342,
+            18017.842
+          ],
+          [
+            18017.849,
+            18018.349
+          ],
+          [
+            18018.356,
+            18018.856
+          ],
+          [
+            18018.863,
+            18019.363
+          ],
+          [
+            18019.37,
+            18019.87
+          ],
+          [
+            18019.877,
+            18020.377
+          ],
+          [
+            18020.384,
+            18020.884
+          ],
+          [
+            18020.891,
+            18021.391
+          ],
+          [
+            18021.398,
+            18021.898
+          ],
+          [
+            18021.905,
+            18022.405
+          ],
+          [
+            18022.412,
+            18022.912
+          ],
+          [
+            18022.919,
+            18023.419
+          ],
+          [
+            18023.426,
+            18023.926
+          ],
+          [
+            18023.933,
+            18024.433
+          ],
+          [
+            18024.44,
+            18024.94
+          ],
+          [
+            18024.947,
+            18025.447
+          ],
+          [
+            18025.454,
+            18025.954
+          ],
+          [
+            18025.961,
+            18026.461
+          ],
+          [
+            18026.468,
+            18026.968
+          ],
+          [
+            18026.975,
+            18027.475
+          ],
+          [
+            18027.482,
+            18027.982
+          ],
+          [
+            18027.989,
+            18028.489
+          ],
+          [
+            18028.496,
+            18028.996
+          ],
+          [
+            18029.004,
+            18029.504
+          ],
+          [
+            18029.511,
+            18030.011
+          ],
+          [
+            18030.018,
+            18030.518
+          ],
+          [
+            18030.525,
+            18031.025
+          ],
+          [
+            18031.032,
+            18031.532
+          ],
+          [
+            18031.539,
+            18032.039
+          ],
+          [
+            18032.046,
+            18032.546
+          ],
+          [
+            18032.553,
+            18033.053
+          ],
+          [
+            18033.06,
+            18033.56
+          ],
+          [
+            18033.567,
+            18034.067
+          ],
+          [
+            18034.074,
+            18034.574
+          ],
+          [
+            18034.581,
+            18035.081
+          ],
+          [
+            18035.088,
+            18035.588
+          ],
+          [
+            18035.595,
+            18036.095
+          ],
+          [
+            18036.102,
+            18036.602
+          ],
+          [
+            18036.609,
+            18037.109
+          ],
+          [
+            18037.116,
+            18037.616
+          ],
+          [
+            18037.623,
+            18038.123
+          ],
+          [
+            18038.13,
+            18038.63
+          ],
+          [
+            18038.637,
+            18039.137
+          ],
+          [
+            18039.144,
+            18039.644
+          ],
+          [
+            18039.651,
+            18040.151
+          ],
+          [
+            18040.158,
+            18040.658
+          ],
+          [
+            18040.665,
+            18041.165
+          ],
+          [
+            18041.173,
+            18041.673
+          ],
+          [
+            18041.68,
+            18042.18
+          ],
+          [
+            18042.187,
+            18042.687
+          ],
+          [
+            18042.694,
+            18043.194
+          ],
+          [
+            18043.201,
+            18043.701
+          ],
+          [
+            18043.708,
+            18044.208
+          ],
+          [
+            18044.215,
+            18044.715
+          ],
+          [
+            18044.722,
+            18045.222
+          ],
+          [
+            18045.229,
+            18045.729
+          ],
+          [
+            18045.736,
+            18046.236
+          ],
+          [
+            18046.243,
+            18046.743
+          ],
+          [
+            18046.75,
+            18047.0
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          18011.0,
+          18047.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.986193
+      },
+      "task_id": "r2_t1"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_a0032fa86ead4d37ad08c6d3"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_ac1c8a3ef78d2cf1e78ab229"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r2_t1_e78ab229"
+          ],
+          "failure_reason": "",
+          "query_id": "r2_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Tiger Vanguard",
+            "虎先锋"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "seg_0008",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r2_t1",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [
+            18011.0,
+            18047.0
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": []
+}

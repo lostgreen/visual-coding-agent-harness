@@ -1,0 +1,4138 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_901e223a13ebaf3902b6b8b1.73b1ee281f65.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "For the \"Bishui Golden-eyed Beast,\" which additional negative effect appears in the second phase? 1. Thunder Sting 2. Burn 3. Freeze 4. Poison",
+        "Bishui Golden-eyed Beast",
+        "避水金睛兽"
+      ],
+      "query_fingerprint": "73b1ee281f6590ab149646e43dc96479a5a8c08ab2e5fb13011bf4402b6b2ce8",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0146",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 133,
+        "content_chars": 292,
+        "finish_reason": "stop",
+        "prompt_tokens": 526,
+        "provider_request_id": "5e267358271c68820f3b6c846bbe2078",
+        "reasoning_tokens": 68,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 5,
+      "retry_count": 0,
+      "score": 1.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.0,
+      "ref_60": 0.0,
+      "ref_600": 0.0,
+      "reference_intervals": [
+        [
+          73976.0,
+          73988.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [
+        "attempt_e99f8531c23a829bf107e471"
+      ],
+      "errors": [
+        "supporting_claims_cite_candidate_or_negative:attempt_e99f8531c23a829bf107e471"
+      ],
+      "passed": false,
+      "reason": "supporting_claims_cite_candidate_or_negative",
+      "round": 3,
+      "supporting_claim_ids": [
+        "c4"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "cited_attempt_ids": [
+        "attempt_e99f8531c23a829bf107e471"
+      ],
+      "errors": [
+        "supporting_claims_cite_candidate_or_negative:attempt_e99f8531c23a829bf107e471"
+      ],
+      "passed": false,
+      "reason": "supporting_claims_cite_candidate_or_negative",
+      "round": 6,
+      "supporting_claim_ids": [
+        "c7"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [
+        "supporting_claims_cite_candidate_or_negative:attempt_e99f8531c23a829bf107e471"
+      ],
+      "candidate_answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0146/observation_log.jsonl",
+      "raw_reasoner_answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+      "reference_reason": "supporting_claims_cite_candidate_or_negative",
+      "reference_valid": false,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c7"
+      ],
+      "supporting_intervals": [],
+      "type": "answer_outcome",
+      "verification_status": "candidate_only",
+      "verified_answer": "",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0146/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0146/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000001",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 0.0,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72521.375
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000002",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 21.496,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72542.871
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000003",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 42.992,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72564.367
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000004",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 64.487,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72585.862
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000005",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 85.983,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72607.358
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000006",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 107.479,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72628.854
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000007",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 128.975,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72650.35
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000008",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 150.471,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72671.846
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000009",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 171.966,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72693.341
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000010",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 193.462,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72714.837
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000011",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 214.958,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72736.333
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000012",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 236.454,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72757.829
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000013",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 257.949,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72779.324
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000014",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 279.445,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72800.82
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000015",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 300.941,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72822.316
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000016",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 322.437,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72843.812
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000017",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 343.933,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72865.308
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000018",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 365.428,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72886.803
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000019",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 386.924,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72908.299
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000020",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 408.42,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72929.795
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000021",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 429.916,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72951.291
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000022",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 451.412,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72972.787
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000023",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 472.907,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 72994.282
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000024",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 494.403,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73015.778
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000025",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 515.899,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73037.274
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000026",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 537.395,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73058.77
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000027",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 558.891,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73080.266
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000028",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 580.386,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73101.761
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000029",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 601.882,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73123.257
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000030",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 623.378,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73144.753
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000031",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 644.874,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73166.249
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000032",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 666.369,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73187.744
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000033",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 687.865,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73209.24
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000034",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 709.361,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73230.736
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000035",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 730.857,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73252.232
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000036",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 752.353,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73273.728
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000037",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 773.848,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73295.223
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000038",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 795.344,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73316.719
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000039",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 816.84,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73338.215
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000040",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 838.336,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73359.711
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000041",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 859.832,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73381.207
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000042",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 881.327,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73402.702
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000043",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 902.823,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73424.198
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000044",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 924.319,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73445.694
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000045",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 945.815,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73467.19
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000046",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 967.311,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73488.686
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000047",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 988.806,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73510.181
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000048",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1010.302,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73531.677
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000049",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1031.798,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73553.173
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000050",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1053.294,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73574.669
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000051",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1074.789,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73596.164
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000052",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1096.285,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73617.66
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000053",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1117.781,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73639.156
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000054",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1139.277,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73660.652
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000055",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1160.773,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73682.148
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000056",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1182.268,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73703.643
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000057",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1203.764,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73725.139
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000058",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1225.26,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73746.635
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000059",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1246.756,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73768.131
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000060",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1268.252,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73789.627
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000061",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1289.747,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73811.122
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000062",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1311.243,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73832.618
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000063",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1332.739,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73854.114
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000064",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1354.235,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73875.61
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000065",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1375.731,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73897.106
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000066",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1397.226,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73918.601
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000067",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1418.722,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73940.097
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000068",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1440.218,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73961.593
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000069",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1461.714,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73983.089
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000070",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1483.209,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74004.584
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000071",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1504.705,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74026.08
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000072",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1526.201,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74047.576
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000073",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1547.697,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74069.072
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000074",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1569.193,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74090.568
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000075",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1590.688,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74112.063
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000076",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1612.184,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74133.559
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000077",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1633.68,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74155.055
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000078",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1655.176,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74176.551
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000079",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1676.672,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74198.047
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000080",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1698.167,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74219.542
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000081",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1719.663,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74241.038
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000082",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1741.159,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74262.534
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000083",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1762.655,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74284.03
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000084",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1784.151,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74305.526
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000085",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1805.646,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74327.021
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000086",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1827.142,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74348.517
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000087",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1848.638,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74370.013
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000088",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1870.134,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74391.509
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000089",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1891.629,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74413.004
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000090",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1913.125,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74434.5
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000091",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1934.621,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74455.996
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000092",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1956.117,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74477.492
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000093",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1977.613,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74498.988
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000094",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1999.108,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74520.483
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000095",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 2020.604,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74541.979
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000096",
+      "query_id": "r1_t2",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0028",
+      "source_time_sec": 0.0,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 74563.475
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t1_burn_confirm_000001",
+      "query_id": "r3_t1_burn_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1202.625,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73724.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t1_burn_confirm_000002",
+      "query_id": "r3_t1_burn_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1203.292,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73724.667
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t1_burn_confirm_000003",
+      "query_id": "r3_t1_burn_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1203.958,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73725.333
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t1_burn_confirm_000004",
+      "query_id": "r3_t1_burn_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1204.625,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 73726.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t2_freeze_confirm_000001",
+      "query_id": "r3_t2_freeze_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1804.625,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74326.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t2_freeze_confirm_000002",
+      "query_id": "r3_t2_freeze_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1805.292,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74326.667
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t2_freeze_confirm_000003",
+      "query_id": "r3_t2_freeze_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1805.958,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74327.333
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r3_t2_freeze_confirm_000004",
+      "query_id": "r3_t2_freeze_confirm",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0027",
+      "source_time_sec": 1806.625,
+      "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+      "virtual_time_sec": 74328.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_901e223a13ebaf3902b6b8b1",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_d548ccf8e565ec38e0eb",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "143f8206a5926747fb69",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000247_777b37479b28\", \"dense_score\": 0.46377336978912354, \"fused_score\": 0.03131881575727918, \"interval_precision\": \"anchor\", \"lexical_score\": 56.24693935575586, \"metadata\": {\"dense_rank\": 7, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"for the \\\"bishui golden-eyed beast,\\\" which additional negative effect appears in the second phase? 1. thunder sting 2. burn 3. freeze 4. poison\", \"bishui golden-eyed beast\", \"避水金睛兽\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0027\"], \"source_video_ids\": [\"027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000247_777b37479b28:p0006\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000247_777b37479b28:p0006\", \"text\": \"A cutscene begins, showing the beast collapsing in flames as large black characters appear on the screen, signifying victory. The text on screen reads \\\"已击败 妖王・狱水金睛兽\\\" which translates to \\\"Defeated Demon King - Hellwater Golden-Eyed Beast.\\\"\", \"virtual_end_sec\": 74288.0, \"virtual_start_sec\": 74264.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000197_7eedd6dee726\", \"dense_score\": 0.502720296382904, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0023\"], \"source_video_ids\": [\"023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000197_7eedd6dee726:p0009\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000197_7eedd6dee726:p0009\", \"text\": \"A cutscene triggers, revealing a massive, monstrous, scorpion-like creature with golden armor and glowing red eyes perched on the temple roof. The creature, identified by the on-screen text as \\\"毒敌大王\\\" (Poisonous Enemy Great King), leaps down to confront the player, initiating a boss battle. The player immediately begins dodging the creature's powerful attacks, which include tail swipes and slams that kick up dirt and leaves.\", \"virtual_end_sec\": 59400.0, \"virtual_start_sec\": 59334.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000038_d13fbf78e15f\", \"dense_score\": 0.4830484688282013, \"fused_score\": 0.016129032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0005\"], \"source_video_ids\": [\"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000038_d13fbf78e15f:p0007\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000038_d13fbf78e15f:p0007\", \"text\": \"After defeating the monster, the character finds and opens a golden pot on a small altar, revealing a glowing item inside. A pop-up appears with Chinese text: \\\"九转金丹\\\" (Jiu Zhuan Jin Dan).\", \"virtual_end_sec\": 11593.0, \"virtual_start_sec\": 11530.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000247_777b37479b28\", \"dense_score\": null, \"fused_score\": 0.016129032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": 35.21495866309063, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"for the \\\"bishui golden-eyed beast,\\\" which additional negative effect appears in the second phase? 1. thunder sting 2. burn 3. freeze 4. poison\", \"bishui golden-eyed beast\", \"避水金睛兽\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0027\"], \"source_video_ids\": [\"027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000247_777b37479b28:p0009\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000247_777b37479b28:p0009\", \"text\": \"The gameplay resumes with the player character clutching their head in a snowy, desolate landscape. After a moment, they stand up and begin to explore the area, picking up items that appear on the screen, including \\\"大力铁角\\\" (Mighty Iron Horn), \\\"虹霓云锦\\\" (Rainbow Cloud Brocade), and \\\"金睛兽角\\\" (Golden-Eyed Beast Horn).\", \"virtual_end_sec\": 74400.0, \"virtual_start_sec\": 74381.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000068_a158e270ad50\", \"dense_score\": 0.4695301651954651, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000068_a158e270ad50:p0001\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000068_a158e270ad50:p0001\", \"text\": \"The creature, identified by a vertical text box as \\\"疯\\\" (Fēng) and \\\"嘄\\\" (Jiāo), turns to face the camera, revealing a scarred, painted face with glowing red eyes.\", \"virtual_end_sec\": 20422.0, \"virtual_start_sec\": 20406.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 4, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 2, \"hit_ranks\": [1, 4], \"max_score\": 0.03131881575727918, \"occurrence_id\": \"occ_316c52eb918d8adffe76\", \"passage_ids\": [\"cap_000247_777b37479b28:p0006\", \"cap_000247_777b37479b28:p0009\"], \"query_matches\": [{\"query\": \"for the \\\"bishui golden-eyed beast,\\\" which additional negative effect appears in the second phase? 1. thunder sting 2. burn 3. freeze 4. poison\"}, {\"query\": \"bishui golden-eyed beast\"}, {\"query\": \"避水金睛兽\"}], \"rank\": 1, \"segment_ids\": [\"seg_0027\"], \"source_video_ids\": [\"027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.\"], \"status\": \"uninspected\", \"time_range\": [74264.0, 74400.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_a0c84118692cae8acdbf\", \"passage_ids\": [\"cap_000197_7eedd6dee726:p0009\"], \"query_matches\": [], \"rank\": 2, \"segment_ids\": [\"seg_0023\"], \"source_video_ids\": [\"023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月\"], \"status\": \"uninspected\", \"time_range\": [59334.0, 59400.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.016129032258064516, \"occurrence_id\": \"occ_44dc44762718a4555c01\", \"passage_ids\": [\"cap_000038_d13fbf78e15f:p0007\"], \"query_matches\": [], \"rank\": 3, \"segment_ids\": [\"seg_0005\"], \"source_video_ids\": [\"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"status\": \"uninspected\", \"time_range\": [11530.0, 11593.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_979b101ce9301fbab573\", \"passage_ids\": [\"cap_000068_a158e270ad50:p0001\"], \"query_matches\": [], \"rank\": 4, \"segment_ids\": [\"seg_0008\"], \"source_video_ids\": [\"008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪\"], \"status\": \"uninspected\", \"time_range\": [20406.0, 20422.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0146/caption_search/attempt_901e223a13ebaf3902b6b8b1.73b1ee281f65.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 5, \"novel_result_ids\": [\"cap_000247_777b37479b28:p0006\", \"cap_000197_7eedd6dee726:p0009\", \"cap_000038_d13fbf78e15f:p0007\", \"cap_000247_777b37479b28:p0009\", \"cap_000068_a158e270ad50:p0001\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"73b1ee281f6590ab149646e43dc96479a5a8c08ab2e5fb13011bf4402b6b2ce8\", \"returned_result_count\": 5}, \"search_queries\": [\"For the \\\"Bishui Golden-eyed Beast,\\\" which additional negative effect appears in the second phase? 1. Thunder Sting 2. Burn 3. Freeze 4. Poison\", \"Bishui Golden-eyed Beast\", \"避水金睛兽\"], \"summary\": \"Caption search: 5 hits\\n1. [20:37:44-20:38:08] score=0.0313 passage=cap_000247_777b37479b28:p0006\\n   \\\"A cutscene begins, showing the beast collapsing in flames as large black characters appear on the screen, signifying victory. The text on screen reads \\\"已击败 妖王・狱水金睛兽\\\" which translates to \\\"Defeated Demon King - Hellwater Golden-Eyed Beast.\\\"\\\"\\n   matched queries: for the \\\"bishui golden-eyed beast,\\\" which additional negative effect appears in the second phase? 1. thunder sting 2. burn 3. freeze 4. poison; bishui golden-eyed beast; 避水金睛兽\\n2. [16:28:54-16:30:00] score=0.0164 passage=cap_000197_7eedd6dee726:p0009\\n   \\\"A cutscene triggers, revealing a massive, monstrous, scorpion-like creature with golden armor and glowing red eyes perched on the temple roof. The creature, identified by the on-screen text as \\\"毒敌大王\\\" (Poisonous Enemy Great King), leaps down to confront the player, initiating a boss battle. The player immediately begins dodging the creature's powerful attacks, which include tail swipes and slams that kick up dirt and leaves.\\\"\\n3. [03:12:10-03:13:13] score=0.0161 passage=cap_000038_d13fbf78e15f:p0007\\n   \\\"After defeating the monster, the character finds and opens a golden pot on a small altar, revealing a glowing item inside. A pop-up appears with Chinese text: \\\"九转金丹\\\" (Jiu Zhuan Jin Dan).\\\"\\n4. [20:39:41-20:40:00] score=0.0161 passage=cap_000247_777b37479b28:p0009\\n   \\\"The gameplay resumes with the player character clutching their head in a snowy, desolate landscape. After a moment, they stand up and begin to explore the area, picking up items that appear on the screen, including \\\"大力铁角\\\" (Mighty Iron Horn), \\\"虹霓云锦\\\" (Rainbow Cloud Brocade), and \\\"金睛兽角\\\" (Golden-Eyed Beast Horn).\\\"\\n   matched queries: for the \\\"bishui golden-eyed beast,\\\" which additional negative effect appears in the second phase? 1. thunder sting 2. burn 3. freeze 4. poison; bishui golden-eyed beast; 避水金睛兽\\n5. [05:40:06-05:40:22] score=0.0159 passage=cap_000068_a158e270ad50:p0001\\n   \\\"The creature, identified by a vertical text box as \\\"疯\\\" (Fēng) and \\\"嘄\\\" (Jiāo), turns to face the camera, revealing a scarred, painted face with glowing red eyes.\\\"\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000247_777b37479b28:p0006",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000197_7eedd6dee726:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000038_d13fbf78e15f:p0007",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000247_777b37479b28:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000068_a158e270ad50:p0001"
+          ],
+          "passage_ids": [
+            "cap_000247_777b37479b28:p0006",
+            "cap_000197_7eedd6dee726:p0009",
+            "cap_000038_d13fbf78e15f:p0007",
+            "cap_000247_777b37479b28:p0009",
+            "cap_000068_a158e270ad50:p0001"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "For the \"Bishui Golden-eyed Beast,\" which additional negative effect appears in the second phase? 1. Thunder Sting 2. Burn 3. Freeze 4. Poison",
+          "Bishui Golden-eyed Beast",
+          "避水金睛兽"
+        ],
+        "query_fingerprint": "73b1ee281f6590ab149646e43dc96479a5a8c08ab2e5fb13011bf4402b6b2ce8",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 5,
+          "novel_result_ids": [
+            "cap_000247_777b37479b28:p0006",
+            "cap_000197_7eedd6dee726:p0009",
+            "cap_000038_d13fbf78e15f:p0007",
+            "cap_000247_777b37479b28:p0009",
+            "cap_000068_a158e270ad50:p0001"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "73b1ee281f6590ab149646e43dc96479a5a8c08ab2e5fb13011bf4402b6b2ce8",
+          "returned_result_count": 5
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+          "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月",
+          "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.",
+          "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+        "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.",
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_e99f8531c23a829bf107e471",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [
+        72521.375,
+        72542.871,
+        72564.367,
+        72585.862,
+        72607.358,
+        72628.854,
+        72650.35,
+        72671.846,
+        72693.341,
+        72714.837,
+        72736.333,
+        72757.829,
+        72779.324,
+        72800.82,
+        72822.316,
+        72843.812,
+        72865.308,
+        72886.803,
+        72908.299,
+        72929.795,
+        72951.291,
+        72972.787,
+        72994.282,
+        73015.778,
+        73037.274,
+        73058.77,
+        73080.266,
+        73101.761,
+        73123.257,
+        73144.753,
+        73166.249,
+        73187.744,
+        73209.24,
+        73230.736,
+        73252.232,
+        73273.728,
+        73295.223,
+        73316.719,
+        73338.215,
+        73359.711,
+        73381.207,
+        73402.702,
+        73424.198,
+        73445.694,
+        73467.19,
+        73488.686,
+        73510.181,
+        73531.677,
+        73553.173,
+        73574.669,
+        73596.164,
+        73617.66,
+        73639.156,
+        73660.652,
+        73682.148,
+        73703.643,
+        73725.139,
+        73746.635,
+        73768.131,
+        73789.627,
+        73811.122,
+        73832.618,
+        73854.114,
+        73875.61,
+        73897.106,
+        73918.601,
+        73940.097,
+        73961.593,
+        73983.089,
+        74004.584,
+        74026.08,
+        74047.576,
+        74069.072,
+        74090.568,
+        74112.063,
+        74133.559,
+        74155.055,
+        74176.551,
+        74198.047,
+        74219.542,
+        74241.038,
+        74262.534,
+        74284.03,
+        74305.526,
+        74327.021,
+        74348.517,
+        74370.013,
+        74391.509,
+        74413.004,
+        74434.5,
+        74455.996,
+        74477.492,
+        74498.988,
+        74520.483,
+        74541.979,
+        74563.475
+      ],
+      "inspected_ranges": [
+        [
+          72521.375,
+          72521.625
+        ],
+        [
+          72542.621,
+          72543.121
+        ],
+        [
+          72564.117,
+          72564.617
+        ],
+        [
+          72585.612,
+          72586.112
+        ],
+        [
+          72607.108,
+          72607.608
+        ],
+        [
+          72628.604,
+          72629.104
+        ],
+        [
+          72650.1,
+          72650.6
+        ],
+        [
+          72671.596,
+          72672.096
+        ],
+        [
+          72693.091,
+          72693.591
+        ],
+        [
+          72714.587,
+          72715.087
+        ],
+        [
+          72736.083,
+          72736.583
+        ],
+        [
+          72757.579,
+          72758.079
+        ],
+        [
+          72779.074,
+          72779.574
+        ],
+        [
+          72800.57,
+          72801.07
+        ],
+        [
+          72822.066,
+          72822.566
+        ],
+        [
+          72843.562,
+          72844.062
+        ],
+        [
+          72865.058,
+          72865.558
+        ],
+        [
+          72886.553,
+          72887.053
+        ],
+        [
+          72908.049,
+          72908.549
+        ],
+        [
+          72929.545,
+          72930.045
+        ],
+        [
+          72951.041,
+          72951.541
+        ],
+        [
+          72972.537,
+          72973.037
+        ],
+        [
+          72994.032,
+          72994.532
+        ],
+        [
+          73015.528,
+          73016.028
+        ],
+        [
+          73037.024,
+          73037.524
+        ],
+        [
+          73058.52,
+          73059.02
+        ],
+        [
+          73080.016,
+          73080.516
+        ],
+        [
+          73101.511,
+          73102.011
+        ],
+        [
+          73123.007,
+          73123.507
+        ],
+        [
+          73144.503,
+          73145.003
+        ],
+        [
+          73165.999,
+          73166.499
+        ],
+        [
+          73187.494,
+          73187.994
+        ],
+        [
+          73208.99,
+          73209.49
+        ],
+        [
+          73230.486,
+          73230.986
+        ],
+        [
+          73251.982,
+          73252.482
+        ],
+        [
+          73273.478,
+          73273.978
+        ],
+        [
+          73294.973,
+          73295.473
+        ],
+        [
+          73316.469,
+          73316.969
+        ],
+        [
+          73337.965,
+          73338.465
+        ],
+        [
+          73359.461,
+          73359.961
+        ],
+        [
+          73380.957,
+          73381.457
+        ],
+        [
+          73402.452,
+          73402.952
+        ],
+        [
+          73423.948,
+          73424.448
+        ],
+        [
+          73445.444,
+          73445.944
+        ],
+        [
+          73466.94,
+          73467.44
+        ],
+        [
+          73488.436,
+          73488.936
+        ],
+        [
+          73509.931,
+          73510.431
+        ],
+        [
+          73531.427,
+          73531.927
+        ],
+        [
+          73552.923,
+          73553.423
+        ],
+        [
+          73574.419,
+          73574.919
+        ],
+        [
+          73595.914,
+          73596.414
+        ],
+        [
+          73617.41,
+          73617.91
+        ],
+        [
+          73638.906,
+          73639.406
+        ],
+        [
+          73660.402,
+          73660.902
+        ],
+        [
+          73681.898,
+          73682.398
+        ],
+        [
+          73703.393,
+          73703.893
+        ],
+        [
+          73724.889,
+          73725.389
+        ],
+        [
+          73746.385,
+          73746.885
+        ],
+        [
+          73767.881,
+          73768.381
+        ],
+        [
+          73789.377,
+          73789.877
+        ],
+        [
+          73810.872,
+          73811.372
+        ],
+        [
+          73832.368,
+          73832.868
+        ],
+        [
+          73853.864,
+          73854.364
+        ],
+        [
+          73875.36,
+          73875.86
+        ],
+        [
+          73896.856,
+          73897.356
+        ],
+        [
+          73918.351,
+          73918.851
+        ],
+        [
+          73939.847,
+          73940.347
+        ],
+        [
+          73961.343,
+          73961.843
+        ],
+        [
+          73982.839,
+          73983.339
+        ],
+        [
+          74004.334,
+          74004.834
+        ],
+        [
+          74025.83,
+          74026.33
+        ],
+        [
+          74047.326,
+          74047.826
+        ],
+        [
+          74068.822,
+          74069.322
+        ],
+        [
+          74090.318,
+          74090.818
+        ],
+        [
+          74111.813,
+          74112.313
+        ],
+        [
+          74133.309,
+          74133.809
+        ],
+        [
+          74154.805,
+          74155.305
+        ],
+        [
+          74176.301,
+          74176.801
+        ],
+        [
+          74197.797,
+          74198.297
+        ],
+        [
+          74219.292,
+          74219.792
+        ],
+        [
+          74240.788,
+          74241.288
+        ],
+        [
+          74262.284,
+          74262.784
+        ],
+        [
+          74283.78,
+          74284.28
+        ],
+        [
+          74305.276,
+          74305.776
+        ],
+        [
+          74326.771,
+          74327.271
+        ],
+        [
+          74348.267,
+          74348.767
+        ],
+        [
+          74369.763,
+          74370.263
+        ],
+        [
+          74391.259,
+          74391.759
+        ],
+        [
+          74412.754,
+          74413.254
+        ],
+        [
+          74434.25,
+          74434.75
+        ],
+        [
+          74455.746,
+          74456.246
+        ],
+        [
+          74477.242,
+          74477.742
+        ],
+        [
+          74498.738,
+          74499.238
+        ],
+        [
+          74520.233,
+          74520.733
+        ],
+        [
+          74541.729,
+          74542.229
+        ],
+        [
+          74563.225,
+          74563.475
+        ]
+      ],
+      "interpretation_id": "interpretation_289c6a4807d62b5b4f76",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "03a26dc173cc1e8f4458",
+      "raw_output": "```json\n{\n  \"summary\": \"A player character, a monkey-like figure, fights a large, quadrupedal beast in a dark, cavernous area. The beast, labeled \\\"Bishui Golden-eyed Beast\\\" (or \\\"碧水金睛兽\\\"), has two distinct phases. In the first phase, it is dark-skinned with glowing orange cracks and uses fire-based attacks. In the second phase, it becomes covered in ice and uses ice and lightning attacks. The player character is seen being affected by a \\\"Burn\\\" status effect in the first phase and a \\\"Freeze\\\" status effect in the second phase.\",\n  \"observations\": [\n    {\n      \"time_sec\": 73682.148,\n      \"description\": \"A large, dark-skinned, quadrupedal beast with glowing orange cracks on its body is shown. It has a health bar above it with the label \\\"碧水金睛兽\\\" (Bishui Golden-eyed Beast).\"\n    },\n    {\n      \"time_sec\": 73725.139,\n      \"description\": \"The player character's health bar has a red icon with a flame symbol next to it, and the text \\\"灼烧\\\" (Burn) is visible.\"\n    },\n    {\n      \"time_sec\": 74284.03,\n      \"description\": \"The beast, now covered in white ice and with glowing blue eyes, is shown. Its health bar still reads \\\"碧水金睛兽\\\" (Bishui Golden-eyed Beast).\"\n    },\n    {\n      \"time_sec\": 74327.021,\n      \"description\": \"The player character is shown covered in ice. A blue icon with a snowflake symbol is visible next to their health bar, with the text \\\"冰冻\\\" (Freeze).\"\n    },\n    {\n      \"time_sec\": 74348.517,\n      \"description\": \"The beast unleashes an attack where arcs of white electricity travel across the icy ground.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid monkey-like figure wearing armor and wielding a staff.\"\n    },\n    {\n      \"name\": \"Bishui Golden-eyed Beast (碧水金睛兽)\",\n      \"description\": \"A large, quadrupedal beast. In its first phase, it has dark skin with glowing orange cracks. In its second phase, it is covered in white ice with glowing blue eyes.\"\n    },\n    {\n      \"name\": \"Burn (灼烧)\",\n      \"description\": \"A status effect icon, a red square with a flame symbol, appears next to the player's health bar.\"\n    },\n    {\n      \"name\": \"Freeze (冰冻)\",\n      \"description\": \"A status effect icon, a blue square with a snowflake symbol, appears next to the player's health bar. The character model is also covered in ice.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        73682.148,\n        74262.534\n      ],\n      \"description\": \"The player fights the first phase of the Bishui Golden-eyed Beast, which uses fire-based attacks. The player is afflicted with the \\\"Burn\\\" status effect.\"\n    },\n    {\n      \"time_range\": [\n        74262.534,\n        74413.004\n      ],\n      \"description\": \"The Bishui Golden-eyed Beast transitions to its second phase, becoming covered in ice. It uses ice and lightning attacks, and the player is afflicted with the \\\"Freeze\\\" status effect.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The specific name of the lightning attack is not shown.\",\n    \"Whether 'Thunder Sting' is the name for the visible lightning attack cannot be confirmed from visual information alone.\"\n  ]\n}\n```",
+      "requested_range": [
+        72521.375,
+        74563.475
+      ],
+      "round_id": "2",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 96,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.02326,
+          "effective_fps": 0.04701,
+          "frame_times": [
+            72521.375,
+            72542.871,
+            72564.367,
+            72585.862,
+            72607.358,
+            72628.854,
+            72650.35,
+            72671.846,
+            72693.341,
+            72714.837,
+            72736.333,
+            72757.829,
+            72779.324,
+            72800.82,
+            72822.316,
+            72843.812,
+            72865.308,
+            72886.803,
+            72908.299,
+            72929.795,
+            72951.291,
+            72972.787,
+            72994.282,
+            73015.778,
+            73037.274,
+            73058.77,
+            73080.266,
+            73101.761,
+            73123.257,
+            73144.753,
+            73166.249,
+            73187.744,
+            73209.24,
+            73230.736,
+            73252.232,
+            73273.728,
+            73295.223,
+            73316.719,
+            73338.215,
+            73359.711,
+            73381.207,
+            73402.702,
+            73424.198,
+            73445.694,
+            73467.19,
+            73488.686,
+            73510.181,
+            73531.677,
+            73553.173,
+            73574.669,
+            73596.164,
+            73617.66,
+            73639.156,
+            73660.652,
+            73682.148,
+            73703.643,
+            73725.139,
+            73746.635,
+            73768.131,
+            73789.627,
+            73811.122,
+            73832.618,
+            73854.114,
+            73875.61,
+            73897.106,
+            73918.601,
+            73940.097,
+            73961.593,
+            73983.089,
+            74004.584,
+            74026.08,
+            74047.576,
+            74069.072,
+            74090.568,
+            74112.063,
+            74133.559,
+            74155.055,
+            74176.551,
+            74198.047,
+            74219.542,
+            74241.038,
+            74262.534,
+            74284.03,
+            74305.526,
+            74327.021,
+            74348.517,
+            74370.013,
+            74391.509,
+            74413.004,
+            74434.5,
+            74455.996,
+            74477.492,
+            74498.988,
+            74520.483,
+            74541.979,
+            74563.475
+          ],
+          "max_gap": 21.496,
+          "observed_subranges": [
+            [
+              72521.375,
+              72521.625
+            ],
+            [
+              72542.621,
+              72543.121
+            ],
+            [
+              72564.117,
+              72564.617
+            ],
+            [
+              72585.612,
+              72586.112
+            ],
+            [
+              72607.108,
+              72607.608
+            ],
+            [
+              72628.604,
+              72629.104
+            ],
+            [
+              72650.1,
+              72650.6
+            ],
+            [
+              72671.596,
+              72672.096
+            ],
+            [
+              72693.091,
+              72693.591
+            ],
+            [
+              72714.587,
+              72715.087
+            ],
+            [
+              72736.083,
+              72736.583
+            ],
+            [
+              72757.579,
+              72758.079
+            ],
+            [
+              72779.074,
+              72779.574
+            ],
+            [
+              72800.57,
+              72801.07
+            ],
+            [
+              72822.066,
+              72822.566
+            ],
+            [
+              72843.562,
+              72844.062
+            ],
+            [
+              72865.058,
+              72865.558
+            ],
+            [
+              72886.553,
+              72887.053
+            ],
+            [
+              72908.049,
+              72908.549
+            ],
+            [
+              72929.545,
+              72930.045
+            ],
+            [
+              72951.041,
+              72951.541
+            ],
+            [
+              72972.537,
+              72973.037
+            ],
+            [
+              72994.032,
+              72994.532
+            ],
+            [
+              73015.528,
+              73016.028
+            ],
+            [
+              73037.024,
+              73037.524
+            ],
+            [
+              73058.52,
+              73059.02
+            ],
+            [
+              73080.016,
+              73080.516
+            ],
+            [
+              73101.511,
+              73102.011
+            ],
+            [
+              73123.007,
+              73123.507
+            ],
+            [
+              73144.503,
+              73145.003
+            ],
+            [
+              73165.999,
+              73166.499
+            ],
+            [
+              73187.494,
+              73187.994
+            ],
+            [
+              73208.99,
+              73209.49
+            ],
+            [
+              73230.486,
+              73230.986
+            ],
+            [
+              73251.982,
+              73252.482
+            ],
+            [
+              73273.478,
+              73273.978
+            ],
+            [
+              73294.973,
+              73295.473
+            ],
+            [
+              73316.469,
+              73316.969
+            ],
+            [
+              73337.965,
+              73338.465
+            ],
+            [
+              73359.461,
+              73359.961
+            ],
+            [
+              73380.957,
+              73381.457
+            ],
+            [
+              73402.452,
+              73402.952
+            ],
+            [
+              73423.948,
+              73424.448
+            ],
+            [
+              73445.444,
+              73445.944
+            ],
+            [
+              73466.94,
+              73467.44
+            ],
+            [
+              73488.436,
+              73488.936
+            ],
+            [
+              73509.931,
+              73510.431
+            ],
+            [
+              73531.427,
+              73531.927
+            ],
+            [
+              73552.923,
+              73553.423
+            ],
+            [
+              73574.419,
+              73574.919
+            ],
+            [
+              73595.914,
+              73596.414
+            ],
+            [
+              73617.41,
+              73617.91
+            ],
+            [
+              73638.906,
+              73639.406
+            ],
+            [
+              73660.402,
+              73660.902
+            ],
+            [
+              73681.898,
+              73682.398
+            ],
+            [
+              73703.393,
+              73703.893
+            ],
+            [
+              73724.889,
+              73725.389
+            ],
+            [
+              73746.385,
+              73746.885
+            ],
+            [
+              73767.881,
+              73768.381
+            ],
+            [
+              73789.377,
+              73789.877
+            ],
+            [
+              73810.872,
+              73811.372
+            ],
+            [
+              73832.368,
+              73832.868
+            ],
+            [
+              73853.864,
+              73854.364
+            ],
+            [
+              73875.36,
+              73875.86
+            ],
+            [
+              73896.856,
+              73897.356
+            ],
+            [
+              73918.351,
+              73918.851
+            ],
+            [
+              73939.847,
+              73940.347
+            ],
+            [
+              73961.343,
+              73961.843
+            ],
+            [
+              73982.839,
+              73983.339
+            ],
+            [
+              74004.334,
+              74004.834
+            ],
+            [
+              74025.83,
+              74026.33
+            ],
+            [
+              74047.326,
+              74047.826
+            ],
+            [
+              74068.822,
+              74069.322
+            ],
+            [
+              74090.318,
+              74090.818
+            ],
+            [
+              74111.813,
+              74112.313
+            ],
+            [
+              74133.309,
+              74133.809
+            ],
+            [
+              74154.805,
+              74155.305
+            ],
+            [
+              74176.301,
+              74176.801
+            ],
+            [
+              74197.797,
+              74198.297
+            ],
+            [
+              74219.292,
+              74219.792
+            ],
+            [
+              74240.788,
+              74241.288
+            ],
+            [
+              74262.284,
+              74262.784
+            ],
+            [
+              74283.78,
+              74284.28
+            ],
+            [
+              74305.276,
+              74305.776
+            ],
+            [
+              74326.771,
+              74327.271
+            ],
+            [
+              74348.267,
+              74348.767
+            ],
+            [
+              74369.763,
+              74370.263
+            ],
+            [
+              74391.259,
+              74391.759
+            ],
+            [
+              74412.754,
+              74413.254
+            ],
+            [
+              74434.25,
+              74434.75
+            ],
+            [
+              74455.746,
+              74456.246
+            ],
+            [
+              74477.242,
+              74477.742
+            ],
+            [
+              74498.738,
+              74499.238
+            ],
+            [
+              74520.233,
+              74520.733
+            ],
+            [
+              74541.729,
+              74542.229
+            ],
+            [
+              74563.225,
+              74563.475
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            72521.375,
+            74563.475
+          ],
+          "requires_refinement": true,
+          "sampling_fidelity": 0.02326
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0027",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀..mp4",
+          "source_time_range": [
+            0.0,
+            2042.1
+          ],
+          "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+          "virtual_time_range": [
+            72521.375,
+            74563.475
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀."
+      ],
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_0c31dc81460dae9e435d8aaa",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        73724.0,
+        73724.667,
+        73725.333,
+        73726.0
+      ],
+      "inspected_ranges": [
+        [
+          73724.0,
+          73724.25
+        ],
+        [
+          73724.417,
+          73724.917
+        ],
+        [
+          73725.083,
+          73725.583
+        ],
+        [
+          73725.75,
+          73726.0
+        ]
+      ],
+      "interpretation_id": "interpretation_8c9fecc0b8765baa28ec",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "53ccdf35cc74d731ea89",
+      "raw_output": "```json\n{\n  \"summary\": \"The user is in a weapon crafting menu, viewing different staves and their attributes. The screen shows a character model holding the selected weapon, a weapon upgrade tree, and detailed statistics for the selected item. The user navigates between different weapon options within the menu.\",\n  \"observations\": [\n    {\n      \"time_sec\": 73724.0,\n      \"description\": \"A menu screen titled \\\"兵器铸造\\\" (Weapon Crafting) is displayed. On the left is a weapon upgrade tree, with the \\\"铸烧·元全\\\" staff selected. In the center, a pop-up window shows the staff's details, including \\\"攻击\\\" (Attack) 70 and \\\"暴击率\\\" (Crit Rate) 6%. To the right, a character model holds the staff, and a list of character stats is visible.\"\n    },\n    {\n      \"time_sec\": 73724.667,\n      \"description\": \"The view is identical to the previous frame, showing the \\\"铸烧·元全\\\" staff details in the weapon crafting menu.\"\n    },\n    {\n      \"time_sec\": 73725.333,\n      \"description\": \"The pop-up window with the staff's details has disappeared, and the character model is now holding a different staff with a large, ornate silver blade. The selection in the weapon tree on the left has moved down one position.\"\n    },\n    {\n      \"time_sec\": 73726.0,\n      \"description\": \"A new pop-up window appears for the newly selected staff, \\\"鸾烧·诏鼠\\\". Its stats are \\\"攻击\\\" (Attack) 66 and \\\"暴击率\\\" (Crit Rate) 7%. Below the stats, a list of required crafting materials is shown.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Weapon Crafting Menu\",\n      \"description\": \"A user interface with the title \\\"兵器铸造\\\" (Weapon Crafting) and a subtitle \\\"铸造更趁手的兵器\\\" (Craft a more suitable weapon). It includes a weapon upgrade tree, a details panel for the selected weapon, and a character model preview.\"\n    },\n    {\n      \"name\": \"铸烧·元全\",\n      \"description\": \"A staff with a dragon-headed finial, green grip, and white tassel. Its stats are listed as Attack 70 and Crit Rate 6%.\"\n    },\n    {\n      \"name\": \"鸾烧·诏鼠\",\n      \"description\": \"A staff with a bone-like, ornate finial. Its stats are listed as Attack 66 and Crit Rate 7%.\"\n    },\n    {\n      \"name\": \"Character Model\",\n      \"description\": \"A figure wearing dark, spiky armor, holding the currently selected weapon.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        73724.667,\n        73726.0\n      ],\n      \"description\": \"The user navigates down the weapon crafting tree from the \\\"铸烧·元全\\\" staff to the \\\"鸾烧·诏鼠\\\" staff, causing the weapon preview and details panel to update accordingly.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The provided material consists of a weapon crafting menu and does not show any gameplay, a boss fight with the 'Bishui Golden-eyed Beast', or any status effects like 'Burn' (灼烧).\"\n  ]\n}\n```",
+      "requested_range": [
+        73724.0,
+        73726.0
+      ],
+      "round_id": "4",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 4,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.75,
+          "effective_fps": 2.0,
+          "frame_times": [
+            73724.0,
+            73724.667,
+            73725.333,
+            73726.0
+          ],
+          "max_gap": 0.667,
+          "observed_subranges": [
+            [
+              73724.0,
+              73724.25
+            ],
+            [
+              73724.417,
+              73724.917
+            ],
+            [
+              73725.083,
+              73725.583
+            ],
+            [
+              73725.75,
+              73726.0
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            73724.0,
+            73726.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.749625
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0027",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀..mp4",
+          "source_time_range": [
+            1202.625,
+            1204.625
+          ],
+          "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+          "virtual_time_range": [
+            73724.0,
+            73726.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀."
+      ],
+      "task_id": "r3_t1_burn_confirm"
+    },
+    {
+      "attempt_id": "attempt_30bcb3eb1caa8baf9219907f",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        74326.0,
+        74326.667,
+        74327.333,
+        74328.0
+      ],
+      "inspected_ranges": [
+        [
+          74326.0,
+          74326.25
+        ],
+        [
+          74326.417,
+          74326.917
+        ],
+        [
+          74327.083,
+          74327.583
+        ],
+        [
+          74327.75,
+          74328.0
+        ]
+      ],
+      "interpretation_id": "interpretation_17e2e1abce0949933987",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "864f51f03d144f1c1bf4",
+      "raw_output": "```json\n{\n  \"summary\": \"A woman with long, white hair is shown in a dimly lit, cavernous setting. She is holding a small bowl and a spoon. A lit candle is visible in the background. Chinese subtitles are present at the bottom of the screen, and the name \\\"Barry\\\" is in the top right corner.\",\n  \"observations\": [\n    {\n      \"time_sec\": 0.0,\n      \"description\": \"A close-up shot of a woman with long, white hair, wearing ornate clothing with red and white fabric and a gold necklace. She holds a small bowl and a spoon. The background is dark and appears to be a cave or stone interior, with a lit candle on the left. Chinese subtitles are visible at the bottom of the screen. The name \\\"Barry\\\" is in the top right corner.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Woman\",\n      \"description\": \"A woman with long, white hair, dark lipstick, and wearing ornate clothing. She is holding a bowl and spoon.\"\n    },\n    {\n      \"name\": \"Chinese subtitles\",\n      \"description\": \"White text at the bottom of the screen that reads: \\\"可从那之后，脸都没洗过，还多了个不归家的借口\\\"\"\n    },\n    {\n      \"name\": \"Barry\",\n      \"description\": \"White text in the top right corner of the screen.\"\n    }\n  ],\n  \"events\": [],\n  \"uncertainties\": [\n    \"The provided material does not show the 'Bishui Golden-eyed Beast' or any combat.\",\n    \"The 'Freeze' (冰冻) status effect is not visible.\"\n  ]\n}\n```",
+      "requested_range": [
+        74326.0,
+        74328.0
+      ],
+      "round_id": "4",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 4,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.75,
+          "effective_fps": 2.0,
+          "frame_times": [
+            74326.0,
+            74326.667,
+            74327.333,
+            74328.0
+          ],
+          "max_gap": 0.667,
+          "observed_subranges": [
+            [
+              74326.0,
+              74326.25
+            ],
+            [
+              74326.417,
+              74326.917
+            ],
+            [
+              74327.083,
+              74327.583
+            ],
+            [
+              74327.75,
+              74328.0
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            74326.0,
+            74328.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.749625
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0027",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀..mp4",
+          "source_time_range": [
+            1804.625,
+            1806.625
+          ],
+          "source_video_id": "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+          "virtual_time_range": [
+            74326.0,
+            74328.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀."
+      ],
+      "task_id": "r3_t2_freeze_confirm"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_901e223a13ebaf3902b6b8b1.73b1ee281f65.json",
+      "evidence_role": "candidate",
+      "hit_count": 2,
+      "hit_ranks": [
+        1,
+        4
+      ],
+      "max_score": 0.03131881575727918,
+      "occurrence_id": "occ_316c52eb918d8adffe76",
+      "passage_ids": [
+        "cap_000247_777b37479b28:p0006",
+        "cap_000247_777b37479b28:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "for the \"bishui golden-eyed beast,\" which additional negative effect appears in the second phase? 1. thunder sting 2. burn 3. freeze 4. poison"
+        },
+        {
+          "query": "bishui golden-eyed beast"
+        },
+        {
+          "query": "避水金睛兽"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0027"
+      ],
+      "source_video_ids": [
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        74264.0,
+        74400.0
+      ]
+    },
+    {
+      "artifact": "attempt_901e223a13ebaf3902b6b8b1.73b1ee281f65.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_a0c84118692cae8acdbf",
+      "passage_ids": [
+        "cap_000197_7eedd6dee726:p0009"
+      ],
+      "query_matches": [],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0023"
+      ],
+      "source_video_ids": [
+        "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        59334.0,
+        59400.0
+      ]
+    },
+    {
+      "artifact": "attempt_901e223a13ebaf3902b6b8b1.73b1ee281f65.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.016129032258064516,
+      "occurrence_id": "occ_44dc44762718a4555c01",
+      "passage_ids": [
+        "cap_000038_d13fbf78e15f:p0007"
+      ],
+      "query_matches": [],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0005"
+      ],
+      "source_video_ids": [
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        11530.0,
+        11593.0
+      ]
+    },
+    {
+      "artifact": "attempt_901e223a13ebaf3902b6b8b1.73b1ee281f65.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_979b101ce9301fbab573",
+      "passage_ids": [
+        "cap_000068_a158e270ad50:p0001"
+      ],
+      "query_matches": [],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0008"
+      ],
+      "source_video_ids": [
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        20406.0,
+        20422.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+    "case_id": "mmlifelong-game-test-0146",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 146,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [
+      "attempt_e99f8531c23a829bf107e471"
+    ],
+    "supporting_intervals": [],
+    "verification_status": "candidate_only",
+    "verified_answer": ""
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 208,
+        "content_chars": 437,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9660,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "9f57adfc95ab97290db8e5cbaac9d778",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 93,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Bishui Golden-eyed Beast",
+              "避水金睛兽"
+            ],
+            "goal": "Find the fight with the Bishui Golden-eyed Beast",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Bishui Golden-eyed Beast",
+              "避水金睛兽"
+            ],
+            "goal": "Find the fight with the Bishui Golden-eyed Beast",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ]
+      },
+      "raw_sha256": "202428a5f42466f57271404fde7341935d63dcded51994a988f22fe6813c0bc2",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 410,
+        "content_chars": 1272,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15020,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "c5a21b841bf9c7b97446fe255058f58e",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 77,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Visually confirm the identity of the 'Bishui Golden-eyed Beast' and observe the negative effects it applies during its first and second phases.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "sampling_floor_fps": 2,
+            "segment_id": "seg_0027",
+            "time_range": [
+              72521.375,
+              74563.475
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "entity_ids": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The 'Bishui Golden-eyed Beast' is a boss in the game."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Visually confirm the identity of the 'Bishui Golden-eyed Beast' and observe the negative effects it applies during its first and second phases.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "sampling_floor_fps": 2,
+            "segment_id": "seg_0027",
+            "time_range": [
+              72521.375,
+              74563.475
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "entity_ids": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The 'Bishui Golden-eyed Beast' is a boss in the game."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "a1e7565d8ee3285b13e12872b7af97aca8b04b03a4f579397dabc0dc05bf301d",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1072,
+        "content_chars": 3581,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 21137,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "c82428a5d5a82277fdea2089d61e91cb",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 101,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is Freeze.",
+        "supporting_claim_ids": [
+          "c4"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The \"Bishui Golden-eyed Beast\" (碧水金睛兽) is a boss with at least two phases. The first phase is fire-based, and the second phase is ice-based.",
+              "time_anchor": [
+                73682.148,
+                74284.03
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "In the first phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Burn\" (灼烧) status effect.",
+              "time_anchor": [
+                73725.139,
+                73725.139
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "In the second phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Freeze\" (冰冻) status effect.",
+              "time_anchor": [
+                74327.021,
+                74327.021
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_id": "c1",
+            "op": "supersede",
+            "superseded_by": "c2"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is Freeze.",
+        "supporting_claim_ids": [
+          "c4"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The \"Bishui Golden-eyed Beast\" (碧水金睛兽) is a boss with at least two phases. The first phase is fire-based, and the second phase is ice-based.",
+              "time_anchor": [
+                73682.148,
+                74284.03
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "In the first phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Burn\" (灼烧) status effect.",
+              "time_anchor": [
+                73725.139,
+                73725.139
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "In the second phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Freeze\" (冰冻) status effect.",
+              "time_anchor": [
+                74327.021,
+                74327.021
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_id": "c1",
+            "op": "supersede",
+            "superseded_by": "c2"
+          }
+        ]
+      },
+      "raw_sha256": "34465fde26b21f6e5cda14030d4c8bb9805897ff41b390332512f14a68f54452",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 631,
+        "content_chars": 1824,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18526,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "3959a6d59de5b2b1e743b6d220496256",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 73,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Confirm the 'Burn' (灼烧) status effect during the first phase of the Bishui Golden-eyed Beast fight.",
+            "inspection_mode": "window",
+            "query_id": "r3_t1_burn_confirm",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              73724,
+              73726
+            ]
+          },
+          {
+            "goal": "Confirm the 'Freeze' (冰冻) status effect during the second phase of the Bishui Golden-eyed Beast fight.",
+            "inspection_mode": "window",
+            "query_id": "r3_t2_freeze_confirm",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              74326,
+              74328
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim_id": "c2",
+            "op": "set_status",
+            "status": "retracted"
+          },
+          {
+            "claim_id": "c3",
+            "op": "set_status",
+            "status": "retracted"
+          },
+          {
+            "claim_id": "c4",
+            "op": "set_status",
+            "status": "retracted"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Confirm the 'Burn' (灼烧) status effect during the first phase of the Bishui Golden-eyed Beast fight.",
+            "inspection_mode": "window",
+            "query_id": "r3_t1_burn_confirm",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              73724,
+              73726
+            ]
+          },
+          {
+            "goal": "Confirm the 'Freeze' (冰冻) status effect during the second phase of the Bishui Golden-eyed Beast fight.",
+            "inspection_mode": "window",
+            "query_id": "r3_t2_freeze_confirm",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              74326,
+              74328
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim_id": "c2",
+            "op": "set_status",
+            "status": "retracted"
+          },
+          {
+            "claim_id": "c3",
+            "op": "set_status",
+            "status": "retracted"
+          },
+          {
+            "claim_id": "c4",
+            "op": "set_status",
+            "status": "retracted"
+          }
+        ]
+      },
+      "raw_sha256": "3a91413aab08a355e979fe0aff765f8821fb83f6fff17f0ff8a88f5062aa8854",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 371,
+        "content_chars": 818,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 20741,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "44939b77c5af331e075b1121289e533c",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 101,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_e99f8531c23a829bf107e471"
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_e99f8531c23a829bf107e471"
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "9fe615eaf0876306db5e26a62b17058ae068920d7605a12b815592ed37b061e0",
+      "repair_failed": false,
+      "round": 5,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1084,
+        "content_chars": 2623,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 22030,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "aab24768da90daae28ed83579d52c58a",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 89,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+        "supporting_claim_ids": [
+          "c7"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "entity_ids": [
+                "ent_2"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "The \"Bishui Golden-eyed Beast\" (碧水金睛兽) is a boss with at least two phases.",
+              "time_anchor": [
+                73682.148,
+                74284.03
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c6",
+              "confidence": "high",
+              "entity_ids": [
+                "ent_1",
+                "ent_2",
+                "ent_3"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "In the first phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Burn\" (灼烧) status effect.",
+              "time_anchor": [
+                73725.139,
+                73725.139
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c7",
+              "confidence": "high",
+              "entity_ids": [
+                "ent_1",
+                "ent_2",
+                "ent_4"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "In the second phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Freeze\" (冰冻) status effect.",
+              "time_anchor": [
+                74327.021,
+                74327.021
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "aliases": [
+              "Player Character"
+            ],
+            "description": "A humanoid monkey-like figure wearing armor and wielding a staff.",
+            "entity_id": "ent_1",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Bishui Golden-eyed Beast",
+              "碧水金睛兽"
+            ],
+            "description": "A large, quadrupedal beast. In its first phase, it has dark skin with glowing orange cracks. In its second phase, it is covered in white ice with glowing blue eyes.",
+            "entity_id": "ent_2",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Burn",
+              "灼烧"
+            ],
+            "description": "A status effect icon, a red square with a flame symbol, appears next to the player's health bar.",
+            "entity_id": "ent_3",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Freeze",
+              "冰冻"
+            ],
+            "description": "A status effect icon, a blue square with a snowflake symbol, appears next to the player's health bar. The character model is also covered in ice.",
+            "entity_id": "ent_4",
+            "op": "update_entity"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+        "supporting_claim_ids": [
+          "c7"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c5",
+              "confidence": "high",
+              "entity_ids": [
+                "ent_2"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "The \"Bishui Golden-eyed Beast\" (碧水金睛兽) is a boss with at least two phases.",
+              "time_anchor": [
+                73682.148,
+                74284.03
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c6",
+              "confidence": "high",
+              "entity_ids": [
+                "ent_1",
+                "ent_2",
+                "ent_3"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "In the first phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Burn\" (灼烧) status effect.",
+              "time_anchor": [
+                73725.139,
+                73725.139
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_e99f8531c23a829bf107e471"
+              ],
+              "claim_id": "c7",
+              "confidence": "high",
+              "entity_ids": [
+                "ent_1",
+                "ent_2",
+                "ent_4"
+              ],
+              "source": "observation",
+              "status": "active",
+              "text": "In the second phase of the fight against the \"Bishui Golden-eyed Beast\", the player can be afflicted with a \"Freeze\" (冰冻) status effect.",
+              "time_anchor": [
+                74327.021,
+                74327.021
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "aliases": [
+              "Player Character"
+            ],
+            "description": "A humanoid monkey-like figure wearing armor and wielding a staff.",
+            "entity_id": "ent_1",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Bishui Golden-eyed Beast",
+              "碧水金睛兽"
+            ],
+            "description": "A large, quadrupedal beast. In its first phase, it has dark skin with glowing orange cracks. In its second phase, it is covered in white ice with glowing blue eyes.",
+            "entity_id": "ent_2",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Burn",
+              "灼烧"
+            ],
+            "description": "A status effect icon, a red square with a flame symbol, appears next to the player's health bar.",
+            "entity_id": "ent_3",
+            "op": "update_entity"
+          },
+          {
+            "aliases": [
+              "Freeze",
+              "冰冻"
+            ],
+            "description": "A status effect icon, a blue square with a snowflake symbol, appears next to the player's health bar. The character model is also covered in ice.",
+            "entity_id": "ent_4",
+            "op": "update_entity"
+          }
+        ]
+      },
+      "raw_sha256": "297602813dde32423ace25750063edcf127f15e806f5fe1ada14d977f510bd78",
+      "repair_failed": false,
+      "round": 6,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [
+      "supporting_claims_cite_candidate_or_negative:attempt_e99f8531c23a829bf107e471"
+    ],
+    "candidate_answer": "In the second phase of the fight with the \"Bishui Golden-eyed Beast,\" the additional negative effect that appears is \"Freeze.\"",
+    "case_id": "mmlifelong-game-test-0146",
+    "investigation_count": 4,
+    "reference_reason": "supporting_claims_cite_candidate_or_negative",
+    "reference_valid": false,
+    "residual_uncertainty": "",
+    "rounds": 6,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.0,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 4,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 1,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 0.0,
+      "rounds": 6,
+      "unique_visual_material_attempts": 3,
+      "visual_confirmations": 3,
+      "visual_frames_inspected": 104,
+      "visual_interpretation_count": 3,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c7"
+    ],
+    "supporting_intervals": [],
+    "verification_status": "candidate_only",
+    "verified_answer": ""
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_e99f8531c23a829bf107e471",
+      "round_id": "2",
+      "sampling_manifest": {
+        "coverage_ratio": 0.02326,
+        "effective_fps": 0.04701,
+        "frame_times": [
+          72521.375,
+          72542.871,
+          72564.367,
+          72585.862,
+          72607.358,
+          72628.854,
+          72650.35,
+          72671.846,
+          72693.341,
+          72714.837,
+          72736.333,
+          72757.829,
+          72779.324,
+          72800.82,
+          72822.316,
+          72843.812,
+          72865.308,
+          72886.803,
+          72908.299,
+          72929.795,
+          72951.291,
+          72972.787,
+          72994.282,
+          73015.778,
+          73037.274,
+          73058.77,
+          73080.266,
+          73101.761,
+          73123.257,
+          73144.753,
+          73166.249,
+          73187.744,
+          73209.24,
+          73230.736,
+          73252.232,
+          73273.728,
+          73295.223,
+          73316.719,
+          73338.215,
+          73359.711,
+          73381.207,
+          73402.702,
+          73424.198,
+          73445.694,
+          73467.19,
+          73488.686,
+          73510.181,
+          73531.677,
+          73553.173,
+          73574.669,
+          73596.164,
+          73617.66,
+          73639.156,
+          73660.652,
+          73682.148,
+          73703.643,
+          73725.139,
+          73746.635,
+          73768.131,
+          73789.627,
+          73811.122,
+          73832.618,
+          73854.114,
+          73875.61,
+          73897.106,
+          73918.601,
+          73940.097,
+          73961.593,
+          73983.089,
+          74004.584,
+          74026.08,
+          74047.576,
+          74069.072,
+          74090.568,
+          74112.063,
+          74133.559,
+          74155.055,
+          74176.551,
+          74198.047,
+          74219.542,
+          74241.038,
+          74262.534,
+          74284.03,
+          74305.526,
+          74327.021,
+          74348.517,
+          74370.013,
+          74391.509,
+          74413.004,
+          74434.5,
+          74455.996,
+          74477.492,
+          74498.988,
+          74520.483,
+          74541.979,
+          74563.475
+        ],
+        "max_gap": 21.496,
+        "observed_subranges": [
+          [
+            72521.375,
+            72521.625
+          ],
+          [
+            72542.621,
+            72543.121
+          ],
+          [
+            72564.117,
+            72564.617
+          ],
+          [
+            72585.612,
+            72586.112
+          ],
+          [
+            72607.108,
+            72607.608
+          ],
+          [
+            72628.604,
+            72629.104
+          ],
+          [
+            72650.1,
+            72650.6
+          ],
+          [
+            72671.596,
+            72672.096
+          ],
+          [
+            72693.091,
+            72693.591
+          ],
+          [
+            72714.587,
+            72715.087
+          ],
+          [
+            72736.083,
+            72736.583
+          ],
+          [
+            72757.579,
+            72758.079
+          ],
+          [
+            72779.074,
+            72779.574
+          ],
+          [
+            72800.57,
+            72801.07
+          ],
+          [
+            72822.066,
+            72822.566
+          ],
+          [
+            72843.562,
+            72844.062
+          ],
+          [
+            72865.058,
+            72865.558
+          ],
+          [
+            72886.553,
+            72887.053
+          ],
+          [
+            72908.049,
+            72908.549
+          ],
+          [
+            72929.545,
+            72930.045
+          ],
+          [
+            72951.041,
+            72951.541
+          ],
+          [
+            72972.537,
+            72973.037
+          ],
+          [
+            72994.032,
+            72994.532
+          ],
+          [
+            73015.528,
+            73016.028
+          ],
+          [
+            73037.024,
+            73037.524
+          ],
+          [
+            73058.52,
+            73059.02
+          ],
+          [
+            73080.016,
+            73080.516
+          ],
+          [
+            73101.511,
+            73102.011
+          ],
+          [
+            73123.007,
+            73123.507
+          ],
+          [
+            73144.503,
+            73145.003
+          ],
+          [
+            73165.999,
+            73166.499
+          ],
+          [
+            73187.494,
+            73187.994
+          ],
+          [
+            73208.99,
+            73209.49
+          ],
+          [
+            73230.486,
+            73230.986
+          ],
+          [
+            73251.982,
+            73252.482
+          ],
+          [
+            73273.478,
+            73273.978
+          ],
+          [
+            73294.973,
+            73295.473
+          ],
+          [
+            73316.469,
+            73316.969
+          ],
+          [
+            73337.965,
+            73338.465
+          ],
+          [
+            73359.461,
+            73359.961
+          ],
+          [
+            73380.957,
+            73381.457
+          ],
+          [
+            73402.452,
+            73402.952
+          ],
+          [
+            73423.948,
+            73424.448
+          ],
+          [
+            73445.444,
+            73445.944
+          ],
+          [
+            73466.94,
+            73467.44
+          ],
+          [
+            73488.436,
+            73488.936
+          ],
+          [
+            73509.931,
+            73510.431
+          ],
+          [
+            73531.427,
+            73531.927
+          ],
+          [
+            73552.923,
+            73553.423
+          ],
+          [
+            73574.419,
+            73574.919
+          ],
+          [
+            73595.914,
+            73596.414
+          ],
+          [
+            73617.41,
+            73617.91
+          ],
+          [
+            73638.906,
+            73639.406
+          ],
+          [
+            73660.402,
+            73660.902
+          ],
+          [
+            73681.898,
+            73682.398
+          ],
+          [
+            73703.393,
+            73703.893
+          ],
+          [
+            73724.889,
+            73725.389
+          ],
+          [
+            73746.385,
+            73746.885
+          ],
+          [
+            73767.881,
+            73768.381
+          ],
+          [
+            73789.377,
+            73789.877
+          ],
+          [
+            73810.872,
+            73811.372
+          ],
+          [
+            73832.368,
+            73832.868
+          ],
+          [
+            73853.864,
+            73854.364
+          ],
+          [
+            73875.36,
+            73875.86
+          ],
+          [
+            73896.856,
+            73897.356
+          ],
+          [
+            73918.351,
+            73918.851
+          ],
+          [
+            73939.847,
+            73940.347
+          ],
+          [
+            73961.343,
+            73961.843
+          ],
+          [
+            73982.839,
+            73983.339
+          ],
+          [
+            74004.334,
+            74004.834
+          ],
+          [
+            74025.83,
+            74026.33
+          ],
+          [
+            74047.326,
+            74047.826
+          ],
+          [
+            74068.822,
+            74069.322
+          ],
+          [
+            74090.318,
+            74090.818
+          ],
+          [
+            74111.813,
+            74112.313
+          ],
+          [
+            74133.309,
+            74133.809
+          ],
+          [
+            74154.805,
+            74155.305
+          ],
+          [
+            74176.301,
+            74176.801
+          ],
+          [
+            74197.797,
+            74198.297
+          ],
+          [
+            74219.292,
+            74219.792
+          ],
+          [
+            74240.788,
+            74241.288
+          ],
+          [
+            74262.284,
+            74262.784
+          ],
+          [
+            74283.78,
+            74284.28
+          ],
+          [
+            74305.276,
+            74305.776
+          ],
+          [
+            74326.771,
+            74327.271
+          ],
+          [
+            74348.267,
+            74348.767
+          ],
+          [
+            74369.763,
+            74370.263
+          ],
+          [
+            74391.259,
+            74391.759
+          ],
+          [
+            74412.754,
+            74413.254
+          ],
+          [
+            74434.25,
+            74434.75
+          ],
+          [
+            74455.746,
+            74456.246
+          ],
+          [
+            74477.242,
+            74477.742
+          ],
+          [
+            74498.738,
+            74499.238
+          ],
+          [
+            74520.233,
+            74520.733
+          ],
+          [
+            74541.729,
+            74542.229
+          ],
+          [
+            74563.225,
+            74563.475
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          72521.375,
+          74563.475
+        ],
+        "requires_refinement": true,
+        "sampling_fidelity": 0.02326
+      },
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_0c31dc81460dae9e435d8aaa",
+      "round_id": "4",
+      "sampling_manifest": {
+        "coverage_ratio": 0.75,
+        "effective_fps": 2.0,
+        "frame_times": [
+          73724.0,
+          73724.667,
+          73725.333,
+          73726.0
+        ],
+        "max_gap": 0.667,
+        "observed_subranges": [
+          [
+            73724.0,
+            73724.25
+          ],
+          [
+            73724.417,
+            73724.917
+          ],
+          [
+            73725.083,
+            73725.583
+          ],
+          [
+            73725.75,
+            73726.0
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          73724.0,
+          73726.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.749625
+      },
+      "task_id": "r3_t1_burn_confirm"
+    },
+    {
+      "attempt_id": "attempt_30bcb3eb1caa8baf9219907f",
+      "round_id": "4",
+      "sampling_manifest": {
+        "coverage_ratio": 0.75,
+        "effective_fps": 2.0,
+        "frame_times": [
+          74326.0,
+          74326.667,
+          74327.333,
+          74328.0
+        ],
+        "max_gap": 0.667,
+        "observed_subranges": [
+          [
+            74326.0,
+            74326.25
+          ],
+          [
+            74326.417,
+            74326.917
+          ],
+          [
+            74327.083,
+            74327.583
+          ],
+          [
+            74327.75,
+            74328.0
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          74326.0,
+          74328.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.749625
+      },
+      "task_id": "r3_t2_freeze_confirm"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_901e223a13ebaf3902b6b8b1"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_e99f8531c23a829bf107e471"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t2_f107e471"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t2",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 2,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_0c31dc81460dae9e435d8aaa"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r3_t1_burn_confirm_435d8aaa"
+          ],
+          "failure_reason": "",
+          "query_id": "r3_t1_burn_confirm",
+          "reused": false,
+          "status": "completed"
+        },
+        {
+          "attempt_ids": [
+            "attempt_30bcb3eb1caa8baf9219907f"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r3_t2_freeze_confirm_9219907f"
+          ],
+          "failure_reason": "",
+          "query_id": "r3_t2_freeze_confirm",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 2,
+      "round": 4,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Bishui Golden-eyed Beast",
+            "避水金睛兽"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t2",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "seg_0027",
+          "source_video_ids": [],
+          "time_range": [
+            72521.375,
+            74563.475
+          ],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 4,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r3_t1_burn_confirm",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [
+            73724.0,
+            73726.0
+          ],
+          "top_k": 12
+        },
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r3_t2_freeze_confirm",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [
+            74326.0,
+            74328.0
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": []
+}

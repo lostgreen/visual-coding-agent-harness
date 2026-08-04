@@ -1,0 +1,3393 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?",
+        "Liuliu Village",
+        "榴榴村",
+        "Coconut Wine",
+        "椰子酒"
+      ],
+      "query_fingerprint": "441eb21695b64031964e03eb277c747563093fab564cffc259562a00344bd1d8",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 8
+    },
+    {
+      "artifact": "attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?",
+        "Liuliu Village",
+        "榴榴村"
+      ],
+      "query_fingerprint": "67935ce0df1ff3378135819762881bf2c9ca60beb39454fc07095a3950c72224",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    },
+    {
+      "artifact": "attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?",
+        "火焰山",
+        "Flaming Mountains"
+      ],
+      "query_fingerprint": "5c9e043a46f18ad0a50410ebc3974ba8e989b14b7798fb34d31a257d9fc14b15",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0165",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 185,
+        "content_chars": 637,
+        "finish_reason": "stop",
+        "prompt_tokens": 569,
+        "provider_request_id": "779cf8c079a7193ea7855cc821241f36",
+        "reasoning_tokens": 57,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 5,
+      "retry_count": 0,
+      "score": 1.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.0,
+      "ref_60": 0.0,
+      "ref_600": 0.5,
+      "reference_intervals": [
+        [
+          66095.0,
+          66105.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [
+        "attempt_271ea57ecdfb347783c8e119",
+        "attempt_a93096376a5dc296ff1ae44e",
+        "attempt_5b4c7d9344ed23d3b89eb11a"
+      ],
+      "errors": [
+        "supporting_claims_cite_candidate_or_negative:attempt_271ea57ecdfb347783c8e119,attempt_a93096376a5dc296ff1ae44e,attempt_5b4c7d9344ed23d3b89eb11a"
+      ],
+      "passed": false,
+      "reason": "supporting_claims_cite_candidate_or_negative",
+      "round": 6,
+      "supporting_claim_ids": [
+        "c7",
+        "c5"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [
+        "supporting_claims_cite_candidate_or_negative:attempt_271ea57ecdfb347783c8e119,attempt_a93096376a5dc296ff1ae44e,attempt_5b4c7d9344ed23d3b89eb11a"
+      ],
+      "candidate_answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0165/observation_log.jsonl",
+      "raw_reasoner_answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+      "reference_reason": "supporting_claims_cite_candidate_or_negative",
+      "reference_valid": false,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c7",
+        "c5"
+      ],
+      "supporting_intervals": [
+        [
+          49980.0,
+          50100.0
+        ],
+        [
+          66304.0,
+          66310.0
+        ]
+      ],
+      "type": "answer_outcome",
+      "verification_status": "candidate_only",
+      "verified_answer": "",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0165/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0165/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000001",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 623.525,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75187.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000002",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 625.58,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75189.055
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000003",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 627.634,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75191.109
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000004",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 629.689,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75193.164
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000005",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 631.743,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75195.218
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000006",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 633.798,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75197.273
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000007",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 635.852,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75199.327
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000008",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 637.907,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75201.382
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000009",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 639.961,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75203.436
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000010",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 642.016,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75205.491
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000011",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 644.07,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75207.545
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000012",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 646.125,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75209.6
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000013",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 648.18,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75211.655
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000014",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 650.234,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75213.709
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000015",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 652.289,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75215.764
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000016",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 654.343,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75217.818
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000017",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 656.398,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75219.873
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000018",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 658.452,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75221.927
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000019",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 660.507,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75223.982
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000020",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 662.561,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75226.036
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000021",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 664.616,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75228.091
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000022",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 666.67,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75230.145
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000023",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 668.725,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75232.2
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000024",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 670.78,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75234.255
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000025",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 672.834,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75236.309
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000026",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 674.889,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75238.364
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000027",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 676.943,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75240.418
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000028",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 678.998,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75242.473
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000029",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 681.052,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75244.527
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000030",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 683.107,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75246.582
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000031",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 685.161,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75248.636
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000032",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 687.216,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75250.691
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000033",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 689.27,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75252.745
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000034",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 691.325,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75254.8
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000035",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 693.38,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75256.855
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000036",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 695.434,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75258.909
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000037",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 697.489,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75260.964
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000038",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 699.543,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75263.018
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000039",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 701.598,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75265.073
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000040",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 703.652,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75267.127
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000041",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 705.707,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75269.182
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000042",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 707.761,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75271.236
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000043",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 709.816,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75273.291
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000044",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 711.87,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75275.345
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000045",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 713.925,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75277.4
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000046",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 715.98,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75279.455
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000047",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 718.034,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75281.509
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000048",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 720.089,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75283.564
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000049",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 722.143,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75285.618
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000050",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 724.198,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75287.673
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000051",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 726.252,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75289.727
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000052",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 728.307,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75291.782
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000053",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 730.361,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75293.836
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000054",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 732.416,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75295.891
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000055",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 734.47,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75297.945
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t2_000056",
+      "query_id": "r1_t2",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0028",
+      "source_time_sec": 736.525,
+      "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+      "virtual_time_sec": 75300.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_a93096376a5dc296ff1ae44e",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_1b60ee5dff5e7ded4d93",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "3a8125d945272b6e4225",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000250_05f6ddf6228b\", \"dense_score\": 0.5919716954231262, \"fused_score\": 0.03278688524590164, \"interval_precision\": \"anchor\", \"lexical_score\": 67.96419025127253, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"火焰山\", \"flaming mountains\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000250_05f6ddf6228b:p0009\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009\", \"text\": \"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\", \"virtual_end_sec\": 75300.0, \"virtual_start_sec\": 75187.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000231_e9ec0fe17941\", \"dense_score\": 0.5649547576904297, \"fused_score\": 0.03225806451612903, \"interval_precision\": \"anchor\", \"lexical_score\": 50.01363616836715, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"火焰山\", \"flaming mountains\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000231_e9ec0fe17941:p0003\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000231_e9ec0fe17941:p0003\", \"text\": \"The man in the hat speaks, and the subtitles say, \\\"但泽儿找到我，说天命人已到了火焰山\\\" (But Ze'er found me and said the Destined One has arrived at the Flaming Mountain).\", \"virtual_end_sec\": 69352.0, \"virtual_start_sec\": 69333.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000221_c02ab9509122\", \"dense_score\": 0.5566058158874512, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0024\", \"seg_0025\"], \"source_video_ids\": [\"024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", \"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000221_c02ab9509122:p0001\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000221_c02ab9509122:p0001\", \"text\": \"The scene transitions to a dark, cavernous area where the character materializes next to a small, ornate shrine with a fire in front of it. Chinese text on the screen identifies the location as \\\"火燎二关\\\" (Huǒ Liáo Èr Guān).\", \"virtual_end_sec\": 66310.0, \"virtual_start_sec\": 66304.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000231_e9ec0fe17941\", \"dense_score\": null, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": 48.99822093392435, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 3, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"火焰山\", \"flaming mountains\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000231_e9ec0fe17941:p0009\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000231_e9ec0fe17941:p0009\", \"text\": \"The man in the hat stands up, holding a golden orb, as text appears next to him reading \\\"火焰山土地\\\" (Flaming Mountain Earth God). The scene then transitions to a stark white, watery landscape where the main character, a monkey-like figure, and a pig-like creature face off against the man.\", \"virtual_end_sec\": 69600.0, \"virtual_start_sec\": 69564.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000027_de07ee6e1aa2\", \"dense_score\": 0.5274049639701843, \"fused_score\": 0.015625, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0004\", \"seg_0005\"], \"source_video_ids\": [\"004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【\", \"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000027_de07ee6e1aa2:p0000\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000027_de07ee6e1aa2:p0000\", \"text\": \"The video begins with a close-up of a traditional Chinese-style painting depicting a demonic figure surrounded by flames atop a pagoda. The camera pans out to reveal a larger, chaotic scene of battle and destruction. The text \\\"第一回 火眼黑云\\\" (Chapter 1: Fiery Eyes, Black Cloud) is visible at the top.\", \"virtual_end_sec\": 8111.0, \"virtual_start_sec\": 8100.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 5, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [1], \"max_score\": 0.03278688524590164, \"occurrence_id\": \"occ_50fd548fb72de551e5c1\", \"passage_ids\": [\"cap_000250_05f6ddf6228b:p0009\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"火焰山\"}, {\"query\": \"flaming mountains\"}], \"rank\": 1, \"segment_ids\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"status\": \"uninspected\", \"time_range\": [75187.0, 75300.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.03225806451612903, \"occurrence_id\": \"occ_2645387d3cec61d7af52\", \"passage_ids\": [\"cap_000231_e9ec0fe17941:p0003\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"火焰山\"}, {\"query\": \"flaming mountains\"}], \"rank\": 2, \"segment_ids\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"status\": \"uninspected\", \"time_range\": [69333.0, 69352.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_b49027a3096ddb469ce8\", \"passage_ids\": [\"cap_000221_c02ab9509122:p0001\"], \"query_matches\": [], \"rank\": 3, \"segment_ids\": [\"seg_0024\", \"seg_0025\"], \"source_video_ids\": [\"024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", \"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\"], \"status\": \"uninspected\", \"time_range\": [66304.0, 66310.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_b4b7cce83fc48f04e44e\", \"passage_ids\": [\"cap_000231_e9ec0fe17941:p0009\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"火焰山\"}, {\"query\": \"flaming mountains\"}], \"rank\": 4, \"segment_ids\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"status\": \"uninspected\", \"time_range\": [69564.0, 69600.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.015625, \"occurrence_id\": \"occ_7e434a8b2c094ae85236\", \"passage_ids\": [\"cap_000027_de07ee6e1aa2:p0000\"], \"query_matches\": [], \"rank\": 5, \"segment_ids\": [\"seg_0004\", \"seg_0005\"], \"source_video_ids\": [\"004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【\", \"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"status\": \"uninspected\", \"time_range\": [8100.0, 8111.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0165/caption_search/attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 5, \"novel_result_ids\": [\"cap_000250_05f6ddf6228b:p0009\", \"cap_000231_e9ec0fe17941:p0003\", \"cap_000221_c02ab9509122:p0001\", \"cap_000231_e9ec0fe17941:p0009\", \"cap_000027_de07ee6e1aa2:p0000\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"5c9e043a46f18ad0a50410ebc3974ba8e989b14b7798fb34d31a257d9fc14b15\", \"returned_result_count\": 5}, \"search_queries\": [\"After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?\", \"火焰山\", \"Flaming Mountains\"], \"summary\": \"Caption search: 5 hits\\n1. [20:53:07-20:55:00] score=0.0328 passage=cap_000250_05f6ddf6228b:p0009\\n   \\\"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; 火焰山; flaming mountains\\n2. [19:15:33-19:15:52] score=0.0323 passage=cap_000231_e9ec0fe17941:p0003\\n   \\\"The man in the hat speaks, and the subtitles say, \\\"但泽儿找到我，说天命人已到了火焰山\\\" (But Ze'er found me and said the Destined One has arrived at the Flaming Mountain).\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; 火焰山; flaming mountains\\n3. [18:25:04-18:25:10] score=0.0159 passage=cap_000221_c02ab9509122:p0001\\n   \\\"The scene transitions to a dark, cavernous area where the character materializes next to a small, ornate shrine with a fire in front of it. Chinese text on the screen identifies the location as \\\"火燎二关\\\" (Huǒ Liáo Èr Guān).\\\"\\n4. [19:19:24-19:20:00] score=0.0159 passage=cap_000231_e9ec0fe17941:p0009\\n   \\\"The man in the hat stands up, holding a golden orb, as text appears next to him reading \\\"火焰山土地\\\" (Flaming Mountain Earth God). The scene then transitions to a stark white, watery landscape where the main character, a monkey-like figure, and a pig-like creature face off against the man.\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; 火焰山; flaming mountains\\n5. [02:15:00-02:15:11] score=0.0156 passage=cap_000027_de07ee6e1aa2:p0000\\n   \\\"The video begins with a close-up of a traditional Chinese-style painting depicting a demonic figure surrounded by flames atop a pagoda. The camera pans out to reveal a larger, chaotic scene of battle and destruction. The text \\\"第一回 火眼黑云\\\" (Chapter 1: Fiery Eyes, Black Cloud) is visible at the top.\\\"\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000231_e9ec0fe17941:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000221_c02ab9509122:p0001",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000231_e9ec0fe17941:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000027_de07ee6e1aa2:p0000"
+          ],
+          "passage_ids": [
+            "cap_000250_05f6ddf6228b:p0009",
+            "cap_000231_e9ec0fe17941:p0003",
+            "cap_000221_c02ab9509122:p0001",
+            "cap_000231_e9ec0fe17941:p0009",
+            "cap_000027_de07ee6e1aa2:p0000"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?",
+          "火焰山",
+          "Flaming Mountains"
+        ],
+        "query_fingerprint": "5c9e043a46f18ad0a50410ebc3974ba8e989b14b7798fb34d31a257d9fc14b15",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 5,
+          "novel_result_ids": [
+            "cap_000250_05f6ddf6228b:p0009",
+            "cap_000231_e9ec0fe17941:p0003",
+            "cap_000221_c02ab9509122:p0001",
+            "cap_000231_e9ec0fe17941:p0009",
+            "cap_000027_de07ee6e1aa2:p0000"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "5c9e043a46f18ad0a50410ebc3974ba8e989b14b7798fb34d31a257d9fc14b15",
+          "returned_result_count": 5
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+          "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+          "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+          "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+          "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+          "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_bcaea8723b938c871007597f",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        75187.0,
+        75189.055,
+        75191.109,
+        75193.164,
+        75195.218,
+        75197.273,
+        75199.327,
+        75201.382,
+        75203.436,
+        75205.491,
+        75207.545,
+        75209.6,
+        75211.655,
+        75213.709,
+        75215.764,
+        75217.818,
+        75219.873,
+        75221.927,
+        75223.982,
+        75226.036,
+        75228.091,
+        75230.145,
+        75232.2,
+        75234.255,
+        75236.309,
+        75238.364,
+        75240.418,
+        75242.473,
+        75244.527,
+        75246.582,
+        75248.636,
+        75250.691,
+        75252.745,
+        75254.8,
+        75256.855,
+        75258.909,
+        75260.964,
+        75263.018,
+        75265.073,
+        75267.127,
+        75269.182,
+        75271.236,
+        75273.291,
+        75275.345,
+        75277.4,
+        75279.455,
+        75281.509,
+        75283.564,
+        75285.618,
+        75287.673,
+        75289.727,
+        75291.782,
+        75293.836,
+        75295.891,
+        75297.945,
+        75300.0
+      ],
+      "inspected_ranges": [
+        [
+          75187.0,
+          75188.0
+        ],
+        [
+          75188.055,
+          75190.055
+        ],
+        [
+          75190.109,
+          75192.109
+        ],
+        [
+          75192.164,
+          75194.164
+        ],
+        [
+          75194.218,
+          75196.218
+        ],
+        [
+          75196.273,
+          75198.273
+        ],
+        [
+          75198.327,
+          75200.327
+        ],
+        [
+          75200.382,
+          75202.382
+        ],
+        [
+          75202.436,
+          75204.436
+        ],
+        [
+          75204.491,
+          75206.491
+        ],
+        [
+          75206.545,
+          75208.545
+        ],
+        [
+          75208.6,
+          75210.6
+        ],
+        [
+          75210.655,
+          75212.655
+        ],
+        [
+          75212.709,
+          75214.709
+        ],
+        [
+          75214.764,
+          75216.764
+        ],
+        [
+          75216.818,
+          75218.818
+        ],
+        [
+          75218.873,
+          75220.873
+        ],
+        [
+          75220.927,
+          75222.927
+        ],
+        [
+          75222.982,
+          75224.982
+        ],
+        [
+          75225.036,
+          75227.036
+        ],
+        [
+          75227.091,
+          75229.091
+        ],
+        [
+          75229.145,
+          75231.145
+        ],
+        [
+          75231.2,
+          75233.2
+        ],
+        [
+          75233.255,
+          75235.255
+        ],
+        [
+          75235.309,
+          75237.309
+        ],
+        [
+          75237.364,
+          75239.364
+        ],
+        [
+          75239.418,
+          75241.418
+        ],
+        [
+          75241.473,
+          75243.473
+        ],
+        [
+          75243.527,
+          75245.527
+        ],
+        [
+          75245.582,
+          75247.582
+        ],
+        [
+          75247.636,
+          75249.636
+        ],
+        [
+          75249.691,
+          75251.691
+        ],
+        [
+          75251.745,
+          75253.745
+        ],
+        [
+          75253.8,
+          75255.8
+        ],
+        [
+          75255.855,
+          75257.855
+        ],
+        [
+          75257.909,
+          75259.909
+        ],
+        [
+          75259.964,
+          75261.964
+        ],
+        [
+          75262.018,
+          75264.018
+        ],
+        [
+          75264.073,
+          75266.073
+        ],
+        [
+          75266.127,
+          75268.127
+        ],
+        [
+          75268.182,
+          75270.182
+        ],
+        [
+          75270.236,
+          75272.236
+        ],
+        [
+          75272.291,
+          75274.291
+        ],
+        [
+          75274.345,
+          75276.345
+        ],
+        [
+          75276.4,
+          75278.4
+        ],
+        [
+          75278.455,
+          75280.455
+        ],
+        [
+          75280.509,
+          75282.509
+        ],
+        [
+          75282.564,
+          75284.564
+        ],
+        [
+          75284.618,
+          75286.618
+        ],
+        [
+          75286.673,
+          75288.673
+        ],
+        [
+          75288.727,
+          75290.727
+        ],
+        [
+          75290.782,
+          75292.782
+        ],
+        [
+          75292.836,
+          75294.836
+        ],
+        [
+          75294.891,
+          75296.891
+        ],
+        [
+          75296.945,
+          75298.945
+        ],
+        [
+          75299.0,
+          75300.0
+        ]
+      ],
+      "interpretation_id": "interpretation_ebd12137005e7d8cf34c",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "c4175ac0a51fb3378e17",
+      "raw_output": "```json\n{\n  \"summary\": \"The player is in a video game, viewing a map of a location called 'Flaming Mountains' (火焰山). The map shows various sub-locations and points of interest. The player then exits the map view and navigates a character through a dark, rocky, volcanic landscape with rivers of lava. The character approaches a small, lit shrine, interacts with it, and then continues through the environment. The scene ends as the character approaches a cave entrance where another small figure is visible.\",\n  \"observations\": [\n    {\n      \"time_sec\": 75187.0,\n      \"description\": \"The screen displays a map with a scroll on the left that reads 'Fire Light Land' (火光地). A player cursor is in the center.\"\n    },\n    {\n      \"time_sec\": 75189.055,\n      \"description\": \"The map view zooms out slightly, revealing a menu on the left with the heading 'Flaming Mountains' (火焰山) and sub-locations 'Great Light Land' (大光地) and 'View Hidden Places' (查看隐秘之处).\"\n    },\n    {\n      \"time_sec\": 75191.109,\n      \"description\": \"The map view zooms out further, showing a large, illustrated map of a mountainous region with red rivers and various structures.\"\n    },\n    {\n      \"time_sec\": 75213.709,\n      \"description\": \"The view transitions from the map to a third-person perspective of a character in a dark, rocky, volcanic landscape.\"\n    },\n    {\n      \"time_sec\": 75217.818,\n      \"description\": \"In the background, a giant, pale, humanoid figure is visible sitting among the mountains, with lava flowing from beneath it.\"\n    },\n    {\n      \"time_sec\": 75226.036,\n      \"description\": \"The character runs through the landscape, which is filled with dark rocks, lava flows, and small pagodas.\"\n    },\n    {\n      \"time_sec\": 75275.345,\n      \"description\": \"The character approaches a small, lit shrine on a rocky outcrop.\"\n    },\n    {\n      \"time_sec\": 75277.4,\n      \"description\": \"The character stands before the shrine, and a menu appears with the heading 'Brick Pit' (砖瓦坑) and several options, including 'Meditate' (调息).\"\n    },\n    {\n      \"time_sec\": 75281.509,\n      \"description\": \"The menu disappears, and the character turns away from the shrine.\"\n    },\n    {\n      \"time_sec\": 75297.945,\n      \"description\": \"The character stops at the entrance of a cave. A small, red-clad figure is visible in the distance inside the cave. Subtitles appear at the bottom of the screen stating, 'Father, father, I've brought someone' (父亲，父亲，天命人我带来了).\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid character with monkey-like features, wearing armor and carrying a golden staff on their back. They are barefoot.\"\n    },\n    {\n      \"name\": \"Map\",\n      \"description\": \"An illustrated map of a location named 'Flaming Mountains' (火焰山), showing a volcanic region with mountains, lava rivers, and buildings.\"\n    },\n    {\n      \"name\": \"Shrine\",\n      \"description\": \"A small, wooden shrine with a tiered roof, set on a stone base. Two flaming pillars with text on them are in front of it.\"\n    },\n    {\n      \"name\": \"Giant Figure\",\n      \"description\": \"A colossal, pale, humanoid figure with a long beard, sitting among the mountains.\"\n    },\n    {\n      \"name\": \"Small Figure\",\n      \"description\": \"A small, red-clad figure visible in the distance inside a cave.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        75187.0,\n        75211.655\n      ],\n      \"description\": \"The player navigates the map interface, zooming out to reveal the full 'Flaming Mountains' (火焰山) area.\"\n    },\n    {\n      \"time_range\": [\n        75211.655,\n        75213.709\n      ],\n      \"description\": \"The game transitions from the map screen to the in-game world.\"\n    },\n    {\n      \"time_range\": [\n        75213.709,\n        75275.345\n      ],\n      \"description\": \"The player character runs through a volcanic landscape.\"\n    },\n    {\n      \"time_range\": [\n        75275.345,\n        75281.509\n      ],\n      \"description\": \"The player character interacts with a shrine, causing a menu to appear and then disappear.\"\n    },\n    {\n      \"time_range\": [\n        75281.509,\n        75297.945\n      ],\n      \"description\": \"The player character runs from the shrine towards a cave entrance.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The identity of the giant figure and the small figure in the cave is not stated.\",\n    \"The full text on the flaming pillars of the shrine is not legible.\",\n    \"The purpose of the 'Brick Pit' (砖瓦坑) menu is not explained.\"\n  ]\n}\n```",
+      "requested_range": [
+        75187.0,
+        75300.0
+      ],
+      "round_id": "2",
+      "sampling_config": {
+        "fps": 0.5,
+        "max_frames": 57,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.973451,
+          "effective_fps": 0.495575,
+          "frame_times": [
+            75187.0,
+            75189.055,
+            75191.109,
+            75193.164,
+            75195.218,
+            75197.273,
+            75199.327,
+            75201.382,
+            75203.436,
+            75205.491,
+            75207.545,
+            75209.6,
+            75211.655,
+            75213.709,
+            75215.764,
+            75217.818,
+            75219.873,
+            75221.927,
+            75223.982,
+            75226.036,
+            75228.091,
+            75230.145,
+            75232.2,
+            75234.255,
+            75236.309,
+            75238.364,
+            75240.418,
+            75242.473,
+            75244.527,
+            75246.582,
+            75248.636,
+            75250.691,
+            75252.745,
+            75254.8,
+            75256.855,
+            75258.909,
+            75260.964,
+            75263.018,
+            75265.073,
+            75267.127,
+            75269.182,
+            75271.236,
+            75273.291,
+            75275.345,
+            75277.4,
+            75279.455,
+            75281.509,
+            75283.564,
+            75285.618,
+            75287.673,
+            75289.727,
+            75291.782,
+            75293.836,
+            75295.891,
+            75297.945,
+            75300.0
+          ],
+          "max_gap": 2.055,
+          "observed_subranges": [
+            [
+              75187.0,
+              75188.0
+            ],
+            [
+              75188.055,
+              75190.055
+            ],
+            [
+              75190.109,
+              75192.109
+            ],
+            [
+              75192.164,
+              75194.164
+            ],
+            [
+              75194.218,
+              75196.218
+            ],
+            [
+              75196.273,
+              75198.273
+            ],
+            [
+              75198.327,
+              75200.327
+            ],
+            [
+              75200.382,
+              75202.382
+            ],
+            [
+              75202.436,
+              75204.436
+            ],
+            [
+              75204.491,
+              75206.491
+            ],
+            [
+              75206.545,
+              75208.545
+            ],
+            [
+              75208.6,
+              75210.6
+            ],
+            [
+              75210.655,
+              75212.655
+            ],
+            [
+              75212.709,
+              75214.709
+            ],
+            [
+              75214.764,
+              75216.764
+            ],
+            [
+              75216.818,
+              75218.818
+            ],
+            [
+              75218.873,
+              75220.873
+            ],
+            [
+              75220.927,
+              75222.927
+            ],
+            [
+              75222.982,
+              75224.982
+            ],
+            [
+              75225.036,
+              75227.036
+            ],
+            [
+              75227.091,
+              75229.091
+            ],
+            [
+              75229.145,
+              75231.145
+            ],
+            [
+              75231.2,
+              75233.2
+            ],
+            [
+              75233.255,
+              75235.255
+            ],
+            [
+              75235.309,
+              75237.309
+            ],
+            [
+              75237.364,
+              75239.364
+            ],
+            [
+              75239.418,
+              75241.418
+            ],
+            [
+              75241.473,
+              75243.473
+            ],
+            [
+              75243.527,
+              75245.527
+            ],
+            [
+              75245.582,
+              75247.582
+            ],
+            [
+              75247.636,
+              75249.636
+            ],
+            [
+              75249.691,
+              75251.691
+            ],
+            [
+              75251.745,
+              75253.745
+            ],
+            [
+              75253.8,
+              75255.8
+            ],
+            [
+              75255.855,
+              75257.855
+            ],
+            [
+              75257.909,
+              75259.909
+            ],
+            [
+              75259.964,
+              75261.964
+            ],
+            [
+              75262.018,
+              75264.018
+            ],
+            [
+              75264.073,
+              75266.073
+            ],
+            [
+              75266.127,
+              75268.127
+            ],
+            [
+              75268.182,
+              75270.182
+            ],
+            [
+              75270.236,
+              75272.236
+            ],
+            [
+              75272.291,
+              75274.291
+            ],
+            [
+              75274.345,
+              75276.345
+            ],
+            [
+              75276.4,
+              75278.4
+            ],
+            [
+              75278.455,
+              75280.455
+            ],
+            [
+              75280.509,
+              75282.509
+            ],
+            [
+              75282.564,
+              75284.564
+            ],
+            [
+              75284.618,
+              75286.618
+            ],
+            [
+              75286.673,
+              75288.673
+            ],
+            [
+              75288.727,
+              75290.727
+            ],
+            [
+              75290.782,
+              75292.782
+            ],
+            [
+              75292.836,
+              75294.836
+            ],
+            [
+              75294.891,
+              75296.891
+            ],
+            [
+              75296.945,
+              75298.945
+            ],
+            [
+              75299.0,
+              75300.0
+            ]
+          ],
+          "requested_fps": 0.5,
+          "requested_range": [
+            75187.0,
+            75300.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.973236
+        }
+      },
+      "sampling_fps": 0.5,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0028",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩.mp4",
+          "source_time_range": [
+            623.525,
+            736.525
+          ],
+          "source_video_id": "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+          "virtual_time_range": [
+            75187.0,
+            75300.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_271ea57ecdfb347783c8e119",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_170b69d0ef01ec526c75",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "d341725f7505438839f9",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000166_d429ad3d8319\", \"dense_score\": 0.4808518886566162, \"fused_score\": 0.03128054740957967, \"interval_precision\": \"anchor\", \"lexical_score\": 61.980983600521654, \"metadata\": {\"dense_rank\": 6, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"coconut wine\", \"椰子酒\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000166_d429ad3d8319:p0009\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000166_d429ad3d8319:p0009\", \"text\": \"The player interacts with the NPC, opening a menu to upgrade various gourds and wine pots, which serve as healing items. The player successfully upgrades a \\\"椰子酒\\\" (Coconut Wine) from ten years to eighteen years, and then to thirty years. They also add different \\\"泡酒物\\\" (infusion items) to the wine, which grant additional effects.\", \"virtual_end_sec\": 50100.0, \"virtual_start_sec\": 49980.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000077_c9b5fad50372\", \"dense_score\": 0.47624436020851135, \"fused_score\": 0.031099324975891997, \"interval_precision\": \"anchor\", \"lexical_score\": 93.63509276944265, \"metadata\": {\"dense_rank\": 8, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"coconut wine\", \"椰子酒\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0009\"], \"source_video_ids\": [\"009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000077_c9b5fad50372:p0003\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000077_c9b5fad50372:p0003\", \"text\": \"The player enters an upgrade menu for their drinking vessels, selecting and successfully upgrading a vase-like item called \\\"椰子酒·五年陈\\\" (Coconut Wine · Five-Year Vintage) into a teapot called \\\"椰子酒·十年陈\\\" (Coconut Wine · Ten-Year Vintage).\", \"virtual_end_sec\": 23145.0, \"virtual_start_sec\": 23133.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000156_aad7b2b1d86f\", \"dense_score\": 0.5455569624900818, \"fused_score\": 0.029116045245077504, \"interval_precision\": \"anchor\", \"lexical_score\": 15.221346387092861, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 17, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"liuliu village\", \"榴榴村\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000156_aad7b2b1d86f:p0001\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000156_aad7b2b1d86f:p0001\", \"text\": \"The player opens a map, which shows the current location as \\\"兰溪村\\\" (Lānxī Village) within a larger area called \\\"盘丝岭\\\" (Pánsī Lǐng). The map is styled like a traditional Chinese ink wash painting.\", \"virtual_end_sec\": 46814.0, \"virtual_start_sec\": 46802.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000157_ff2a93f63dc8\", \"dense_score\": 0.4539604187011719, \"fused_score\": 0.027417840375586856, \"interval_precision\": \"anchor\", \"lexical_score\": 15.574246515418785, \"metadata\": {\"dense_rank\": 11, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 15, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"椰子酒\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\", \"seg_0019\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\", \"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000157_ff2a93f63dc8:p0003\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0003\", \"text\": \"The player enters a small building and approaches a golden, turtle-shaped container on a table. Upon interaction, the container opens, releasing a spirit and granting the player an item called \\\"血虷子\\\".\", \"virtual_end_sec\": 47186.0, \"virtual_start_sec\": 47149.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000257_8846234c09c8\", \"dense_score\": 0.5668354630470276, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000257_8846234c09c8:p0004\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000257_8846234c09c8:p0004\", \"text\": \"A large, winged, humanoid creature with a bird-like head and golden armor descends from the sky, landing with a powerful thud. Its name, \\\"灵虚子\\\" (Ling Xuzi), appears on the screen.\", \"virtual_end_sec\": 77227.0, \"virtual_start_sec\": 77215.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000149_b6e679554425\", \"dense_score\": 0.5310187339782715, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000149_b6e679554425:p0004\", \"rank\": 6, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000149_b6e679554425:p0004\", \"text\": \"The character approaches a large gate, and text appears on the left side of the screen, identifying the location as \\\"兰喜村\\\" (Lán Xǐ Cūn).\", \"virtual_end_sec\": 44819.0, \"virtual_start_sec\": 44803.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000250_05f6ddf6228b\", \"dense_score\": null, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": 34.717959654915525, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 3, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000250_05f6ddf6228b:p0009\", \"rank\": 7, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009\", \"text\": \"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\", \"virtual_end_sec\": 75300.0, \"virtual_start_sec\": 75187.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000034_d75273eb6037\", \"dense_score\": 0.4910973012447357, \"fused_score\": 0.015625, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0005\"], \"source_video_ids\": [\"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000034_d75273eb6037:p0002\", \"rank\": 8, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000034_d75273eb6037:p0002\", \"text\": \"As the character approaches a wooden bridge, text appears on the screen identifying the location as \\\"沙門村\\\" (Shāmén Cūn).\", \"virtual_end_sec\": 10240.0, \"virtual_start_sec\": 10224.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 8, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [1], \"max_score\": 0.03128054740957967, \"occurrence_id\": \"occ_1bef08dd3fc48f34e2ba\", \"passage_ids\": [\"cap_000166_d429ad3d8319:p0009\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"coconut wine\"}, {\"query\": \"椰子酒\"}], \"rank\": 1, \"segment_ids\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"status\": \"uninspected\", \"time_range\": [49980.0, 50100.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.031099324975891997, \"occurrence_id\": \"occ_db30b11deef010696485\", \"passage_ids\": [\"cap_000077_c9b5fad50372:p0003\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"coconut wine\"}, {\"query\": \"椰子酒\"}], \"rank\": 2, \"segment_ids\": [\"seg_0009\"], \"source_video_ids\": [\"009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）\"], \"status\": \"uninspected\", \"time_range\": [23133.0, 23145.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.029116045245077504, \"occurrence_id\": \"occ_fecbb204809afea8e2a5\", \"passage_ids\": [\"cap_000156_aad7b2b1d86f:p0001\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"liuliu village\"}, {\"query\": \"榴榴村\"}], \"rank\": 3, \"segment_ids\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"status\": \"uninspected\", \"time_range\": [46802.0, 46814.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.027417840375586856, \"occurrence_id\": \"occ_edab3dbe95e6b429b94c\", \"passage_ids\": [\"cap_000157_ff2a93f63dc8:p0003\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"椰子酒\"}], \"rank\": 4, \"segment_ids\": [\"seg_0018\", \"seg_0019\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\", \"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"status\": \"uninspected\", \"time_range\": [47149.0, 47186.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_86a73354a1a201eed513\", \"passage_ids\": [\"cap_000257_8846234c09c8:p0004\"], \"query_matches\": [], \"rank\": 5, \"segment_ids\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"status\": \"uninspected\", \"time_range\": [77215.0, 77227.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [6], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_12057316d76a22daa71b\", \"passage_ids\": [\"cap_000149_b6e679554425:p0004\"], \"query_matches\": [], \"rank\": 6, \"segment_ids\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"status\": \"uninspected\", \"time_range\": [44803.0, 44819.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [7], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_50fd548fb72de551e5c1\", \"passage_ids\": [\"cap_000250_05f6ddf6228b:p0009\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}], \"rank\": 7, \"segment_ids\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"status\": \"uninspected\", \"time_range\": [75187.0, 75300.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [8], \"max_score\": 0.015625, \"occurrence_id\": \"occ_4df4ff9498633e4ad675\", \"passage_ids\": [\"cap_000034_d75273eb6037:p0002\"], \"query_matches\": [], \"rank\": 8, \"segment_ids\": [\"seg_0005\"], \"source_video_ids\": [\"005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.\"], \"status\": \"uninspected\", \"time_range\": [10224.0, 10240.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0165/caption_search/attempt_271ea57ecdfb347783c8e119.441eb21695b6.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.08333333333333333, \"novel_result_count\": 7, \"novel_result_ids\": [\"cap_000166_d429ad3d8319:p0009\", \"cap_000077_c9b5fad50372:p0003\", \"cap_000156_aad7b2b1d86f:p0001\", \"cap_000157_ff2a93f63dc8:p0003\", \"cap_000257_8846234c09c8:p0004\", \"cap_000149_b6e679554425:p0004\", \"cap_000034_d75273eb6037:p0002\"], \"novelty_ratio\": 0.875, \"query_fingerprint\": \"441eb21695b64031964e03eb277c747563093fab564cffc259562a00344bd1d8\", \"returned_result_count\": 8}, \"search_queries\": [\"After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?\", \"Liuliu Village\", \"榴榴村\", \"Coconut Wine\", \"椰子酒\"], \"summary\": \"Caption search: 8 hits\\n1. [13:53:00-13:55:00] score=0.0313 passage=cap_000166_d429ad3d8319:p0009\\n   \\\"The player interacts with the NPC, opening a menu to upgrade various gourds and wine pots, which serve as healing items. The player successfully upgrades a \\\"椰子酒\\\" (Coconut Wine) from ten years to eighteen years, and then to thirty years. They also add different \\\"泡酒物\\\" (infusion items) to the wine, which grant additional effects.\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; coconut wine; 椰子酒\\n2. [06:25:33-06:25:45] score=0.0311 passage=cap_000077_c9b5fad50372:p0003\\n   \\\"The player enters an upgrade menu for their drinking vessels, selecting and successfully upgrading a vase-like item called \\\"椰子酒·五年陈\\\" (Coconut Wine · Five-Year Vintage) into a teapot called \\\"椰子酒·十年陈\\\" (Coconut Wine · Ten-Year Vintage).\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; coconut wine; 椰子酒\\n3. [13:00:02-13:00:14] score=0.0291 passage=cap_000156_aad7b2b1d86f:p0001\\n   \\\"The player opens a map, which shows the current location as \\\"兰溪村\\\" (Lānxī Village) within a larger area called \\\"盘丝岭\\\" (Pánsī Lǐng). The map is styled like a traditional Chinese ink wash painting.\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; liuliu village; 榴榴村\\n4. [13:05:49-13:06:26] score=0.0274 passage=cap_000157_ff2a93f63dc8:p0003\\n   \\\"The player enters a small building and approaches a golden, turtle-shaped container on a table. Upon interaction, the container opens, releasing a spirit and granting the player an item called \\\"血虷子\\\".\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; 椰子酒\\n5. [21:26:55-21:27:07] score=0.0164 passage=cap_000257_8846234c09c8:p0004\\n   \\\"A large, winged, humanoid creature with a bird-like head and golden armor descends from the sky, landing with a powerful thud. Its name, \\\"灵虚子\\\" (Ling Xuzi), appears on the screen.\\\"\\n6. [12:26:43-12:26:59] score=0.0159 passage=cap_000149_b6e679554425:p0004\\n7. [20:53:07-20:55:00] score=0.0159 passage=cap_000250_05f6ddf6228b:p0009\\n8. [02:50:24-02:50:40] score=0.0156 passage=cap_000034_d75273eb6037:p0002\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "3",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000166_d429ad3d8319:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000077_c9b5fad50372:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000156_aad7b2b1d86f:p0001",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000257_8846234c09c8:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000149_b6e679554425:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000034_d75273eb6037:p0002"
+          ],
+          "passage_ids": [
+            "cap_000166_d429ad3d8319:p0009",
+            "cap_000077_c9b5fad50372:p0003",
+            "cap_000156_aad7b2b1d86f:p0001",
+            "cap_000157_ff2a93f63dc8:p0003",
+            "cap_000257_8846234c09c8:p0004",
+            "cap_000149_b6e679554425:p0004",
+            "cap_000250_05f6ddf6228b:p0009",
+            "cap_000034_d75273eb6037:p0002"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?",
+          "Liuliu Village",
+          "榴榴村",
+          "Coconut Wine",
+          "椰子酒"
+        ],
+        "query_fingerprint": "441eb21695b64031964e03eb277c747563093fab564cffc259562a00344bd1d8",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.08333333333333333,
+          "novel_result_count": 7,
+          "novel_result_ids": [
+            "cap_000166_d429ad3d8319:p0009",
+            "cap_000077_c9b5fad50372:p0003",
+            "cap_000156_aad7b2b1d86f:p0001",
+            "cap_000157_ff2a93f63dc8:p0003",
+            "cap_000257_8846234c09c8:p0004",
+            "cap_000149_b6e679554425:p0004",
+            "cap_000034_d75273eb6037:p0002"
+          ],
+          "novelty_ratio": 0.875,
+          "query_fingerprint": "441eb21695b64031964e03eb277c747563093fab564cffc259562a00344bd1d8",
+          "returned_result_count": 8
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+          "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+          "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+          "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金",
+          "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+          "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+        ],
+        "time_range": null,
+        "top_k": 8
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金",
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+      ],
+      "task_id": "r1_t3"
+    },
+    {
+      "attempt_id": "attempt_5b4c7d9344ed23d3b89eb11a",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_99a2b7bbf9a6a051592e",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "24704f62ecd4f43d8ae2",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000156_aad7b2b1d86f\", \"dense_score\": 0.5455567836761475, \"fused_score\": 0.029726775956284153, \"interval_precision\": \"anchor\", \"lexical_score\": 15.221346387092861, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 15, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\", \"liuliu village\", \"榴榴村\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000156_aad7b2b1d86f:p0001\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000156_aad7b2b1d86f:p0001\", \"text\": \"The player opens a map, which shows the current location as \\\"兰溪村\\\" (Lānxī Village) within a larger area called \\\"盘丝岭\\\" (Pánsī Lǐng). The map is styled like a traditional Chinese ink wash painting.\", \"virtual_end_sec\": 46814.0, \"virtual_start_sec\": 46802.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000166_d429ad3d8319\", \"dense_score\": 0.39742153882980347, \"fused_score\": 0.027972027972027972, \"interval_precision\": \"anchor\", \"lexical_score\": 22.712327476112815, \"metadata\": {\"dense_rank\": 18, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 6, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000166_d429ad3d8319:p0009\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000166_d429ad3d8319:p0009\", \"text\": \"The player interacts with the NPC, opening a menu to upgrade various gourds and wine pots, which serve as healing items. The player successfully upgrades a \\\"椰子酒\\\" (Coconut Wine) from ten years to eighteen years, and then to thirty years. They also add different \\\"泡酒物\\\" (infusion items) to the wine, which grant additional effects.\", \"virtual_end_sec\": 50100.0, \"virtual_start_sec\": 49980.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000077_c9b5fad50372\", \"dense_score\": null, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": 40.34732201832753, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0009\"], \"source_video_ids\": [\"009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000077_c9b5fad50372:p0003\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000077_c9b5fad50372:p0003\", \"text\": \"The player enters an upgrade menu for their drinking vessels, selecting and successfully upgrading a vase-like item called \\\"椰子酒·五年陈\\\" (Coconut Wine · Five-Year Vintage) into a teapot called \\\"椰子酒·十年陈\\\" (Coconut Wine · Ten-Year Vintage).\", \"virtual_end_sec\": 23145.0, \"virtual_start_sec\": 23133.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000149_b6e679554425\", \"dense_score\": 0.5310184955596924, \"fused_score\": 0.016129032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000149_b6e679554425:p0004\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000149_b6e679554425:p0004\", \"text\": \"The character approaches a large gate, and text appears on the left side of the screen, identifying the location as \\\"兰喜村\\\" (Lán Xǐ Cūn).\", \"virtual_end_sec\": 44819.0, \"virtual_start_sec\": 44803.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000250_05f6ddf6228b\", \"dense_score\": null, \"fused_score\": 0.016129032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": 34.717959654915525, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000250_05f6ddf6228b:p0009\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009\", \"text\": \"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\", \"virtual_end_sec\": 75300.0, \"virtual_start_sec\": 75187.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 5, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [1], \"max_score\": 0.029726775956284153, \"occurrence_id\": \"occ_fecbb204809afea8e2a5\", \"passage_ids\": [\"cap_000156_aad7b2b1d86f:p0001\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}, {\"query\": \"liuliu village\"}, {\"query\": \"榴榴村\"}], \"rank\": 1, \"segment_ids\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"status\": \"uninspected\", \"time_range\": [46802.0, 46814.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.027972027972027972, \"occurrence_id\": \"occ_1bef08dd3fc48f34e2ba\", \"passage_ids\": [\"cap_000166_d429ad3d8319:p0009\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}], \"rank\": 2, \"segment_ids\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"status\": \"uninspected\", \"time_range\": [49980.0, 50100.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_db30b11deef010696485\", \"passage_ids\": [\"cap_000077_c9b5fad50372:p0003\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}], \"rank\": 3, \"segment_ids\": [\"seg_0009\"], \"source_video_ids\": [\"009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）\"], \"status\": \"uninspected\", \"time_range\": [23133.0, 23145.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.016129032258064516, \"occurrence_id\": \"occ_12057316d76a22daa71b\", \"passage_ids\": [\"cap_000149_b6e679554425:p0004\"], \"query_matches\": [], \"rank\": 4, \"segment_ids\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"status\": \"uninspected\", \"time_range\": [44803.0, 44819.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.016129032258064516, \"occurrence_id\": \"occ_50fd548fb72de551e5c1\", \"passage_ids\": [\"cap_000250_05f6ddf6228b:p0009\"], \"query_matches\": [{\"query\": \"after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\"}], \"rank\": 5, \"segment_ids\": [\"seg_0028\"], \"source_video_ids\": [\"028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩\"], \"status\": \"uninspected\", \"time_range\": [75187.0, 75300.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0165/caption_search/attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.625, \"novel_result_count\": 0, \"novel_result_ids\": [], \"novelty_ratio\": 0.0, \"query_fingerprint\": \"67935ce0df1ff3378135819762881bf2c9ca60beb39454fc07095a3950c72224\", \"returned_result_count\": 5}, \"search_queries\": [\"After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?\", \"Liuliu Village\", \"榴榴村\"], \"summary\": \"Caption search: 5 hits\\n1. [13:00:02-13:00:14] score=0.0297 passage=cap_000156_aad7b2b1d86f:p0001\\n   \\\"The player opens a map, which shows the current location as \\\"兰溪村\\\" (Lānxī Village) within a larger area called \\\"盘丝岭\\\" (Pánsī Lǐng). The map is styled like a traditional Chinese ink wash painting.\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?; liuliu village; 榴榴村\\n2. [13:53:00-13:55:00] score=0.0280 passage=cap_000166_d429ad3d8319:p0009\\n   \\\"The player interacts with the NPC, opening a menu to upgrade various gourds and wine pots, which serve as healing items. The player successfully upgrades a \\\"椰子酒\\\" (Coconut Wine) from ten years to eighteen years, and then to thirty years. They also add different \\\"泡酒物\\\" (infusion items) to the wine, which grant additional effects.\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\\n3. [06:25:33-06:25:45] score=0.0164 passage=cap_000077_c9b5fad50372:p0003\\n   \\\"The player enters an upgrade menu for their drinking vessels, selecting and successfully upgrading a vase-like item called \\\"椰子酒·五年陈\\\" (Coconut Wine · Five-Year Vintage) into a teapot called \\\"椰子酒·十年陈\\\" (Coconut Wine · Ten-Year Vintage).\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\\n4. [12:26:43-12:26:59] score=0.0161 passage=cap_000149_b6e679554425:p0004\\n   \\\"The character approaches a large gate, and text appears on the left side of the screen, identifying the location as \\\"兰喜村\\\" (Lán Xǐ Cūn).\\\"\\n5. [20:53:07-20:55:00] score=0.0161 passage=cap_000250_05f6ddf6228b:p0009\\n   \\\"The player opens the world map, revealing a large, illustrated map of \\\"火焰山\\\" (Flaming Mountain), showing different areas like \\\"火光地\\\" (Fiery Land) and \\\"灰烬林\\\" (Ash Forest).\\\"\\n   matched queries: after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "4",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000156_aad7b2b1d86f:p0001",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000166_d429ad3d8319:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000077_c9b5fad50372:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000149_b6e679554425:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000250_05f6ddf6228b:p0009"
+          ],
+          "passage_ids": [
+            "cap_000156_aad7b2b1d86f:p0001",
+            "cap_000166_d429ad3d8319:p0009",
+            "cap_000077_c9b5fad50372:p0003",
+            "cap_000149_b6e679554425:p0004",
+            "cap_000250_05f6ddf6228b:p0009"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "After the player enters the Flaming Mountains (火焰山), upon entering the entrance of Liuliu Village for the first time, after upgrading the wine 'Coconut Wine · 30-Year Aged', how many Sandong Insects does the player have remaining?",
+          "Liuliu Village",
+          "榴榴村"
+        ],
+        "query_fingerprint": "67935ce0df1ff3378135819762881bf2c9ca60beb39454fc07095a3950c72224",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.625,
+          "novel_result_count": 0,
+          "novel_result_ids": [],
+          "novelty_ratio": 0.0,
+          "query_fingerprint": "67935ce0df1ff3378135819762881bf2c9ca60beb39454fc07095a3950c72224",
+          "returned_result_count": 5
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+          "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+          "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+          "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "task_id": "r1_t4"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        1
+      ],
+      "max_score": 0.03128054740957967,
+      "occurrence_id": "occ_1bef08dd3fc48f34e2ba",
+      "passage_ids": [
+        "cap_000166_d429ad3d8319:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "coconut wine"
+        },
+        {
+          "query": "椰子酒"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0019"
+      ],
+      "source_video_ids": [
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        49980.0,
+        50100.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.031099324975891997,
+      "occurrence_id": "occ_db30b11deef010696485",
+      "passage_ids": [
+        "cap_000077_c9b5fad50372:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "coconut wine"
+        },
+        {
+          "query": "椰子酒"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0009"
+      ],
+      "source_video_ids": [
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        23133.0,
+        23145.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.029116045245077504,
+      "occurrence_id": "occ_fecbb204809afea8e2a5",
+      "passage_ids": [
+        "cap_000156_aad7b2b1d86f:p0001"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "liuliu village"
+        },
+        {
+          "query": "榴榴村"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0018"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        46802.0,
+        46814.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.027417840375586856,
+      "occurrence_id": "occ_edab3dbe95e6b429b94c",
+      "passage_ids": [
+        "cap_000157_ff2a93f63dc8:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "椰子酒"
+        }
+      ],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0018",
+        "seg_0019"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        47149.0,
+        47186.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_86a73354a1a201eed513",
+      "passage_ids": [
+        "cap_000257_8846234c09c8:p0004"
+      ],
+      "query_matches": [],
+      "rank": 5,
+      "segment_ids": [
+        "seg_0029"
+      ],
+      "source_video_ids": [
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        77215.0,
+        77227.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        6
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_12057316d76a22daa71b",
+      "passage_ids": [
+        "cap_000149_b6e679554425:p0004"
+      ],
+      "query_matches": [],
+      "rank": 6,
+      "segment_ids": [
+        "seg_0018"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        44803.0,
+        44819.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        7
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_50fd548fb72de551e5c1",
+      "passage_ids": [
+        "cap_000250_05f6ddf6228b:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        }
+      ],
+      "rank": 7,
+      "segment_ids": [
+        "seg_0028"
+      ],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        75187.0,
+        75300.0
+      ]
+    },
+    {
+      "artifact": "attempt_271ea57ecdfb347783c8e119.441eb21695b6.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        8
+      ],
+      "max_score": 0.015625,
+      "occurrence_id": "occ_4df4ff9498633e4ad675",
+      "passage_ids": [
+        "cap_000034_d75273eb6037:p0002"
+      ],
+      "query_matches": [],
+      "rank": 8,
+      "segment_ids": [
+        "seg_0005"
+      ],
+      "source_video_ids": [
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        10224.0,
+        10240.0
+      ]
+    },
+    {
+      "artifact": "attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        1
+      ],
+      "max_score": 0.029726775956284153,
+      "occurrence_id": "occ_fecbb204809afea8e2a5",
+      "passage_ids": [
+        "cap_000156_aad7b2b1d86f:p0001"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "liuliu village"
+        },
+        {
+          "query": "榴榴村"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0018"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        46802.0,
+        46814.0
+      ]
+    },
+    {
+      "artifact": "attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.027972027972027972,
+      "occurrence_id": "occ_1bef08dd3fc48f34e2ba",
+      "passage_ids": [
+        "cap_000166_d429ad3d8319:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0019"
+      ],
+      "source_video_ids": [
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        49980.0,
+        50100.0
+      ]
+    },
+    {
+      "artifact": "attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_db30b11deef010696485",
+      "passage_ids": [
+        "cap_000077_c9b5fad50372:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0009"
+      ],
+      "source_video_ids": [
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        23133.0,
+        23145.0
+      ]
+    },
+    {
+      "artifact": "attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.016129032258064516,
+      "occurrence_id": "occ_12057316d76a22daa71b",
+      "passage_ids": [
+        "cap_000149_b6e679554425:p0004"
+      ],
+      "query_matches": [],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0018"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        44803.0,
+        44819.0
+      ]
+    },
+    {
+      "artifact": "attempt_5b4c7d9344ed23d3b89eb11a.67935ce0df1f.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.016129032258064516,
+      "occurrence_id": "occ_50fd548fb72de551e5c1",
+      "passage_ids": [
+        "cap_000250_05f6ddf6228b:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        }
+      ],
+      "rank": 5,
+      "segment_ids": [
+        "seg_0028"
+      ],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        75187.0,
+        75300.0
+      ]
+    },
+    {
+      "artifact": "attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        1
+      ],
+      "max_score": 0.03278688524590164,
+      "occurrence_id": "occ_50fd548fb72de551e5c1",
+      "passage_ids": [
+        "cap_000250_05f6ddf6228b:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "火焰山"
+        },
+        {
+          "query": "flaming mountains"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0028"
+      ],
+      "source_video_ids": [
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        75187.0,
+        75300.0
+      ]
+    },
+    {
+      "artifact": "attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.03225806451612903,
+      "occurrence_id": "occ_2645387d3cec61d7af52",
+      "passage_ids": [
+        "cap_000231_e9ec0fe17941:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "火焰山"
+        },
+        {
+          "query": "flaming mountains"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0026"
+      ],
+      "source_video_ids": [
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        69333.0,
+        69352.0
+      ]
+    },
+    {
+      "artifact": "attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_b49027a3096ddb469ce8",
+      "passage_ids": [
+        "cap_000221_c02ab9509122:p0001"
+      ],
+      "query_matches": [],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0024",
+        "seg_0025"
+      ],
+      "source_video_ids": [
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        66304.0,
+        66310.0
+      ]
+    },
+    {
+      "artifact": "attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_b4b7cce83fc48f04e44e",
+      "passage_ids": [
+        "cap_000231_e9ec0fe17941:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player enters the flaming mountains (火焰山), upon entering the entrance of liuliu village for the first time, after upgrading the wine 'coconut wine · 30-year aged', how many sandong insects does the player have remaining?"
+        },
+        {
+          "query": "火焰山"
+        },
+        {
+          "query": "flaming mountains"
+        }
+      ],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0026"
+      ],
+      "source_video_ids": [
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        69564.0,
+        69600.0
+      ]
+    },
+    {
+      "artifact": "attempt_a93096376a5dc296ff1ae44e.5c9e043a46f1.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.015625,
+      "occurrence_id": "occ_7e434a8b2c094ae85236",
+      "passage_ids": [
+        "cap_000027_de07ee6e1aa2:p0000"
+      ],
+      "query_matches": [],
+      "rank": 5,
+      "segment_ids": [
+        "seg_0004",
+        "seg_0005"
+      ],
+      "source_video_ids": [
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        8100.0,
+        8111.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+    "case_id": "mmlifelong-game-test-0165",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 165,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [],
+    "supporting_intervals": [
+      [
+        49980.0,
+        50100.0
+      ],
+      [
+        66304.0,
+        66310.0
+      ]
+    ],
+    "verification_status": "candidate_only",
+    "verified_answer": ""
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 421,
+        "content_chars": 1125,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9686,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "2fce5e284276950c4aaa08dd5a414a2f",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 95,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "火焰山",
+              "Flaming Mountains"
+            ],
+            "goal": "Find when the player is in the Flaming Mountains",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "火焰山",
+              "Flaming Mountains"
+            ],
+            "goal": "Find when the player is in the Flaming Mountains",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ]
+      },
+      "raw_sha256": "f52027e83ba10c98211437ecb7c9202e3da630eeeed0aaa5ff55970fb6ef200f",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 574,
+        "content_chars": 1966,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15917,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "6190bc87fdf9512d2211d2722a85499f",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 78,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Confirm the player has entered the Flaming Mountains (火焰山) and identify the start of this chapter.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "sampling_floor_fps": 0.5,
+            "segment_id": "seg_0028",
+            "time_range": [
+              75187.0,
+              75300.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_a93096376a5dc296ff1ae44e"
+              ],
+              "claim_id": "c1",
+              "confidence": "low",
+              "metadata": {
+                "locator": true
+              },
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player opens the world map, revealing a large, illustrated map of \"火焰山\" (Flaming Mountain), showing different areas like \"火光地\" (Fiery Land) and \"灰烬林\" (Ash Forest).",
+              "time_anchor": [
+                75187.0,
+                75300.0
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Confirm the player has entered the Flaming Mountains (火焰山) and identify the start of this chapter.",
+            "inspection_mode": "window",
+            "query_id": "r1_t2",
+            "sampling_floor_fps": 0.5,
+            "segment_id": "seg_0028",
+            "time_range": [
+              75187.0,
+              75300.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_a93096376a5dc296ff1ae44e"
+              ],
+              "claim_id": "c1",
+              "confidence": "low",
+              "metadata": {
+                "locator": true
+              },
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player opens the world map, revealing a large, illustrated map of \"火焰山\" (Flaming Mountain), showing different areas like \"火光地\" (Fiery Land) and \"灰烬林\" (Ash Forest).",
+              "time_anchor": [
+                75187.0,
+                75300.0
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "6ce3e5bdada69894796e28f724769c1a873bbcfccc75ae0ad69e4702b28dc268",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 456,
+        "content_chars": 1300,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18829,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "898da6e95fe92f08b8979c5077bc7b36",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 97,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Liuliu Village",
+              "榴榴村",
+              "Coconut Wine",
+              "椰子酒"
+            ],
+            "goal": "Find the first time the player enters Liuliu Village in the Flaming Mountains.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t3",
+            "top_k": 8
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Liuliu Village",
+              "榴榴村",
+              "Coconut Wine",
+              "椰子酒"
+            ],
+            "goal": "Find the first time the player enters Liuliu Village in the Flaming Mountains.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t3",
+            "top_k": 8
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "7216ac4be63fa818c3e68e0b37214ed881ccecf4bc6309132eca43680595f251",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 470,
+        "content_chars": 1357,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 22997,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "83221280e7a3ffc977a77038c55b6b5f",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 75,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Liuliu Village",
+              "榴榴村"
+            ],
+            "goal": "Find when the player enters Liuliu Village (榴榴村)",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t4",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Liuliu Village",
+              "榴榴村"
+            ],
+            "goal": "Find when the player enters Liuliu Village (榴榴村)",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t4",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "6e0a8a0f89460618b0b3cb1a08408748e2c2f026b8b2b1b21e77792ef71cb1e4",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1030,
+        "content_chars": 2973,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 25119,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "9dbef8c55d843bef9003189fad3c0e5a",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 122,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Visually confirm the upgrade of 'Coconut Wine' to 30-year aged and check the number of 'Sandong Insects' (蚰蜒) in the player's inventory immediately after.",
+            "inspection_mode": "window",
+            "query_id": "r1_t5",
+            "sampling_floor_fps": 2,
+            "segment_id": "seg_0019",
+            "time_range": [
+              49980.0,
+              50100.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_271ea57ecdfb347783c8e119"
+              ],
+              "claim_id": "c2",
+              "confidence": "medium",
+              "metadata": {
+                "locator": true
+              },
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player upgrades 'Coconut Wine' (椰子酒) to '30-Year Aged' (三十年陈).",
+              "time_anchor": [
+                49980.0,
+                50100.0
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c2"
+            ],
+            "label": "Candidate for wine upgrade and inventory check",
+            "op": "note_interval",
+            "role": "candidate",
+            "time_range": [
+              49980.0,
+              50100.0
+            ]
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Visually confirm the upgrade of 'Coconut Wine' to 30-year aged and check the number of 'Sandong Insects' (蚰蜒) in the player's inventory immediately after.",
+            "inspection_mode": "window",
+            "query_id": "r1_t5",
+            "sampling_floor_fps": 2,
+            "segment_id": "seg_0019",
+            "time_range": [
+              49980.0,
+              50100.0
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_271ea57ecdfb347783c8e119"
+              ],
+              "claim_id": "c2",
+              "confidence": "medium",
+              "metadata": {
+                "locator": true
+              },
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player upgrades 'Coconut Wine' (椰子酒) to '30-Year Aged' (三十年陈).",
+              "time_anchor": [
+                49980.0,
+                50100.0
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c2"
+            ],
+            "label": "Candidate for wine upgrade and inventory check",
+            "op": "note_interval",
+            "role": "candidate",
+            "time_range": [
+              49980.0,
+              50100.0
+            ]
+          }
+        ]
+      },
+      "raw_sha256": "f442cd5c50f0ea000f421c40615a6581db6a43748e281ed68142a71784fceb8e",
+      "repair_failed": false,
+      "round": 5,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 993,
+        "content_chars": 2985,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 23887,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "77d761668a3e2e78772d637eb2e9597b",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 79,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+        "supporting_claim_ids": [
+          "c7",
+          "c5"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_271ea57ecdfb347783c8e119"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "metadata": {
+                "locator": true
+              },
+              "source": "observation",
+              "status": "active",
+              "text": "The player upgrades 'Coconut Wine' (椰子酒) to '30-Year Aged' (三十年陈).",
+              "time_anchor": [
+                49980,
+                50100
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_a93096376a5dc296ff1ae44e"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "metadata": {
+                "locator": true
+              },
+              "source": "observation",
+              "status": "active",
+              "text": "The player enters the Flaming Mountains (火焰山) area.",
+              "time_anchor": [
+                66304,
+                66310
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c5",
+              "confidence": "high",
+              "derived_from": [
+                "c6"
+              ],
+              "source": "derived",
+              "status": "active",
+              "text": "The location 'Liuliu Village' (榴榴村) is not shown to be entered in the video."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_5b4c7d9344ed23d3b89eb11a"
+              ],
+              "claim_id": "c6",
+              "confidence": "high",
+              "metadata": {
+                "locator": true
+              },
+              "source": "observation",
+              "status": "active",
+              "text": "A search for 'Liuliu Village' (榴榴村) did not return any relevant results showing the player entering this location."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c7",
+              "confidence": "high",
+              "derived_from": [
+                "c3",
+                "c4"
+              ],
+              "source": "derived",
+              "status": "active",
+              "text": "The upgrade of the 'Coconut Wine' occurs before the player enters the Flaming Mountains."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+        "supporting_claim_ids": [
+          "c7",
+          "c5"
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_271ea57ecdfb347783c8e119"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "metadata": {
+                "locator": true
+              },
+              "source": "observation",
+              "status": "active",
+              "text": "The player upgrades 'Coconut Wine' (椰子酒) to '30-Year Aged' (三十年陈).",
+              "time_anchor": [
+                49980,
+                50100
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_a93096376a5dc296ff1ae44e"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "metadata": {
+                "locator": true
+              },
+              "source": "observation",
+              "status": "active",
+              "text": "The player enters the Flaming Mountains (火焰山) area.",
+              "time_anchor": [
+                66304,
+                66310
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c5",
+              "confidence": "high",
+              "derived_from": [
+                "c6"
+              ],
+              "source": "derived",
+              "status": "active",
+              "text": "The location 'Liuliu Village' (榴榴村) is not shown to be entered in the video."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_5b4c7d9344ed23d3b89eb11a"
+              ],
+              "claim_id": "c6",
+              "confidence": "high",
+              "metadata": {
+                "locator": true
+              },
+              "source": "observation",
+              "status": "active",
+              "text": "A search for 'Liuliu Village' (榴榴村) did not return any relevant results showing the player entering this location."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "claim_id": "c7",
+              "confidence": "high",
+              "derived_from": [
+                "c3",
+                "c4"
+              ],
+              "source": "derived",
+              "status": "active",
+              "text": "The upgrade of the 'Coconut Wine' occurs before the player enters the Flaming Mountains."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "895ff462fa091ddb9fa813230b9f213c1914158fa9f93c48fd3037aa8d25dd61",
+      "repair_failed": false,
+      "round": 6,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [
+      "supporting_claims_cite_candidate_or_negative:attempt_271ea57ecdfb347783c8e119,attempt_a93096376a5dc296ff1ae44e,attempt_5b4c7d9344ed23d3b89eb11a"
+    ],
+    "candidate_answer": "The sequence of events described in the question does not occur in the video. The player upgrades the 'Coconut Wine' before entering the Flaming Mountains, and the location 'Liuliu Village' is not visited. Therefore, the number of Sandong Insects at that specific moment cannot be determined.",
+    "case_id": "mmlifelong-game-test-0165",
+    "investigation_count": 3,
+    "reference_reason": "supporting_claims_cite_candidate_or_negative",
+    "reference_valid": false,
+    "residual_uncertainty": "",
+    "rounds": 6,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.16666666666666666,
+      "caption_material_attempts": 3,
+      "caption_occurrence_ambiguous_search_count": 3,
+      "caption_occurrence_candidate_count": 12,
+      "caption_result_dedup_rate": 0.33333333333333337,
+      "caption_result_novelty_rate": 0.6666666666666666,
+      "caption_result_set_reuse_count": 1,
+      "caption_searches": 3,
+      "dedicated_read_rounds": 0,
+      "duplicate_search_count": 1,
+      "empty_search_count": 0,
+      "reference_valid_rate": 0.0,
+      "rounds": 6,
+      "unique_visual_material_attempts": 1,
+      "visual_confirmations": 1,
+      "visual_frames_inspected": 56,
+      "visual_interpretation_count": 1,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c7",
+      "c5"
+    ],
+    "supporting_intervals": [
+      [
+        49980.0,
+        50100.0
+      ],
+      [
+        66304.0,
+        66310.0
+      ]
+    ],
+    "verification_status": "candidate_only",
+    "verified_answer": ""
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_bcaea8723b938c871007597f",
+      "round_id": "2",
+      "sampling_manifest": {
+        "coverage_ratio": 0.973451,
+        "effective_fps": 0.495575,
+        "frame_times": [
+          75187.0,
+          75189.055,
+          75191.109,
+          75193.164,
+          75195.218,
+          75197.273,
+          75199.327,
+          75201.382,
+          75203.436,
+          75205.491,
+          75207.545,
+          75209.6,
+          75211.655,
+          75213.709,
+          75215.764,
+          75217.818,
+          75219.873,
+          75221.927,
+          75223.982,
+          75226.036,
+          75228.091,
+          75230.145,
+          75232.2,
+          75234.255,
+          75236.309,
+          75238.364,
+          75240.418,
+          75242.473,
+          75244.527,
+          75246.582,
+          75248.636,
+          75250.691,
+          75252.745,
+          75254.8,
+          75256.855,
+          75258.909,
+          75260.964,
+          75263.018,
+          75265.073,
+          75267.127,
+          75269.182,
+          75271.236,
+          75273.291,
+          75275.345,
+          75277.4,
+          75279.455,
+          75281.509,
+          75283.564,
+          75285.618,
+          75287.673,
+          75289.727,
+          75291.782,
+          75293.836,
+          75295.891,
+          75297.945,
+          75300.0
+        ],
+        "max_gap": 2.055,
+        "observed_subranges": [
+          [
+            75187.0,
+            75188.0
+          ],
+          [
+            75188.055,
+            75190.055
+          ],
+          [
+            75190.109,
+            75192.109
+          ],
+          [
+            75192.164,
+            75194.164
+          ],
+          [
+            75194.218,
+            75196.218
+          ],
+          [
+            75196.273,
+            75198.273
+          ],
+          [
+            75198.327,
+            75200.327
+          ],
+          [
+            75200.382,
+            75202.382
+          ],
+          [
+            75202.436,
+            75204.436
+          ],
+          [
+            75204.491,
+            75206.491
+          ],
+          [
+            75206.545,
+            75208.545
+          ],
+          [
+            75208.6,
+            75210.6
+          ],
+          [
+            75210.655,
+            75212.655
+          ],
+          [
+            75212.709,
+            75214.709
+          ],
+          [
+            75214.764,
+            75216.764
+          ],
+          [
+            75216.818,
+            75218.818
+          ],
+          [
+            75218.873,
+            75220.873
+          ],
+          [
+            75220.927,
+            75222.927
+          ],
+          [
+            75222.982,
+            75224.982
+          ],
+          [
+            75225.036,
+            75227.036
+          ],
+          [
+            75227.091,
+            75229.091
+          ],
+          [
+            75229.145,
+            75231.145
+          ],
+          [
+            75231.2,
+            75233.2
+          ],
+          [
+            75233.255,
+            75235.255
+          ],
+          [
+            75235.309,
+            75237.309
+          ],
+          [
+            75237.364,
+            75239.364
+          ],
+          [
+            75239.418,
+            75241.418
+          ],
+          [
+            75241.473,
+            75243.473
+          ],
+          [
+            75243.527,
+            75245.527
+          ],
+          [
+            75245.582,
+            75247.582
+          ],
+          [
+            75247.636,
+            75249.636
+          ],
+          [
+            75249.691,
+            75251.691
+          ],
+          [
+            75251.745,
+            75253.745
+          ],
+          [
+            75253.8,
+            75255.8
+          ],
+          [
+            75255.855,
+            75257.855
+          ],
+          [
+            75257.909,
+            75259.909
+          ],
+          [
+            75259.964,
+            75261.964
+          ],
+          [
+            75262.018,
+            75264.018
+          ],
+          [
+            75264.073,
+            75266.073
+          ],
+          [
+            75266.127,
+            75268.127
+          ],
+          [
+            75268.182,
+            75270.182
+          ],
+          [
+            75270.236,
+            75272.236
+          ],
+          [
+            75272.291,
+            75274.291
+          ],
+          [
+            75274.345,
+            75276.345
+          ],
+          [
+            75276.4,
+            75278.4
+          ],
+          [
+            75278.455,
+            75280.455
+          ],
+          [
+            75280.509,
+            75282.509
+          ],
+          [
+            75282.564,
+            75284.564
+          ],
+          [
+            75284.618,
+            75286.618
+          ],
+          [
+            75286.673,
+            75288.673
+          ],
+          [
+            75288.727,
+            75290.727
+          ],
+          [
+            75290.782,
+            75292.782
+          ],
+          [
+            75292.836,
+            75294.836
+          ],
+          [
+            75294.891,
+            75296.891
+          ],
+          [
+            75296.945,
+            75298.945
+          ],
+          [
+            75299.0,
+            75300.0
+          ]
+        ],
+        "requested_fps": 0.5,
+        "requested_range": [
+          75187.0,
+          75300.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.973236
+      },
+      "task_id": "r1_t2"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_a93096376a5dc296ff1ae44e"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_bcaea8723b938c871007597f"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t2_1007597f"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t2",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_271ea57ecdfb347783c8e119"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t3",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 3,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 0,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_5b4c7d9344ed23d3b89eb11a"
+          ],
+          "consumes_budget": false,
+          "evidence_ids": [],
+          "failure_reason": "caption_result_set_has_no_new_material",
+          "query_id": "r1_t4",
+          "reused": true,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 4,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "火焰山",
+            "Flaming Mountains"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t2",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "seg_0028",
+          "source_video_ids": [],
+          "time_range": [
+            75187.0,
+            75300.0
+          ],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 3,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Liuliu Village",
+            "榴榴村",
+            "Coconut Wine",
+            "椰子酒"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t3",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 8
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 4,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Liuliu Village",
+            "榴榴村"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t4",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 5,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t5",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "seg_0019",
+          "source_video_ids": [],
+          "time_range": [
+            49980.0,
+            50100.0
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": []
+}

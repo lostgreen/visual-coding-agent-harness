@@ -1,0 +1,24 @@
+{
+  "case_ids": [
+    "mmlifelong-game-test-0031",
+    "mmlifelong-game-test-0038",
+    "mmlifelong-game-test-0072",
+    "mmlifelong-game-test-0097",
+    "mmlifelong-game-test-0108",
+    "mmlifelong-game-test-0117",
+    "mmlifelong-game-test-0119",
+    "mmlifelong-game-test-0146",
+    "mmlifelong-game-test-0165",
+    "mmlifelong-game-test-0190"
+  ],
+  "excluded_artifacts": [
+    "jpg frames",
+    "full reasoner prompts",
+    "full judge responses",
+    "host-specific frame paths"
+  ],
+  "schema_version": "MGERPhase3DiagnosticFixtureV1",
+  "source_bundle": "VCAH_MGER_cases10_adaptive_74f012d_r1_light_20260804.zip",
+  "source_bundle_sha256": "aadfa8d2dfa86242cee37d715ed0e6ba1d06ea2da023d65a1dd5eb0b7c1b639f",
+  "source_revision": "74f012d-r1"
+}

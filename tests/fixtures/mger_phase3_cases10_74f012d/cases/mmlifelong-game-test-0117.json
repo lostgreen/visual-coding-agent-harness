@@ -1,0 +1,1969 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "After the player is poisoned by Nine-Capped Lingzhi Guai (九叶灵芝精), what obvious change occurs to the body?",
+        "Nine-Capped Lingzhi Guai",
+        "九叶灵芝精",
+        "poisoned by Lingzhi Guai",
+        "中毒"
+      ],
+      "query_fingerprint": "3ffae909fa8bc0e83e66b387411a24c6f5ac85966f4c7ecce622c2d651febae9",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 12
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0117",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 173,
+        "content_chars": 329,
+        "finish_reason": "stop",
+        "prompt_tokens": 516,
+        "provider_request_id": "290864a2a56500d749776d8f25ea62b3",
+        "reasoning_tokens": 98,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 5,
+      "retry_count": 0,
+      "score": 1.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.5,
+      "ref_60": 0.5,
+      "ref_600": 1.0,
+      "reference_intervals": [
+        [
+          71054.0,
+          71157.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [
+        "attempt_b1b3d0c8758324f94c6e0520"
+      ],
+      "errors": [],
+      "passed": true,
+      "reason": "reference_integrity_verified",
+      "round": 4,
+      "supporting_claim_ids": [
+        "c1"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [],
+      "candidate_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0117/observation_log.jsonl",
+      "raw_reasoner_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+      "reference_reason": "reference_integrity_verified",
+      "reference_valid": true,
+      "residual_uncertainty": "The question states the poison comes from 'Nine-Capped Lingzhi Guai (九叶灵芝精)', but observations show this item is the cure for the poisoned state, not the cause.",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c1"
+      ],
+      "supporting_intervals": [
+        [
+          71138.0,
+          71150.0
+        ]
+      ],
+      "type": "answer_outcome",
+      "verification_status": "verified",
+      "verified_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0117/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0117/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000001",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1923.192,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71138.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000002",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1923.708,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71138.516
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000003",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1924.224,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71139.032
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000004",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1924.74,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71139.548
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000005",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1925.257,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71140.065
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000006",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1925.773,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71140.581
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000007",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1926.289,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71141.097
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000008",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1926.805,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71141.613
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000009",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1927.321,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71142.129
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000010",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1927.837,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71142.645
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000011",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1928.353,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71143.161
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000012",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1928.869,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71143.677
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000013",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1929.386,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71144.194
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000014",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1929.902,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71144.71
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000015",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1930.418,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71145.226
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000016",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1930.934,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71145.742
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000017",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1931.45,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71146.258
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000018",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1931.966,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71146.774
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000019",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1932.482,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71147.29
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000020",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1932.998,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71147.806
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000021",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1933.515,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71148.323
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000022",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1934.031,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71148.839
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000023",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1934.547,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71149.355
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000024",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1935.063,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71149.871
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000025",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1935.579,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71150.387
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000026",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1936.095,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71150.903
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000027",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1936.611,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71151.419
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000028",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1937.127,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71151.935
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000029",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1937.644,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71152.452
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000030",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1938.16,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71152.968
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000031",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1938.676,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71153.484
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000032",
+      "query_id": "r1_t1",
+      "sampling_fps": 2.0,
+      "segment_id": "seg_0026",
+      "source_time_sec": 1939.192,
+      "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+      "virtual_time_sec": 71154.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_c0c2ca9721b24bad61681432",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_53dc0fbc153bdaad77e1",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "436019653ce5287fa454",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000182_276d8410b299\", \"dense_score\": 0.40515953302383423, \"fused_score\": 0.026137303556658397, \"interval_precision\": \"anchor\", \"lexical_score\": 14.986167134940745, \"metadata\": {\"dense_rank\": 33, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 5, \"matched_queries\": [\"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\", \"nine-capped lingzhi guai\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0021\"], \"source_video_ids\": [\"021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000182_276d8410b299:p0002\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000182_276d8410b299:p0002\", \"text\": \"The player character engages Zhu Bajie in combat. The boss is large, wielding a nine-toothed rake, and the player uses a staff. The player character successfully parries an attack, stunning the boss momentarily.\", \"virtual_end_sec\": 54631.0, \"virtual_start_sec\": 54616.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000014_a17979ff0023\", \"dense_score\": 0.47158709168434143, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0003\"], \"source_video_ids\": [\"003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000014_a17979ff0023:p0008\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000014_a17979ff0023:p0008\", \"text\": \"After a final, explosive attack, the player defeats Guang Mou. Large black characters spelling \\\"得胜\\\" (Victory) appear on the screen, along with the text \\\"已击败 尖细·广谋\\\" (Defeated Jianxi Guang Mou).\", \"virtual_end_sec\": 4432.0, \"virtual_start_sec\": 4398.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000237_ecbf9bcad4b6\", \"dense_score\": null, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": 122.40597393638863, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\", \"nine-capped lingzhi guai\", \"九叶灵芝精\", \"poisoned by lingzhi guai\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000237_ecbf9bcad4b6:p0002\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000237_ecbf9bcad4b6:p0002\", \"text\": \"After the fight, the warrior approaches a glowing blue flame and interacts with a small, floating creature that emerges from it, which is identified by on-screen text as \\\"九叶灵芝精\\\" (Nine-leaf Ganoderma Spirit).\", \"virtual_end_sec\": 71154.0, \"virtual_start_sec\": 71138.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000166_d429ad3d8319\", \"dense_score\": 0.4658568203449249, \"fused_score\": 0.016129032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000166_d429ad3d8319:p0004\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000166_d429ad3d8319:p0004\", \"text\": \"The character dies and a loading screen appears with Chinese text.\", \"virtual_end_sec\": 49871.0, \"virtual_start_sec\": 49864.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000171_966af8308913\", \"dense_score\": null, \"fused_score\": 0.016129032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": 26.447542391688316, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 2, \"matched_queries\": [\"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\", \"九叶灵芝精\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0020\"], \"source_video_ids\": [\"020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000171_966af8308913:p0008\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000171_966af8308913:p0008\", \"text\": \"After the cutscene, the warrior loots items from the creature's corpse, including \\\"如金钱\\\" (Like Gold Coins) and \\\"灵蕴叶\\\" (Spirit Leaf).\", \"virtual_end_sec\": 51565.0, \"virtual_start_sec\": 51545.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000023_bb11d9c583d4\", \"dense_score\": null, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": 26.224171770269404, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 3, \"matched_queries\": [\"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\", \"nine-capped lingzhi guai\", \"九叶灵芝精\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0004\"], \"source_video_ids\": [\"004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000023_bb11d9c583d4:p0009\", \"rank\": 6, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000023_bb11d9c583d4:p0009\", \"text\": \"The player approaches a shrine with a golden pot, interacts with it, and receives an item called \\\"九转金丹\\\" (Nine Revolutions Golden Elixir).\", \"virtual_end_sec\": 7200.0, \"virtual_start_sec\": 7141.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000077_c9b5fad50372\", \"dense_score\": 0.4615882635116577, \"fused_score\": 0.015873015873015872, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0009\"], \"source_video_ids\": [\"009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000077_c9b5fad50372:p0004\", \"rank\": 7, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000077_c9b5fad50372:p0004\", \"text\": \"The player then upgrades their healing gourd, \\\"老葫芦\\\" (Old Gourd), multiple times, transforming it into \\\"玛瑙葫芦\\\" (Agate Gourd), then \\\"仙药葫芦\\\" (Immortal Medicine Gourd), and finally \\\"玲玉葫芦\\\" (Exquisite Jade Gourd).\", \"virtual_end_sec\": 23160.0, \"virtual_start_sec\": 23145.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000208_9591c71e6519\", \"dense_score\": 0.4586796164512634, \"fused_score\": 0.015625, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0023\"], \"source_video_ids\": [\"023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000208_9591c71e6519:p0003\", \"rank\": 8, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000208_9591c71e6519:p0003\", \"text\": \"After a prolonged battle, the player defeats the boss, and a cutscene begins. The large Chinese characters \\\"通關\\\" (tōng guān), meaning \\\"Level Cleared,\\\" appear on the screen.\", \"virtual_end_sec\": 62476.0, \"virtual_start_sec\": 62470.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000244_840c02872929\", \"dense_score\": null, \"fused_score\": 0.015625, \"interval_precision\": \"anchor\", \"lexical_score\": 23.67612799890251, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 4, \"matched_queries\": [\"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\", \"nine-capped lingzhi guai\", \"九叶灵芝精\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0027\"], \"source_video_ids\": [\"027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000244_840c02872929:p0002\", \"rank\": 9, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000244_840c02872929:p0002\", \"text\": \"The player explores further into the ruins and finds a small altar with a glowing golden pot. Interacting with it yields an item called \\\"九转金丹\\\" (Nine Revolutions Golden Elixir).\", \"virtual_end_sec\": 73264.0, \"virtual_start_sec\": 73251.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000056_9d6b6bb15ddc\", \"dense_score\": 0.45465683937072754, \"fused_score\": 0.015384615384615385, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 5, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0007\"], \"source_video_ids\": [\"007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000056_9d6b6bb15ddc:p0005\", \"rank\": 10, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000056_9d6b6bb15ddc:p0005\", \"text\": \"After the battle, the player character dies and a \\\"Revive\\\" screen appears with Chinese text. The character then respawns in a different, rocky area.\", \"virtual_end_sec\": 16940.0, \"virtual_start_sec\": 16927.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000043_2e7d927565da\", \"dense_score\": null, \"fused_score\": 0.015151515151515152, \"interval_precision\": \"anchor\", \"lexical_score\": 14.712179678176462, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 6, \"matched_queries\": [\"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\", \"九叶灵芝精\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0006\"], \"source_video_ids\": [\"006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000043_2e7d927565da:p0007\", \"rank\": 11, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000043_2e7d927565da:p0007\", \"text\": \"After the monster is defeated, it crumbles into a pile of rocks, and the player gains experience points and an item called \\\"石之精魄\\\" (Stone Essence).\", \"virtual_end_sec\": 13056.0, \"virtual_start_sec\": 13042.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000257_8846234c09c8\", \"dense_score\": 0.4545711874961853, \"fused_score\": 0.015151515151515152, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 6, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000257_8846234c09c8:p0009\", \"rank\": 12, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000257_8846234c09c8:p0009\", \"text\": \"Wukong is knocked to the ground, and Ling Xuzi stomps on him, dealing a significant blow.\", \"virtual_end_sec\": 77400.0, \"virtual_start_sec\": 77395.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 12, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [1], \"max_score\": 0.026137303556658397, \"occurrence_id\": \"occ_8a171f1817e969330713\", \"passage_ids\": [\"cap_000182_276d8410b299:p0002\"], \"query_matches\": [{\"query\": \"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\"}, {\"query\": \"nine-capped lingzhi guai\"}], \"rank\": 1, \"segment_ids\": [\"seg_0021\"], \"source_video_ids\": [\"021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒.\"], \"status\": \"uninspected\", \"time_range\": [54616.0, 54631.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_7c221448a37bb0918b66\", \"passage_ids\": [\"cap_000014_a17979ff0023:p0008\"], \"query_matches\": [], \"rank\": 2, \"segment_ids\": [\"seg_0003\"], \"source_video_ids\": [\"003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-\"], \"status\": \"uninspected\", \"time_range\": [4398.0, 4432.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [3], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_2f58acbfb5f2ab5b8617\", \"passage_ids\": [\"cap_000237_ecbf9bcad4b6:p0002\"], \"query_matches\": [{\"query\": \"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\"}, {\"query\": \"nine-capped lingzhi guai\"}, {\"query\": \"九叶灵芝精\"}, {\"query\": \"poisoned by lingzhi guai\"}], \"rank\": 3, \"segment_ids\": [\"seg_0026\"], \"source_video_ids\": [\"026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳\"], \"status\": \"uninspected\", \"time_range\": [71138.0, 71154.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.016129032258064516, \"occurrence_id\": \"occ_b320e42d306a557d8b96\", \"passage_ids\": [\"cap_000166_d429ad3d8319:p0004\"], \"query_matches\": [], \"rank\": 4, \"segment_ids\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"status\": \"uninspected\", \"time_range\": [49864.0, 49871.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.016129032258064516, \"occurrence_id\": \"occ_12eb28ee6db42f77a331\", \"passage_ids\": [\"cap_000171_966af8308913:p0008\"], \"query_matches\": [{\"query\": \"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\"}, {\"query\": \"九叶灵芝精\"}], \"rank\": 5, \"segment_ids\": [\"seg_0020\"], \"source_video_ids\": [\"020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）\"], \"status\": \"uninspected\", \"time_range\": [51545.0, 51565.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [6], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_7d63f35e7a83541ca39d\", \"passage_ids\": [\"cap_000023_bb11d9c583d4:p0009\"], \"query_matches\": [{\"query\": \"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\"}, {\"query\": \"nine-capped lingzhi guai\"}, {\"query\": \"九叶灵芝精\"}], \"rank\": 6, \"segment_ids\": [\"seg_0004\"], \"source_video_ids\": [\"004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【\"], \"status\": \"uninspected\", \"time_range\": [7141.0, 7200.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [7], \"max_score\": 0.015873015873015872, \"occurrence_id\": \"occ_3fed51eac7a253b26949\", \"passage_ids\": [\"cap_000077_c9b5fad50372:p0004\"], \"query_matches\": [], \"rank\": 7, \"segment_ids\": [\"seg_0009\"], \"source_video_ids\": [\"009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）\"], \"status\": \"uninspected\", \"time_range\": [23145.0, 23160.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [8], \"max_score\": 0.015625, \"occurrence_id\": \"occ_b61c5b7eba6c8c785ebb\", \"passage_ids\": [\"cap_000208_9591c71e6519:p0003\"], \"query_matches\": [], \"rank\": 8, \"segment_ids\": [\"seg_0023\"], \"source_video_ids\": [\"023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月\"], \"status\": \"uninspected\", \"time_range\": [62470.0, 62476.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [9], \"max_score\": 0.015625, \"occurrence_id\": \"occ_15930442c11076cb9ae0\", \"passage_ids\": [\"cap_000244_840c02872929:p0002\"], \"query_matches\": [{\"query\": \"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\"}, {\"query\": \"nine-capped lingzhi guai\"}, {\"query\": \"九叶灵芝精\"}], \"rank\": 9, \"segment_ids\": [\"seg_0027\"], \"source_video_ids\": [\"027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.\"], \"status\": \"uninspected\", \"time_range\": [73251.0, 73264.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [10], \"max_score\": 0.015384615384615385, \"occurrence_id\": \"occ_faef6c06bbbcfd24fc95\", \"passage_ids\": [\"cap_000056_9d6b6bb15ddc:p0005\"], \"query_matches\": [], \"rank\": 10, \"segment_ids\": [\"seg_0007\"], \"source_video_ids\": [\"007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄\"], \"status\": \"uninspected\", \"time_range\": [16927.0, 16940.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [11], \"max_score\": 0.015151515151515152, \"occurrence_id\": \"occ_abde0569c2b87cb478cc\", \"passage_ids\": [\"cap_000043_2e7d927565da:p0007\"], \"query_matches\": [{\"query\": \"after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?\"}, {\"query\": \"九叶灵芝精\"}], \"rank\": 11, \"segment_ids\": [\"seg_0006\"], \"source_video_ids\": [\"006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）\"], \"status\": \"uninspected\", \"time_range\": [13042.0, 13056.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [12], \"max_score\": 0.015151515151515152, \"occurrence_id\": \"occ_da2e293d4122dd10b755\", \"passage_ids\": [\"cap_000257_8846234c09c8:p0009\"], \"query_matches\": [], \"rank\": 12, \"segment_ids\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"status\": \"uninspected\", \"time_range\": [77395.0, 77400.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0117/caption_search/attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 12, \"novel_result_ids\": [\"cap_000182_276d8410b299:p0002\", \"cap_000014_a17979ff0023:p0008\", \"cap_000237_ecbf9bcad4b6:p0002\", \"cap_000166_d429ad3d8319:p0004\", \"cap_000171_966af8308913:p0008\", \"cap_000023_bb11d9c583d4:p0009\", \"cap_000077_c9b5fad50372:p0004\", \"cap_000208_9591c71e6519:p0003\", \"cap_000244_840c02872929:p0002\", \"cap_000056_9d6b6bb15ddc:p0005\", \"cap_000043_2e7d927565da:p0007\", \"cap_000257_8846234c09c8:p0009\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"3ffae909fa8bc0e83e66b387411a24c6f5ac85966f4c7ecce622c2d651febae9\", \"returned_result_count\": 12}, \"search_queries\": [\"After the player is poisoned by Nine-Capped Lingzhi Guai (九叶灵芝精), what obvious change occurs to the body?\", \"Nine-Capped Lingzhi Guai\", \"九叶灵芝精\", \"poisoned by Lingzhi Guai\", \"中毒\"], \"summary\": \"Caption search: 12 hits\\n1. [15:10:16-15:10:31] score=0.0261 passage=cap_000182_276d8410b299:p0002\\n   \\\"The player character engages Zhu Bajie in combat. The boss is large, wielding a nine-toothed rake, and the player uses a staff. The player character successfully parries an attack, stunning the boss momentarily.\\\"\\n   matched queries: after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?; nine-capped lingzhi guai\\n2. [01:13:18-01:13:52] score=0.0164 passage=cap_000014_a17979ff0023:p0008\\n   \\\"After a final, explosive attack, the player defeats Guang Mou. Large black characters spelling \\\"得胜\\\" (Victory) appear on the screen, along with the text \\\"已击败 尖细·广谋\\\" (Defeated Jianxi Guang Mou).\\\"\\n3. [19:45:38-19:45:54] score=0.0164 passage=cap_000237_ecbf9bcad4b6:p0002\\n   \\\"After the fight, the warrior approaches a glowing blue flame and interacts with a small, floating creature that emerges from it, which is identified by on-screen text as \\\"九叶灵芝精\\\" (Nine-leaf Ganoderma Spirit).\\\"\\n   matched queries: after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?; nine-capped lingzhi guai; 九叶灵芝精; poisoned by lingzhi guai\\n4. [13:51:04-13:51:11] score=0.0161 passage=cap_000166_d429ad3d8319:p0004\\n   \\\"The character dies and a loading screen appears with Chinese text.\\\"\\n5. [14:19:05-14:19:25] score=0.0161 passage=cap_000171_966af8308913:p0008\\n   \\\"After the cutscene, the warrior loots items from the creature's corpse, including \\\"如金钱\\\" (Like Gold Coins) and \\\"灵蕴叶\\\" (Spirit Leaf).\\\"\\n   matched queries: after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?; 九叶灵芝精\\n6. [01:59:01-02:00:00] score=0.0159 passage=cap_000023_bb11d9c583d4:p0009\\n7. [06:25:45-06:26:00] score=0.0159 passage=cap_000077_c9b5fad50372:p0004\\n8. [17:21:10-17:21:16] score=0.0156 passage=cap_000208_9591c71e6519:p0003\\n9. [20:20:51-20:21:04] score=0.0156 passage=cap_000244_840c02872929:p0002\\n10. [04:42:07-04:42:20] score=0.0154 passage=cap_000056_9d6b6bb15ddc:p0005\\n11. [03:37:22-03:37:36] score=0.0152 passage=cap_000043_2e7d927565da:p0007\\n12. [21:29:55-21:30:00] score=0.0152 passage=cap_000257_8846234c09c8:p0009\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000182_276d8410b299:p0002",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000014_a17979ff0023:p0008",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000237_ecbf9bcad4b6:p0002",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000166_d429ad3d8319:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000171_966af8308913:p0008",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000023_bb11d9c583d4:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000077_c9b5fad50372:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000208_9591c71e6519:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000244_840c02872929:p0002",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000056_9d6b6bb15ddc:p0005",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000043_2e7d927565da:p0007",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000257_8846234c09c8:p0009"
+          ],
+          "passage_ids": [
+            "cap_000182_276d8410b299:p0002",
+            "cap_000014_a17979ff0023:p0008",
+            "cap_000237_ecbf9bcad4b6:p0002",
+            "cap_000166_d429ad3d8319:p0004",
+            "cap_000171_966af8308913:p0008",
+            "cap_000023_bb11d9c583d4:p0009",
+            "cap_000077_c9b5fad50372:p0004",
+            "cap_000208_9591c71e6519:p0003",
+            "cap_000244_840c02872929:p0002",
+            "cap_000056_9d6b6bb15ddc:p0005",
+            "cap_000043_2e7d927565da:p0007",
+            "cap_000257_8846234c09c8:p0009"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "After the player is poisoned by Nine-Capped Lingzhi Guai (九叶灵芝精), what obvious change occurs to the body?",
+          "Nine-Capped Lingzhi Guai",
+          "九叶灵芝精",
+          "poisoned by Lingzhi Guai",
+          "中毒"
+        ],
+        "query_fingerprint": "3ffae909fa8bc0e83e66b387411a24c6f5ac85966f4c7ecce622c2d651febae9",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 12,
+          "novel_result_ids": [
+            "cap_000182_276d8410b299:p0002",
+            "cap_000014_a17979ff0023:p0008",
+            "cap_000237_ecbf9bcad4b6:p0002",
+            "cap_000166_d429ad3d8319:p0004",
+            "cap_000171_966af8308913:p0008",
+            "cap_000023_bb11d9c583d4:p0009",
+            "cap_000077_c9b5fad50372:p0004",
+            "cap_000208_9591c71e6519:p0003",
+            "cap_000244_840c02872929:p0002",
+            "cap_000056_9d6b6bb15ddc:p0005",
+            "cap_000043_2e7d927565da:p0007",
+            "cap_000257_8846234c09c8:p0009"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "3ffae909fa8bc0e83e66b387411a24c6f5ac85966f4c7ecce622c2d651febae9",
+          "returned_result_count": 12
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒.",
+          "003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-",
+          "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+          "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+          "020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）",
+          "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+          "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+          "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月",
+          "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+          "007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄",
+          "006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）",
+          "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金"
+        ],
+        "time_range": null,
+        "top_k": 12
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒.",
+        "003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+        "020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）",
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+        "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月",
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+        "007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄",
+        "006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）",
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金"
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_b1b3d0c8758324f94c6e0520",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        71138.0,
+        71138.516,
+        71139.032,
+        71139.548,
+        71140.065,
+        71140.581,
+        71141.097,
+        71141.613,
+        71142.129,
+        71142.645,
+        71143.161,
+        71143.677,
+        71144.194,
+        71144.71,
+        71145.226,
+        71145.742,
+        71146.258,
+        71146.774,
+        71147.29,
+        71147.806,
+        71148.323,
+        71148.839,
+        71149.355,
+        71149.871,
+        71150.387,
+        71150.903,
+        71151.419,
+        71151.935,
+        71152.452,
+        71152.968,
+        71153.484,
+        71154.0
+      ],
+      "inspected_ranges": [
+        [
+          71138.0,
+          71138.25
+        ],
+        [
+          71138.266,
+          71138.766
+        ],
+        [
+          71138.782,
+          71139.282
+        ],
+        [
+          71139.298,
+          71139.798
+        ],
+        [
+          71139.815,
+          71140.315
+        ],
+        [
+          71140.331,
+          71140.831
+        ],
+        [
+          71140.847,
+          71141.347
+        ],
+        [
+          71141.363,
+          71141.863
+        ],
+        [
+          71141.879,
+          71142.379
+        ],
+        [
+          71142.395,
+          71142.895
+        ],
+        [
+          71142.911,
+          71143.411
+        ],
+        [
+          71143.427,
+          71143.927
+        ],
+        [
+          71143.944,
+          71144.444
+        ],
+        [
+          71144.46,
+          71144.96
+        ],
+        [
+          71144.976,
+          71145.476
+        ],
+        [
+          71145.492,
+          71145.992
+        ],
+        [
+          71146.008,
+          71146.508
+        ],
+        [
+          71146.524,
+          71147.024
+        ],
+        [
+          71147.04,
+          71147.54
+        ],
+        [
+          71147.556,
+          71148.056
+        ],
+        [
+          71148.073,
+          71148.573
+        ],
+        [
+          71148.589,
+          71149.089
+        ],
+        [
+          71149.105,
+          71149.605
+        ],
+        [
+          71149.621,
+          71150.121
+        ],
+        [
+          71150.137,
+          71150.637
+        ],
+        [
+          71150.653,
+          71151.153
+        ],
+        [
+          71151.169,
+          71151.669
+        ],
+        [
+          71151.685,
+          71152.185
+        ],
+        [
+          71152.202,
+          71152.702
+        ],
+        [
+          71152.718,
+          71153.218
+        ],
+        [
+          71153.234,
+          71153.734
+        ],
+        [
+          71153.75,
+          71154.0
+        ]
+      ],
+      "interpretation_id": "interpretation_853037f48f3a1742b4b5",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "e2b2b4becdb37b45f367",
+      "raw_output": "```json\n{\n  \"summary\": \"A player character, initially covered in red mushroom-like growths, interacts with a floating entity labeled '九叶灵芝草种子' (Nine-leaf Lingzhi Grass Seed). After the interaction, the red growths on the character's body disappear, and a new item labeled '九叶灵芝精' (Nine-leaf Lingzhi Essence) appears in the UI. The character then moves towards a small shrine.\",\n  \"observations\": [\n    {\n      \"time_sec\": 71138.0,\n      \"description\": \"The player character, covered in red mushroom-like growths, stands in a rocky, grey landscape.\"\n    },\n    {\n      \"time_sec\": 71140.065,\n      \"description\": \"A small, white, glowing entity with a blue aura appears in front of the player character.\"\n    },\n    {\n      \"time_sec\": 71144.71,\n      \"description\": \"A UI element appears on the right side of the screen with the text '九叶灵芝草种子' (Nine-leaf Lingzhi Grass Seed) and '种子' (Seed) below it. A small, round, brown object with a glowing blue core floats above the white entity.\"\n    },\n    {\n      \"time_sec\": 71146.774,\n      \"description\": \"A blue beam of light connects the floating object to the player character's head.\"\n    },\n    {\n      \"time_sec\": 71150.387,\n      \"description\": \"The floating object and the white entity disappear. The red mushroom-like growths on the player character's body are gone.\"\n    },\n    {\n      \"time_sec\": 71150.903,\n      \"description\": \"A new UI element appears on the right side of the screen with the text '九叶灵芝精' (Nine-leaf Lingzhi Essence) and '精魄' (Essence) below it.\"\n    },\n    {\n      \"time_sec\": 71154.0,\n      \"description\": \"The player character, now free of the red growths, approaches a small, lit shrine in a darker, volcanic-looking area.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid figure wearing armor and carrying a staff. Initially covered in bright red, mushroom-like growths, which later disappear.\"\n    },\n    {\n      \"name\": \"九叶灵芝草种子 (Nine-leaf Lingzhi Grass Seed)\",\n      \"description\": \"A small, round, brown object with a glowing blue core that floats in the air. It is associated with a small, white, glowing entity with a blue aura.\"\n    },\n    {\n      \"name\": \"九叶灵芝精 (Nine-leaf Lingzhi Essence)\",\n      \"description\": \"An item that appears in the UI after the interaction with the '九叶灵芝草种子'. It is represented by an icon of a red mushroom-like figure.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        71138.0,\n        71150.387\n      ],\n      \"description\": \"The player character's body is covered in red mushroom-like growths.\"\n    },\n    {\n      \"time_range\": [\n        71146.774,\n        71150.387\n      ],\n      \"description\": \"The '九叶灵芝草种子' (Nine-leaf Lingzhi Grass Seed) sends a beam of light into the player character.\"\n    },\n    {\n      \"time_range\": [\n        71150.387,\n        71150.903\n      ],\n      \"description\": \"The red mushroom-like growths on the player character's body disappear.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The relationship between '九叶灵芝草种子' (Nine-leaf Lingzhi Grass Seed) and '九叶灵芝精' (Nine-leaf Lingzhi Essence) is not explicitly stated, only that the latter appears after interacting with the former.\",\n    \"The term 'poisoned' is from the user's question; the visual evidence shows the character covered in growths, but does not explicitly label this state as 'poisoned'.\"\n  ]\n}\n```",
+      "requested_range": [
+        71138.0,
+        71154.0
+      ],
+      "round_id": "2",
+      "sampling_config": {
+        "fps": 2.0,
+        "max_frames": 32,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.96875,
+          "effective_fps": 2.0,
+          "frame_times": [
+            71138.0,
+            71138.516,
+            71139.032,
+            71139.548,
+            71140.065,
+            71140.581,
+            71141.097,
+            71141.613,
+            71142.129,
+            71142.645,
+            71143.161,
+            71143.677,
+            71144.194,
+            71144.71,
+            71145.226,
+            71145.742,
+            71146.258,
+            71146.774,
+            71147.29,
+            71147.806,
+            71148.323,
+            71148.839,
+            71149.355,
+            71149.871,
+            71150.387,
+            71150.903,
+            71151.419,
+            71151.935,
+            71152.452,
+            71152.968,
+            71153.484,
+            71154.0
+          ],
+          "max_gap": 0.517,
+          "observed_subranges": [
+            [
+              71138.0,
+              71138.25
+            ],
+            [
+              71138.266,
+              71138.766
+            ],
+            [
+              71138.782,
+              71139.282
+            ],
+            [
+              71139.298,
+              71139.798
+            ],
+            [
+              71139.815,
+              71140.315
+            ],
+            [
+              71140.331,
+              71140.831
+            ],
+            [
+              71140.847,
+              71141.347
+            ],
+            [
+              71141.363,
+              71141.863
+            ],
+            [
+              71141.879,
+              71142.379
+            ],
+            [
+              71142.395,
+              71142.895
+            ],
+            [
+              71142.911,
+              71143.411
+            ],
+            [
+              71143.427,
+              71143.927
+            ],
+            [
+              71143.944,
+              71144.444
+            ],
+            [
+              71144.46,
+              71144.96
+            ],
+            [
+              71144.976,
+              71145.476
+            ],
+            [
+              71145.492,
+              71145.992
+            ],
+            [
+              71146.008,
+              71146.508
+            ],
+            [
+              71146.524,
+              71147.024
+            ],
+            [
+              71147.04,
+              71147.54
+            ],
+            [
+              71147.556,
+              71148.056
+            ],
+            [
+              71148.073,
+              71148.573
+            ],
+            [
+              71148.589,
+              71149.089
+            ],
+            [
+              71149.105,
+              71149.605
+            ],
+            [
+              71149.621,
+              71150.121
+            ],
+            [
+              71150.137,
+              71150.637
+            ],
+            [
+              71150.653,
+              71151.153
+            ],
+            [
+              71151.169,
+              71151.669
+            ],
+            [
+              71151.685,
+              71152.185
+            ],
+            [
+              71152.202,
+              71152.702
+            ],
+            [
+              71152.718,
+              71153.218
+            ],
+            [
+              71153.234,
+              71153.734
+            ],
+            [
+              71153.75,
+              71154.0
+            ]
+          ],
+          "requested_fps": 2.0,
+          "requested_range": [
+            71138.0,
+            71154.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.968992
+        }
+      },
+      "sampling_fps": 2.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0026",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳.mp4",
+          "source_time_range": [
+            1923.192,
+            1939.192
+          ],
+          "source_video_id": "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+          "virtual_time_range": [
+            71138.0,
+            71154.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "task_id": "r1_t1"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        1
+      ],
+      "max_score": 0.026137303556658397,
+      "occurrence_id": "occ_8a171f1817e969330713",
+      "passage_ids": [
+        "cap_000182_276d8410b299:p0002"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?"
+        },
+        {
+          "query": "nine-capped lingzhi guai"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0021"
+      ],
+      "source_video_ids": [
+        "021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        54616.0,
+        54631.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_7c221448a37bb0918b66",
+      "passage_ids": [
+        "cap_000014_a17979ff0023:p0008"
+      ],
+      "query_matches": [],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0003"
+      ],
+      "source_video_ids": [
+        "003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        4398.0,
+        4432.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        3
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_2f58acbfb5f2ab5b8617",
+      "passage_ids": [
+        "cap_000237_ecbf9bcad4b6:p0002"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?"
+        },
+        {
+          "query": "nine-capped lingzhi guai"
+        },
+        {
+          "query": "九叶灵芝精"
+        },
+        {
+          "query": "poisoned by lingzhi guai"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0026"
+      ],
+      "source_video_ids": [
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        71138.0,
+        71154.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.016129032258064516,
+      "occurrence_id": "occ_b320e42d306a557d8b96",
+      "passage_ids": [
+        "cap_000166_d429ad3d8319:p0004"
+      ],
+      "query_matches": [],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0019"
+      ],
+      "source_video_ids": [
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        49864.0,
+        49871.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.016129032258064516,
+      "occurrence_id": "occ_12eb28ee6db42f77a331",
+      "passage_ids": [
+        "cap_000171_966af8308913:p0008"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?"
+        },
+        {
+          "query": "九叶灵芝精"
+        }
+      ],
+      "rank": 5,
+      "segment_ids": [
+        "seg_0020"
+      ],
+      "source_video_ids": [
+        "020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        51545.0,
+        51565.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        6
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_7d63f35e7a83541ca39d",
+      "passage_ids": [
+        "cap_000023_bb11d9c583d4:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?"
+        },
+        {
+          "query": "nine-capped lingzhi guai"
+        },
+        {
+          "query": "九叶灵芝精"
+        }
+      ],
+      "rank": 6,
+      "segment_ids": [
+        "seg_0004"
+      ],
+      "source_video_ids": [
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        7141.0,
+        7200.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        7
+      ],
+      "max_score": 0.015873015873015872,
+      "occurrence_id": "occ_3fed51eac7a253b26949",
+      "passage_ids": [
+        "cap_000077_c9b5fad50372:p0004"
+      ],
+      "query_matches": [],
+      "rank": 7,
+      "segment_ids": [
+        "seg_0009"
+      ],
+      "source_video_ids": [
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        23145.0,
+        23160.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        8
+      ],
+      "max_score": 0.015625,
+      "occurrence_id": "occ_b61c5b7eba6c8c785ebb",
+      "passage_ids": [
+        "cap_000208_9591c71e6519:p0003"
+      ],
+      "query_matches": [],
+      "rank": 8,
+      "segment_ids": [
+        "seg_0023"
+      ],
+      "source_video_ids": [
+        "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        62470.0,
+        62476.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        9
+      ],
+      "max_score": 0.015625,
+      "occurrence_id": "occ_15930442c11076cb9ae0",
+      "passage_ids": [
+        "cap_000244_840c02872929:p0002"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?"
+        },
+        {
+          "query": "nine-capped lingzhi guai"
+        },
+        {
+          "query": "九叶灵芝精"
+        }
+      ],
+      "rank": 9,
+      "segment_ids": [
+        "seg_0027"
+      ],
+      "source_video_ids": [
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        73251.0,
+        73264.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        10
+      ],
+      "max_score": 0.015384615384615385,
+      "occurrence_id": "occ_faef6c06bbbcfd24fc95",
+      "passage_ids": [
+        "cap_000056_9d6b6bb15ddc:p0005"
+      ],
+      "query_matches": [],
+      "rank": 10,
+      "segment_ids": [
+        "seg_0007"
+      ],
+      "source_video_ids": [
+        "007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        16927.0,
+        16940.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        11
+      ],
+      "max_score": 0.015151515151515152,
+      "occurrence_id": "occ_abde0569c2b87cb478cc",
+      "passage_ids": [
+        "cap_000043_2e7d927565da:p0007"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player is poisoned by nine-capped lingzhi guai (九叶灵芝精), what obvious change occurs to the body?"
+        },
+        {
+          "query": "九叶灵芝精"
+        }
+      ],
+      "rank": 11,
+      "segment_ids": [
+        "seg_0006"
+      ],
+      "source_video_ids": [
+        "006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        13042.0,
+        13056.0
+      ]
+    },
+    {
+      "artifact": "attempt_c0c2ca9721b24bad61681432.3ffae909fa8b.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        12
+      ],
+      "max_score": 0.015151515151515152,
+      "occurrence_id": "occ_da2e293d4122dd10b755",
+      "passage_ids": [
+        "cap_000257_8846234c09c8:p0009"
+      ],
+      "query_matches": [],
+      "rank": 12,
+      "segment_ids": [
+        "seg_0029"
+      ],
+      "source_video_ids": [
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        77395.0,
+        77400.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+    "case_id": "mmlifelong-game-test-0117",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 117,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [
+      "attempt_b1b3d0c8758324f94c6e0520"
+    ],
+    "supporting_intervals": [
+      [
+        71138.0,
+        71150.0
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths."
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 246,
+        "content_chars": 498,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9642,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "9974f9e191fe2e3b998db44f6ce17e6b",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 70,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Nine-Capped Lingzhi Guai",
+              "九叶灵芝精",
+              "poisoned by Lingzhi Guai",
+              "中毒"
+            ],
+            "goal": "Find the moment the player is poisoned by Nine-Capped Lingzhi Guai (九叶灵芝精) and observe the subsequent effect on the player's body.",
+            "index_mode": "hybrid",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 12
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Nine-Capped Lingzhi Guai",
+              "九叶灵芝精",
+              "poisoned by Lingzhi Guai",
+              "中毒"
+            ],
+            "goal": "Find the moment the player is poisoned by Nine-Capped Lingzhi Guai (九叶灵芝精) and observe the subsequent effect on the player's body.",
+            "index_mode": "hybrid",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 12
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "10dfe82173f56df7d4bdeb8d369e5c06902224a5458093d580f095a84b4e1540",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 389,
+        "content_chars": 1092,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 19062,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "2789cc4b9247ecb39b3e6bd5c170320a",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 89,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the interaction with 'Nine-Capped Lingzhi Guai' and observe the effect on the player's body.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              71138,
+              71154
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the interaction with 'Nine-Capped Lingzhi Guai' and observe the effect on the player's body.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "sampling_floor_fps": 2,
+            "time_range": [
+              71138,
+              71154
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "28b994e30009c0e170a6e9bd47ab6dfbfa6fba64863d20fedb4de3950d20b97e",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1059,
+        "content_chars": 3629,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 20865,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "8f16adc80a9600904950895a375acc8e",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 78,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_b1b3d0c8758324f94c6e0520"
+              ],
+              "claim_id": "c1",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "When the player is in a state described as being 'poisoned', their body is covered in red, mushroom-like growths.",
+              "time_anchor": [
+                71138,
+                71150
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_b1b3d0c8758324f94c6e0520"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The player character is cured of the red mushroom-like growths after interacting with an entity called '九叶灵芝草种子' (Nine-leaf Lingzhi Grass Seed) and acquiring '九叶灵芝精' (Nine-leaf Lingzhi Essence).",
+              "time_anchor": [
+                71144,
+                71151
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c1",
+              "c2"
+            ],
+            "label": "Player is covered in red mushroom-like growths, which are then removed.",
+            "op": "note_interval",
+            "role": "supporting",
+            "time_range": [
+              71138,
+              71154
+            ]
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "update_workspace",
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_b1b3d0c8758324f94c6e0520"
+              ],
+              "claim_id": "c1",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "When the player is in a state described as being 'poisoned', their body is covered in red, mushroom-like growths.",
+              "time_anchor": [
+                71138,
+                71150
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_b1b3d0c8758324f94c6e0520"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "The player character is cured of the red mushroom-like growths after interacting with an entity called '九叶灵芝草种子' (Nine-leaf Lingzhi Grass Seed) and acquiring '九叶灵芝精' (Nine-leaf Lingzhi Essence).",
+              "time_anchor": [
+                71144,
+                71151
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim_ids": [
+              "c1",
+              "c2"
+            ],
+            "label": "Player is covered in red mushroom-like growths, which are then removed.",
+            "op": "note_interval",
+            "role": "supporting",
+            "time_range": [
+              71138,
+              71154
+            ]
+          }
+        ]
+      },
+      "raw_sha256": "c5624d25de7d8aff31d0b1f4d4a52cba3b99cc516bdf8fa3129fb9eef27739f8",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 539,
+        "content_chars": 1783,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 19489,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "cb92139e722ce7b48432771e0102e84d",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 75,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+        "residual_uncertainty": "The question states the poison comes from 'Nine-Capped Lingzhi Guai (九叶灵芝精)', but observations show this item is the cure for the poisoned state, not the cause.",
+        "supporting_claim_ids": [
+          "c1"
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+        "residual_uncertainty": "The question states the poison comes from 'Nine-Capped Lingzhi Guai (九叶灵芝精)', but observations show this item is the cure for the poisoned state, not the cause.",
+        "supporting_claim_ids": [
+          "c1"
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "f65195f63a0339d0d6609d742f15d2dd0cf0759fc288358cdae26e9010c692fa",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [],
+    "candidate_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths.",
+    "case_id": "mmlifelong-game-test-0117",
+    "investigation_count": 2,
+    "reference_reason": "reference_integrity_verified",
+    "reference_valid": true,
+    "residual_uncertainty": "The question states the poison comes from 'Nine-Capped Lingzhi Guai (九叶灵芝精)', but observations show this item is the cure for the poisoned state, not the cause.",
+    "rounds": 4,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.08333333333333333,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 12,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 0,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 1.0,
+      "rounds": 4,
+      "unique_visual_material_attempts": 1,
+      "visual_confirmations": 1,
+      "visual_frames_inspected": 32,
+      "visual_interpretation_count": 1,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c1"
+    ],
+    "supporting_intervals": [
+      [
+        71138.0,
+        71150.0
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "After being poisoned, the player character's body becomes covered in red, mushroom-like growths."
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_b1b3d0c8758324f94c6e0520",
+      "round_id": "2",
+      "sampling_manifest": {
+        "coverage_ratio": 0.96875,
+        "effective_fps": 2.0,
+        "frame_times": [
+          71138.0,
+          71138.516,
+          71139.032,
+          71139.548,
+          71140.065,
+          71140.581,
+          71141.097,
+          71141.613,
+          71142.129,
+          71142.645,
+          71143.161,
+          71143.677,
+          71144.194,
+          71144.71,
+          71145.226,
+          71145.742,
+          71146.258,
+          71146.774,
+          71147.29,
+          71147.806,
+          71148.323,
+          71148.839,
+          71149.355,
+          71149.871,
+          71150.387,
+          71150.903,
+          71151.419,
+          71151.935,
+          71152.452,
+          71152.968,
+          71153.484,
+          71154.0
+        ],
+        "max_gap": 0.517,
+        "observed_subranges": [
+          [
+            71138.0,
+            71138.25
+          ],
+          [
+            71138.266,
+            71138.766
+          ],
+          [
+            71138.782,
+            71139.282
+          ],
+          [
+            71139.298,
+            71139.798
+          ],
+          [
+            71139.815,
+            71140.315
+          ],
+          [
+            71140.331,
+            71140.831
+          ],
+          [
+            71140.847,
+            71141.347
+          ],
+          [
+            71141.363,
+            71141.863
+          ],
+          [
+            71141.879,
+            71142.379
+          ],
+          [
+            71142.395,
+            71142.895
+          ],
+          [
+            71142.911,
+            71143.411
+          ],
+          [
+            71143.427,
+            71143.927
+          ],
+          [
+            71143.944,
+            71144.444
+          ],
+          [
+            71144.46,
+            71144.96
+          ],
+          [
+            71144.976,
+            71145.476
+          ],
+          [
+            71145.492,
+            71145.992
+          ],
+          [
+            71146.008,
+            71146.508
+          ],
+          [
+            71146.524,
+            71147.024
+          ],
+          [
+            71147.04,
+            71147.54
+          ],
+          [
+            71147.556,
+            71148.056
+          ],
+          [
+            71148.073,
+            71148.573
+          ],
+          [
+            71148.589,
+            71149.089
+          ],
+          [
+            71149.105,
+            71149.605
+          ],
+          [
+            71149.621,
+            71150.121
+          ],
+          [
+            71150.137,
+            71150.637
+          ],
+          [
+            71150.653,
+            71151.153
+          ],
+          [
+            71151.169,
+            71151.669
+          ],
+          [
+            71151.685,
+            71152.185
+          ],
+          [
+            71152.202,
+            71152.702
+          ],
+          [
+            71152.718,
+            71153.218
+          ],
+          [
+            71153.234,
+            71153.734
+          ],
+          [
+            71153.75,
+            71154.0
+          ]
+        ],
+        "requested_fps": 2.0,
+        "requested_range": [
+          71138.0,
+          71154.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.968992
+      },
+      "task_id": "r1_t1"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_c0c2ca9721b24bad61681432"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_b1b3d0c8758324f94c6e0520"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t1_4c6e0520"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Nine-Capped Lingzhi Guai",
+            "九叶灵芝精",
+            "poisoned by Lingzhi Guai",
+            "中毒"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "hybrid",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 2.0,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [
+            71138.0,
+            71154.0
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": []
+}

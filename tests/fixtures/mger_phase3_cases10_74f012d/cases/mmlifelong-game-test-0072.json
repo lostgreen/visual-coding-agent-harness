@@ -1,0 +1,1734 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_c54e89b58bdf78414b0e5c5f.48d46526c988.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "Which Foundation (根器) does the player unlock upon clearing Chapter 4? 1. Envious Tongue (舌尝思) 2. Fuming Ears (耳听怒) 3. Hubris Nose (鼻嗅爱) 4. Craving Eyes (眼看喜) 5. Grieved Body (身本忧)",
+        "Foundation",
+        "根器",
+        "unlock"
+      ],
+      "query_fingerprint": "48d46526c98840fca9281deffb35f1a0438f56e2df99a784bdc48af64e8c9e89",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": [
+        47031.0,
+        47631.0
+      ],
+      "top_k": 12
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0072",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 129,
+        "content_chars": 284,
+        "finish_reason": "stop",
+        "prompt_tokens": 557,
+        "provider_request_id": "1f9f4ec01313f657240914e0401d1c91",
+        "reasoning_tokens": 60,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 0,
+      "retry_count": 0,
+      "score": 0.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.0,
+      "ref_60": 0.0,
+      "ref_600": 0.0,
+      "reference_intervals": [
+        [
+          62841.0,
+          62890.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "cited_attempt_ids": [
+        "attempt_52bca060574e260fc26d7640"
+      ],
+      "errors": [],
+      "passed": true,
+      "reason": "reference_integrity_verified",
+      "round": 6,
+      "supporting_claim_ids": [
+        "c4"
+      ],
+      "type": "reference_integrity_check"
+    },
+    {
+      "answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": true,
+      "blocking_reasons": [],
+      "candidate_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0072/observation_log.jsonl",
+      "raw_reasoner_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+      "reference_reason": "reference_integrity_verified",
+      "reference_valid": true,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [
+        "c4"
+      ],
+      "supporting_intervals": [
+        [
+          63134.075,
+          63135.075
+        ]
+      ],
+      "type": "answer_outcome",
+      "verification_status": "verified",
+      "verified_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0072/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0072/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000001",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 0.0,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44573.186
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000002",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 1.227,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44574.413
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000003",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 2.454,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44575.64
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000004",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 3.68,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44576.866
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000005",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 4.907,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44578.093
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000006",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 6.134,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44579.32
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000007",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 7.36,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44580.546
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000008",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 8.587,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44581.773
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t3_000009",
+      "query_id": "r1_t3",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0018",
+      "source_time_sec": 9.814,
+      "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+      "virtual_time_sec": 44583.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000001",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 0.0,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63133.464
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000002",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 1.111,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63134.575
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000003",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 2.222,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63135.686
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000004",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 3.333,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63136.797
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000005",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 4.444,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63137.908
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000006",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 5.556,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63139.02
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000007",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 6.667,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63140.131
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000008",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 7.778,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63141.242
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000009",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 8.889,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63142.353
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t4_000010",
+      "query_id": "r1_t4",
+      "sampling_fps": 1.0,
+      "segment_id": "seg_0024",
+      "source_time_sec": 10.0,
+      "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+      "virtual_time_sec": 63143.464
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_c54e89b58bdf78414b0e5c5f",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_1dd6c7cf5049463c997e",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "40751e22576d05a66396",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000158_3f04d6751207\", \"dense_score\": 0.3863908350467682, \"fused_score\": 0.031754032258064516, \"interval_precision\": \"anchor\", \"lexical_score\": 4.661332288103765, \"metadata\": {\"dense_rank\": 2, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 4, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000158_3f04d6751207:p0005\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000158_3f04d6751207:p0005\", \"text\": \"After clearing the area, the character drops down to a lower level and fights another enemy that emerges from the ground.\", \"virtual_end_sec\": 47507.0, \"virtual_start_sec\": 47493.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000157_ff2a93f63dc8\", \"dense_score\": 0.3418121039867401, \"fused_score\": 0.031746031746031744, \"interval_precision\": \"anchor\", \"lexical_score\": 6.4878976875338665, \"metadata\": {\"dense_rank\": 3, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 3, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\", \"seg_0019\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\", \"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000157_ff2a93f63dc8:p0003\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0003\", \"text\": \"The player enters a small building and approaches a golden, turtle-shaped container on a table. Upon interaction, the container opens, releasing a spirit and granting the player an item called \\\"血虷子\\\".\", \"virtual_end_sec\": 47186.0, \"virtual_start_sec\": 47149.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000157_ff2a93f63dc8\", \"dense_score\": 0.46321535110473633, \"fused_score\": 0.031099324975891997, \"interval_precision\": \"anchor\", \"lexical_score\": 2.9618363471728495, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 8, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\", \"seg_0019\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\", \"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000157_ff2a93f63dc8:p0001\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0001\", \"text\": \"The player opens a map, revealing an illustrated layout of the current area, which is labeled in Chinese characters as \\\"盘丝岭\\\" and \\\"盘丝洞\\\".\", \"virtual_end_sec\": 47128.0, \"virtual_start_sec\": 47108.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000157_ff2a93f63dc8\", \"dense_score\": 0.29013487696647644, \"fused_score\": 0.030886196246139225, \"interval_precision\": \"anchor\", \"lexical_score\": 7.728814184767135, \"metadata\": {\"dense_rank\": 9, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\", \"seg_0019\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\", \"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000157_ff2a93f63dc8:p0007\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0007\", \"text\": \"After clearing the spiders, the player opens a large wooden chest inside the building, which emits a bright golden light and yields several items.\", \"virtual_end_sec\": 47305.0, \"virtual_start_sec\": 47265.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000156_aad7b2b1d86f\", \"dense_score\": 0.3376651704311371, \"fused_score\": 0.03055037313432836, \"interval_precision\": \"anchor\", \"lexical_score\": 3.022520712508727, \"metadata\": {\"dense_rank\": 4, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 7, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000156_aad7b2b1d86f:p0009\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000156_aad7b2b1d86f:p0009\", \"text\": \"After a brief but intense battle, the player defeats the giant worm creature, which collapses. The player receives a golden item called \\\"玲珑内丹\\\" (Exquisite Inner Elixir) and opens a large wooden chest to collect more loot.\", \"virtual_end_sec\": 47100.0, \"virtual_start_sec\": 47018.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000158_3f04d6751207\", \"dense_score\": 0.3170643448829651, \"fused_score\": 0.028258706467661692, \"interval_precision\": \"anchor\", \"lexical_score\": 0.06461553139240236, \"metadata\": {\"dense_rank\": 7, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 15, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000158_3f04d6751207:p0002\", \"rank\": 6, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000158_3f04d6751207:p0002\", \"text\": \"After defeating the first enemy, the character continues through the cave, fighting another similar creature on a set of broken stone stairs.\", \"virtual_end_sec\": 47425.0, \"virtual_start_sec\": 47412.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000158_3f04d6751207\", \"dense_score\": 0.2526347041130066, \"fused_score\": 0.027984344422700584, \"interval_precision\": \"anchor\", \"lexical_score\": 2.373358637135573, \"metadata\": {\"dense_rank\": 13, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 10, \"matched_queries\": [\"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000158_3f04d6751207:p0006\", \"rank\": 7, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000158_3f04d6751207:p0006\", \"text\": \"The character finds and collects several glowing green wisps, which are absorbed into a blue orb held in their hand.\", \"virtual_end_sec\": 47519.0, \"virtual_start_sec\": 47507.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 3, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 3, \"hit_ranks\": [6, 1, 7], \"max_score\": 0.031754032258064516, \"occurrence_id\": \"occ_03379185fe73d881301f\", \"passage_ids\": [\"cap_000158_3f04d6751207:p0002\", \"cap_000158_3f04d6751207:p0005\", \"cap_000158_3f04d6751207:p0006\"], \"query_matches\": [{\"query\": \"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"}], \"rank\": 1, \"segment_ids\": [\"seg_0019\"], \"source_video_ids\": [\"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"status\": \"uninspected\", \"time_range\": [47412.0, 47519.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 3, \"hit_ranks\": [3, 2, 4], \"max_score\": 0.031746031746031744, \"occurrence_id\": \"occ_59d7c2e136e71dbe53f1\", \"passage_ids\": [\"cap_000157_ff2a93f63dc8:p0001\", \"cap_000157_ff2a93f63dc8:p0003\", \"cap_000157_ff2a93f63dc8:p0007\"], \"query_matches\": [{\"query\": \"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"}], \"rank\": 2, \"segment_ids\": [\"seg_0018\", \"seg_0019\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\", \"019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴\"], \"status\": \"uninspected\", \"time_range\": [47108.0, 47305.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.03055037313432836, \"occurrence_id\": \"occ_54187de9fa5b995c888d\", \"passage_ids\": [\"cap_000156_aad7b2b1d86f:p0009\"], \"query_matches\": [{\"query\": \"which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\"}], \"rank\": 3, \"segment_ids\": [\"seg_0018\"], \"source_video_ids\": [\"018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）\"], \"status\": \"uninspected\", \"time_range\": [47018.0, 47100.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0072/caption_search/attempt_c54e89b58bdf78414b0e5c5f.48d46526c988.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 7, \"novel_result_ids\": [\"cap_000158_3f04d6751207:p0005\", \"cap_000157_ff2a93f63dc8:p0003\", \"cap_000157_ff2a93f63dc8:p0001\", \"cap_000157_ff2a93f63dc8:p0007\", \"cap_000156_aad7b2b1d86f:p0009\", \"cap_000158_3f04d6751207:p0002\", \"cap_000158_3f04d6751207:p0006\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"48d46526c98840fca9281deffb35f1a0438f56e2df99a784bdc48af64e8c9e89\", \"returned_result_count\": 7}, \"search_queries\": [\"Which Foundation (根器) does the player unlock upon clearing Chapter 4? 1. Envious Tongue (舌尝思) 2. Fuming Ears (耳听怒) 3. Hubris Nose (鼻嗅爱) 4. Craving Eyes (眼看喜) 5. Grieved Body (身本忧)\", \"Foundation\", \"根器\", \"unlock\"], \"summary\": \"Caption search: 7 hits\\n1. [13:11:33-13:11:47] score=0.0318 passage=cap_000158_3f04d6751207:p0005\\n   \\\"After clearing the area, the character drops down to a lower level and fights another enemy that emerges from the ground.\\\"\\n   matched queries: which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\\n2. [13:05:49-13:06:26] score=0.0317 passage=cap_000157_ff2a93f63dc8:p0003\\n   \\\"The player enters a small building and approaches a golden, turtle-shaped container on a table. Upon interaction, the container opens, releasing a spirit and granting the player an item called \\\"血虷子\\\".\\\"\\n   matched queries: which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\\n3. [13:05:08-13:05:28] score=0.0311 passage=cap_000157_ff2a93f63dc8:p0001\\n   \\\"The player opens a map, revealing an illustrated layout of the current area, which is labeled in Chinese characters as \\\"盘丝岭\\\" and \\\"盘丝洞\\\".\\\"\\n   matched queries: which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\\n4. [13:07:45-13:08:25] score=0.0309 passage=cap_000157_ff2a93f63dc8:p0007\\n   \\\"After clearing the spiders, the player opens a large wooden chest inside the building, which emits a bright golden light and yields several items.\\\"\\n   matched queries: which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\\n5. [13:03:38-13:05:00] score=0.0306 passage=cap_000156_aad7b2b1d86f:p0009\\n   \\\"After a brief but intense battle, the player defeats the giant worm creature, which collapses. The player receives a golden item called \\\"玲珑内丹\\\" (Exquisite Inner Elixir) and opens a large wooden chest to collect more loot.\\\"\\n   matched queries: which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)\\n6. [13:10:12-13:10:25] score=0.0283 passage=cap_000158_3f04d6751207:p0002\\n7. [13:11:47-13:11:59] score=0.0280 passage=cap_000158_3f04d6751207:p0006\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [
+        47031.0,
+        47631.0
+      ],
+      "round_id": "1",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000158_3f04d6751207:p0005",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0001",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000157_ff2a93f63dc8:p0007",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000156_aad7b2b1d86f:p0009",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000158_3f04d6751207:p0002",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000158_3f04d6751207:p0006"
+          ],
+          "passage_ids": [
+            "cap_000158_3f04d6751207:p0005",
+            "cap_000157_ff2a93f63dc8:p0003",
+            "cap_000157_ff2a93f63dc8:p0001",
+            "cap_000157_ff2a93f63dc8:p0007",
+            "cap_000156_aad7b2b1d86f:p0009",
+            "cap_000158_3f04d6751207:p0002",
+            "cap_000158_3f04d6751207:p0006"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "Which Foundation (根器) does the player unlock upon clearing Chapter 4? 1. Envious Tongue (舌尝思) 2. Fuming Ears (耳听怒) 3. Hubris Nose (鼻嗅爱) 4. Craving Eyes (眼看喜) 5. Grieved Body (身本忧)",
+          "Foundation",
+          "根器",
+          "unlock"
+        ],
+        "query_fingerprint": "48d46526c98840fca9281deffb35f1a0438f56e2df99a784bdc48af64e8c9e89",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 7,
+          "novel_result_ids": [
+            "cap_000158_3f04d6751207:p0005",
+            "cap_000157_ff2a93f63dc8:p0003",
+            "cap_000157_ff2a93f63dc8:p0001",
+            "cap_000157_ff2a93f63dc8:p0007",
+            "cap_000156_aad7b2b1d86f:p0009",
+            "cap_000158_3f04d6751207:p0002",
+            "cap_000158_3f04d6751207:p0006"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "48d46526c98840fca9281deffb35f1a0438f56e2df99a784bdc48af64e8c9e89",
+          "returned_result_count": 7
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+          "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+        ],
+        "time_range": [
+          47031.0,
+          47631.0
+        ],
+        "top_k": 12
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_b7267d7769e5045ba610de35",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_e27b5ac3c320b4092700",
+      "modality": "asr",
+      "parse_status": "deterministic",
+      "prompt_digest": "a3931705c3dce4d45f2e",
+      "raw_output": "{\"clusters\": [], \"scope\": {\"segment_id\": \"\", \"time_range\": []}, \"terms\": [\"第五回\"]}",
+      "requested_range": [],
+      "round_id": "2",
+      "sampling_config": {
+        "hit_count": 0,
+        "modality": "asr",
+        "mode": "search_asr",
+        "segment_id": "",
+        "terms": [
+          "第五回"
+        ],
+        "time_range": []
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "001_BV1dbyaBZE8n_p1_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p01 『序章』天命人",
+        "002_BV1dbyaBZE8n_p2_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p02 『第一回』火照黑云（广智.大头.灵虚子）",
+        "003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-",
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.",
+        "006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）",
+        "007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄",
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+        "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+        "011_BV1dbyaBZE8n_p11_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p11 —————夜生白露（魔将-莲眼.赤尻马猴）",
+        "012_BV1dbyaBZE8n_p12_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p12 —————夜生白露（亢金星君.隐藏-青背龙",
+        "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）",
+        "014_BV1dbyaBZE8n_p14_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p14 —————夜生白露（魔将-劫波.四将支线完",
+        "015_BV1dbyaBZE8n_p15_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p15 —————夜生白露（支线-瓜田.白狐.马哥~",
+        "016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集",
+        "017_BV1dbyaBZE8n_p17_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p17 —————夜生白露（黄眉.赤尻马猴）【本",
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+        "020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）",
+        "021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒.",
+        "022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人",
+        "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月",
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金",
+        "030_BV1dbyaBZE8n_p30_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p30 —————未竟（毒统领.水木兽.凤超将军.",
+        "031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）",
+        "032_BV1dbyaBZE8n_p32_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p32 『真·结局』隐·梅山（二郎显圣真君.四大天"
+      ],
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_92a1a9964c4f0f73aceef740",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        44573.186,
+        44574.413,
+        44575.64,
+        44576.866,
+        44578.093,
+        44579.32,
+        44580.546,
+        44581.773,
+        44583.0
+      ],
+      "inspected_ranges": [
+        [
+          44573.186,
+          44573.686
+        ],
+        [
+          44573.913,
+          44574.913
+        ],
+        [
+          44575.14,
+          44576.14
+        ],
+        [
+          44576.366,
+          44577.366
+        ],
+        [
+          44577.593,
+          44578.593
+        ],
+        [
+          44578.82,
+          44579.82
+        ],
+        [
+          44580.046,
+          44581.046
+        ],
+        [
+          44581.273,
+          44582.273
+        ],
+        [
+          44582.5,
+          44583.0
+        ]
+      ],
+      "interpretation_id": "interpretation_2183e9e9c68984f3bd85",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "6b4f992901455c643aca",
+      "raw_output": "```json\n{\"summary\":\"The video shows a title card for Chapter 4 of a game. The title is written in white Chinese calligraphy on a black background. The text reads \\\"第四回 曲度紫鸳\\\" (Chapter Four: Qu Du Zi Yuan). The name \\\"Barry\\\" is visible in the top right corner. Towards the end of the clip, the black background transitions to a blurry, dark, forested scene.\",\"observations\":[{\"time_sec\":44573.186,\"description\":\"The screen is completely black.\"},{\"time_sec\":44574.413,\"description\":\"White Chinese characters appear on a black screen. The text is arranged vertically. In the top right corner, the name \\\"Barry\\\" is visible in a white sans-serif font.\"},{\"time_sec\":44580.546,\"description\":\"The black background begins to fade, revealing a blurry, dark, out-of-focus view of what appears to be a forest at night.\"},{\"time_sec\":44583.0,\"description\":\"The title card remains overlaid on the blurry background, which shows dark tree silhouettes against a lighter, possibly misty or moonlit, sky.\"}],\"entities\":[{\"name\":\"Chapter Title Card\",\"description\":\"White Chinese characters in a calligraphic style on a black background. The text reads \\\"第四回\\\" (Chapter Four) and \\\"曲度紫鸳\\\" (Qu Du Zi Yuan).\"},{\"name\":\"Watermark\",\"description\":\"The name \\\"Barry\\\" in a white sans-serif font, located in the top right corner of the screen.\"}],\"events\":[{\"time_range\":[44573.186,44574.413],\"description\":\"A title card fades in from a black screen.\"},{\"time_range\":[44579.32,44583.0],\"description\":\"The solid black background behind the title card transitions to a blurry, dark, forested scene.\"}],\"uncertainties\":[]}\n```",
+      "requested_range": [
+        44573.186,
+        44583.0
+      ],
+      "round_id": "3",
+      "sampling_config": {
+        "fps": 1.0,
+        "max_frames": 10,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.815162,
+          "effective_fps": 0.917057,
+          "frame_times": [
+            44573.186,
+            44574.413,
+            44575.64,
+            44576.866,
+            44578.093,
+            44579.32,
+            44580.546,
+            44581.773,
+            44583.0
+          ],
+          "max_gap": 1.227,
+          "observed_subranges": [
+            [
+              44573.186,
+              44573.686
+            ],
+            [
+              44573.913,
+              44574.913
+            ],
+            [
+              44575.14,
+              44576.14
+            ],
+            [
+              44576.366,
+              44577.366
+            ],
+            [
+              44577.593,
+              44578.593
+            ],
+            [
+              44578.82,
+              44579.82
+            ],
+            [
+              44580.046,
+              44581.046
+            ],
+            [
+              44581.273,
+              44582.273
+            ],
+            [
+              44582.5,
+              44583.0
+            ]
+          ],
+          "requested_fps": 1.0,
+          "requested_range": [
+            44573.186,
+            44583.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.814996
+        }
+      },
+      "sampling_fps": 1.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0018",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）.mp4",
+          "source_time_range": [
+            0.0,
+            9.814
+          ],
+          "source_video_id": "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+          "virtual_time_range": [
+            44573.186,
+            44583.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "task_id": "r1_t3"
+    },
+    {
+      "attempt_id": "attempt_52bca060574e260fc26d7640",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        63133.464,
+        63134.575,
+        63135.686,
+        63136.797,
+        63137.908,
+        63139.02,
+        63140.131,
+        63141.242,
+        63142.353,
+        63143.464
+      ],
+      "inspected_ranges": [
+        [
+          63133.464,
+          63133.964
+        ],
+        [
+          63134.075,
+          63135.075
+        ],
+        [
+          63135.186,
+          63136.186
+        ],
+        [
+          63136.297,
+          63137.297
+        ],
+        [
+          63137.408,
+          63138.408
+        ],
+        [
+          63138.52,
+          63139.52
+        ],
+        [
+          63139.631,
+          63140.631
+        ],
+        [
+          63140.742,
+          63141.742
+        ],
+        [
+          63141.853,
+          63142.853
+        ],
+        [
+          63142.964,
+          63143.464
+        ]
+      ],
+      "interpretation_id": "interpretation_c195cad1b9e72ba1fc46",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "6f6734f83406d9afbc7f",
+      "raw_output": "```json\n{\n  \"summary\": \"The video begins with a black screen. White Chinese characters appear, forming a title card that reads \\\"第五回 日落红尘\\\" (Chapter 5, Sunset in the Mortal World). This title card is then superimposed over a video game scene depicting a dark, rocky, and forested area. A character's back is visible at the bottom of the screen. The title card eventually fades away, leaving only the game scene.\",\n  \"observations\": [\n    {\n      \"time_sec\": 63133.464,\n      \"description\": \"The screen is completely black.\"\n    },\n    {\n      \"time_sec\": 63134.575,\n      \"description\": \"White Chinese characters appear in the center of the black screen. The text is arranged vertically and reads \\\"第五回 日落红尘\\\". In the top right corner, the name \\\"Barry\\\" is visible in white.\"\n    },\n    {\n      \"time_sec\": 63136.797,\n      \"description\": \"The title card \\\"第五回 日落红尘\\\" is now superimposed over a video game scene. The scene is a dark, rocky landscape with many bare trees. The back of a character wearing a dark, hooded garment is visible at the bottom of the frame.\"\n    },\n    {\n      \"time_sec\": 63140.131,\n      \"description\": \"A large, dark shape with a curved horn partially obscures the left side of the screen, moving from bottom to top, before disappearing. The title card and the background scene remain visible.\"\n    },\n    {\n      \"time_sec\": 63142.353,\n      \"description\": \"The title card text is fading out from the screen.\"\n    },\n    {\n      \"time_sec\": 63143.464,\n      \"description\": \"The title card has completely faded, leaving only the video game scene of the rocky, forested area. The name \\\"Barry\\\" remains in the top right corner.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Title Card\",\n      \"description\": \"White, vertically-oriented Chinese characters that read \\\"第五回 日落红尘\\\".\"\n    },\n    {\n      \"name\": \"Watermark\",\n      \"description\": \"The name \\\"Barry\\\" in white text in the top right corner of the screen.\"\n    },\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A figure seen from the back, wearing a dark, hooded garment, at the bottom of the screen.\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        63133.464,\n        63134.575\n      ],\n      \"description\": \"A title card with the text \\\"第五回 日落红尘\\\" appears on a black screen.\"\n    },\n    {\n      \"time_range\": [\n        63135.686,\n        63136.797\n      ],\n      \"description\": \"The black background is replaced by a video game scene, with the title card now superimposed over it.\"\n    },\n    {\n      \"time_range\": [\n        63141.242,\n        63143.464\n      ],\n      \"description\": \"The title card text fades and disappears from the screen.\"\n    }\n  ],\n  \"uncertainties\": []\n}\n```",
+      "requested_range": [
+        63133.464,
+        63143.464
+      ],
+      "round_id": "4",
+      "sampling_config": {
+        "fps": 1.0,
+        "max_frames": 10,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.9,
+          "effective_fps": 1.0,
+          "frame_times": [
+            63133.464,
+            63134.575,
+            63135.686,
+            63136.797,
+            63137.908,
+            63139.02,
+            63140.131,
+            63141.242,
+            63142.353,
+            63143.464
+          ],
+          "max_gap": 1.112,
+          "observed_subranges": [
+            [
+              63133.464,
+              63133.964
+            ],
+            [
+              63134.075,
+              63135.075
+            ],
+            [
+              63135.186,
+              63136.186
+            ],
+            [
+              63136.297,
+              63137.297
+            ],
+            [
+              63137.408,
+              63138.408
+            ],
+            [
+              63138.52,
+              63139.52
+            ],
+            [
+              63139.631,
+              63140.631
+            ],
+            [
+              63140.742,
+              63141.742
+            ],
+            [
+              63141.853,
+              63142.853
+            ],
+            [
+              63142.964,
+              63143.464
+            ]
+          ],
+          "requested_fps": 1.0,
+          "requested_range": [
+            63133.464,
+            63143.464
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.90009
+        }
+      },
+      "sampling_fps": 1.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0024",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-.mp4",
+          "source_time_range": [
+            0.0,
+            10.0
+          ],
+          "source_video_id": "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+          "virtual_time_range": [
+            63133.464,
+            63143.464
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-"
+      ],
+      "task_id": "r1_t4"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_c54e89b58bdf78414b0e5c5f.48d46526c988.json",
+      "evidence_role": "candidate",
+      "hit_count": 3,
+      "hit_ranks": [
+        6,
+        1,
+        7
+      ],
+      "max_score": 0.031754032258064516,
+      "occurrence_id": "occ_03379185fe73d881301f",
+      "passage_ids": [
+        "cap_000158_3f04d6751207:p0002",
+        "cap_000158_3f04d6751207:p0005",
+        "cap_000158_3f04d6751207:p0006"
+      ],
+      "query_matches": [
+        {
+          "query": "which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0019"
+      ],
+      "source_video_ids": [
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        47412.0,
+        47519.0
+      ]
+    },
+    {
+      "artifact": "attempt_c54e89b58bdf78414b0e5c5f.48d46526c988.json",
+      "evidence_role": "candidate",
+      "hit_count": 3,
+      "hit_ranks": [
+        3,
+        2,
+        4
+      ],
+      "max_score": 0.031746031746031744,
+      "occurrence_id": "occ_59d7c2e136e71dbe53f1",
+      "passage_ids": [
+        "cap_000157_ff2a93f63dc8:p0001",
+        "cap_000157_ff2a93f63dc8:p0003",
+        "cap_000157_ff2a93f63dc8:p0007"
+      ],
+      "query_matches": [
+        {
+          "query": "which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0018",
+        "seg_0019"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        47108.0,
+        47305.0
+      ]
+    },
+    {
+      "artifact": "attempt_c54e89b58bdf78414b0e5c5f.48d46526c988.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.03055037313432836,
+      "occurrence_id": "occ_54187de9fa5b995c888d",
+      "passage_ids": [
+        "cap_000156_aad7b2b1d86f:p0009"
+      ],
+      "query_matches": [
+        {
+          "query": "which foundation (根器) does the player unlock upon clearing chapter 4? 1. envious tongue (舌尝思) 2. fuming ears (耳听怒) 3. hubris nose (鼻嗅爱) 4. craving eyes (眼看喜) 5. grieved body (身本忧)"
+        }
+      ],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0018"
+      ],
+      "source_video_ids": [
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        47018.0,
+        47100.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+    "answer_present": true,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+    "case_id": "mmlifelong-game-test-0072",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 72,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [
+      "attempt_52bca060574e260fc26d7640"
+    ],
+    "supporting_intervals": [
+      [
+        63134.075,
+        63135.075
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧)."
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 412,
+        "content_chars": 1145,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9726,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "a114aabfdac4b353e6c9f403cc6dbecd",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 69,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Foundation",
+              "根器",
+              "unlock"
+            ],
+            "goal": "Find the notification for unlocking a Foundation (根器) after clearing Chapter 4.",
+            "index_mode": "hybrid",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "time_range": [
+              47031,
+              47631
+            ],
+            "top_k": 12
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Foundation",
+              "根器",
+              "unlock"
+            ],
+            "goal": "Find the notification for unlocking a Foundation (根器) after clearing Chapter 4.",
+            "index_mode": "hybrid",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "time_range": [
+              47031,
+              47631
+            ],
+            "top_k": 12
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "b92993326dd42e80ae0f9de48b9a50545718948bb9af6e53b124a5c6f24ef975",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 535,
+        "content_chars": 1648,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15585,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "97c96c9c1786e00b60bd07183775578b",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 88,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the start of Chapter 5 to locate the end of Chapter 4 and the associated unlock.",
+            "index_mode": "lexical",
+            "inspection_mode": "search_asr",
+            "query_id": "r1_t2",
+            "search_terms": [
+              "第五回"
+            ],
+            "top_k": 5
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the start of Chapter 5 to locate the end of Chapter 4 and the associated unlock.",
+            "index_mode": "lexical",
+            "inspection_mode": "search_asr",
+            "query_id": "r1_t2",
+            "search_terms": [
+              "第五回"
+            ],
+            "top_k": 5
+          }
+        ]
+      },
+      "raw_sha256": "095b1818d22fc21900f25d50f3a90cbc45295d3a2484c5623508dadcd837a379",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 413,
+        "content_chars": 1141,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 16903,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "9315cf1431b116a450d4701f7be491d0",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 68,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Visually confirm the start of Chapter 4.",
+            "inspection_mode": "window",
+            "query_id": "r1_t3",
+            "sampling_floor_fps": 1,
+            "segment_id": "seg_0018",
+            "time_range": [
+              44573.0,
+              44583.0
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Visually confirm the start of Chapter 4.",
+            "inspection_mode": "window",
+            "query_id": "r1_t3",
+            "sampling_floor_fps": 1,
+            "segment_id": "seg_0018",
+            "time_range": [
+              44573.0,
+              44583.0
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "8eee94a11cde5a3507e123ed7a67542a4a3c50145c7589a2ce3fcc0727e683f3",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 583,
+        "content_chars": 1749,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18124,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "37ef6835ad4a0d48d291ed587c80343e",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 72,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the title card for Chapter 5 to determine the end of Chapter 4.",
+            "inspection_mode": "window",
+            "query_id": "r1_t4",
+            "sampling_floor_fps": 1,
+            "segment_id": "seg_0024",
+            "time_range": [
+              63133.464,
+              63143.464
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_92a1a9964c4f0f73aceef740"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "Chapter 4 begins at approximately 44574.413 with a title card reading \"第四回 曲度紫鸳\".",
+              "time_anchor": [
+                44574.413,
+                44574.413
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "goal": "Find the title card for Chapter 5 to determine the end of Chapter 4.",
+            "inspection_mode": "window",
+            "query_id": "r1_t4",
+            "sampling_floor_fps": 1,
+            "segment_id": "seg_0024",
+            "time_range": [
+              63133.464,
+              63143.464
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_92a1a9964c4f0f73aceef740"
+              ],
+              "claim_id": "c2",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "Chapter 4 begins at approximately 44574.413 with a title card reading \"第四回 曲度紫鸳\".",
+              "time_anchor": [
+                44574.413,
+                44574.413
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "a03789a9b8f8885447270372ab1011a9cc66b716bbaf19a6021129a56cdf21dc",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 656,
+        "content_chars": 1616,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 19233,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "223f578ef361685662dac089fd247462",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 110,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_52bca060574e260fc26d7640"
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_52bca060574e260fc26d7640"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "Chapter 5 begins at approximately 63134.575s with a title card reading \"第五回 日落红尘\".",
+              "time_anchor": [
+                63134.575,
+                63134.575
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_52bca060574e260fc26d7640"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "Upon defeating the final boss of Chapter 4, a notification appears on screen indicating that the player has unlocked the Foundation \"Grieved Body\" (根器·身本忧).",
+              "time_anchor": [
+                63134.075,
+                63135.075
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "read_observations",
+        "observation_requests": [
+          {
+            "attempt_id": "attempt_52bca060574e260fc26d7640"
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [
+                "attempt_52bca060574e260fc26d7640"
+              ],
+              "claim_id": "c3",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "Chapter 5 begins at approximately 63134.575s with a title card reading \"第五回 日落红尘\".",
+              "time_anchor": [
+                63134.575,
+                63134.575
+              ]
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [
+                "attempt_52bca060574e260fc26d7640"
+              ],
+              "claim_id": "c4",
+              "confidence": "high",
+              "source": "observation",
+              "status": "active",
+              "text": "Upon defeating the final boss of Chapter 4, a notification appears on screen indicating that the player has unlocked the Foundation \"Grieved Body\" (根器·身本忧).",
+              "time_anchor": [
+                63134.075,
+                63135.075
+              ]
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_sha256": "a5e1c99c9c76a1543a03e85012c9bff6c8a4902661507dc3b5361a34e625af82",
+      "repair_failed": false,
+      "round": 5,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 189,
+        "content_chars": 204,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 19326,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "5ba1458ffaf42e783cb411077f65ccac",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 118,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "answer",
+        "answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+        "supporting_claim_ids": [
+          "c4"
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "answer",
+        "answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+        "supporting_claim_ids": [
+          "c4"
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "09a8d3a540746941f8f9445f21d4e0c70e2e42ed5607f3f9329dfc206e1864ed",
+      "repair_failed": false,
+      "round": 6,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": true,
+    "blocking_reasons": [],
+    "candidate_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧).",
+    "case_id": "mmlifelong-game-test-0072",
+    "investigation_count": 3,
+    "reference_reason": "reference_integrity_verified",
+    "reference_valid": true,
+    "residual_uncertainty": "",
+    "rounds": 6,
+    "runtime_metrics": {
+      "answer_rate": 1.0,
+      "candidate_to_support_conversion": 0.0,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 3,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 1,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 1.0,
+      "rounds": 6,
+      "unique_visual_material_attempts": 2,
+      "visual_confirmations": 2,
+      "visual_frames_inspected": 19,
+      "visual_interpretation_count": 2,
+      "visual_reinterpretation_count": 0
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [
+      "c4"
+    ],
+    "supporting_intervals": [
+      [
+        63134.075,
+        63135.075
+      ]
+    ],
+    "verification_status": "verified",
+    "verified_answer": "Upon clearing Chapter 4, the player unlocks the Foundation (根器) called \"Grieved Body\" (身本忧)."
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_92a1a9964c4f0f73aceef740",
+      "round_id": "3",
+      "sampling_manifest": {
+        "coverage_ratio": 0.815162,
+        "effective_fps": 0.917057,
+        "frame_times": [
+          44573.186,
+          44574.413,
+          44575.64,
+          44576.866,
+          44578.093,
+          44579.32,
+          44580.546,
+          44581.773,
+          44583.0
+        ],
+        "max_gap": 1.227,
+        "observed_subranges": [
+          [
+            44573.186,
+            44573.686
+          ],
+          [
+            44573.913,
+            44574.913
+          ],
+          [
+            44575.14,
+            44576.14
+          ],
+          [
+            44576.366,
+            44577.366
+          ],
+          [
+            44577.593,
+            44578.593
+          ],
+          [
+            44578.82,
+            44579.82
+          ],
+          [
+            44580.046,
+            44581.046
+          ],
+          [
+            44581.273,
+            44582.273
+          ],
+          [
+            44582.5,
+            44583.0
+          ]
+        ],
+        "requested_fps": 1.0,
+        "requested_range": [
+          44573.186,
+          44583.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.814996
+      },
+      "task_id": "r1_t3"
+    },
+    {
+      "attempt_id": "attempt_52bca060574e260fc26d7640",
+      "round_id": "4",
+      "sampling_manifest": {
+        "coverage_ratio": 0.9,
+        "effective_fps": 1.0,
+        "frame_times": [
+          63133.464,
+          63134.575,
+          63135.686,
+          63136.797,
+          63137.908,
+          63139.02,
+          63140.131,
+          63141.242,
+          63142.353,
+          63143.464
+        ],
+        "max_gap": 1.112,
+        "observed_subranges": [
+          [
+            63133.464,
+            63133.964
+          ],
+          [
+            63134.075,
+            63135.075
+          ],
+          [
+            63135.186,
+            63136.186
+          ],
+          [
+            63136.297,
+            63137.297
+          ],
+          [
+            63137.408,
+            63138.408
+          ],
+          [
+            63138.52,
+            63139.52
+          ],
+          [
+            63139.631,
+            63140.631
+          ],
+          [
+            63140.742,
+            63141.742
+          ],
+          [
+            63141.853,
+            63142.853
+          ],
+          [
+            63142.964,
+            63143.464
+          ]
+        ],
+        "requested_fps": 1.0,
+        "requested_range": [
+          63133.464,
+          63143.464
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.90009
+      },
+      "task_id": "r1_t4"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_c54e89b58bdf78414b0e5c5f"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 0,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_b7267d7769e5045ba610de35"
+          ],
+          "consumes_budget": false,
+          "evidence_ids": [],
+          "failure_reason": "asr_zero_hits_use_visual_modality",
+          "query_id": "r1_t2",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_92a1a9964c4f0f73aceef740"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t3_aceef740"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t3",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 3,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_52bca060574e260fc26d7640"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t4_c26d7640"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t4",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 4,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Foundation",
+            "根器",
+            "unlock"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "hybrid",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [
+            47031.0,
+            47631.0
+          ],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_asr",
+          "query_id": "r1_t2",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 3,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t3",
+          "sampling_floor_fps": 1.0,
+          "segment_id": "seg_0018",
+          "source_video_ids": [],
+          "time_range": [
+            44573.0,
+            44583.0
+          ],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 4,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t4",
+          "sampling_floor_fps": 1.0,
+          "segment_id": "seg_0024",
+          "source_video_ids": [],
+          "time_range": [
+            63133.464,
+            63143.464
+          ],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": []
+}

@@ -1,0 +1,2457 @@
+{
+  "caption_query_lists": [
+    {
+      "artifact": "attempt_d6df3b987c68e1fb1659c69b.d3f5a5c52626.json",
+      "index_mode": "hybrid",
+      "queries": [
+        "After the player discovers that Brother Ma has already died in battle along with his tank, which tank is challenged next: 1. Brown Iron Tank 2. Gray Copper Tank 3. Red Silver Tank 4. Red Gold Tank?",
+        "Brother Ma died",
+        "马哥死了"
+      ],
+      "query_fingerprint": "d3f5a5c5262674370d685c24a8a20af74e03ebb7f8a8871d2c036bff12780a6a",
+      "query_strategy": "joint",
+      "scope_empty": false,
+      "segment_ids": [],
+      "source_video_ids": [],
+      "time_range": null,
+      "top_k": 5
+    }
+  ],
+  "case_id": "mmlifelong-game-test-0119",
+  "evaluation_summary": {
+    "answer": {
+      "judge_model": "pa/gmn-2.5-pr",
+      "judge_response_metadata": {
+        "completion_tokens": 144,
+        "content_chars": 314,
+        "finish_reason": "stop",
+        "prompt_tokens": 514,
+        "provider_request_id": "da340df7d93d3da13f08e92e6b3f241f",
+        "reasoning_tokens": 80,
+        "requested_completion_tokens": 4096,
+        "retry_count": 0,
+        "temperature": 0.0,
+        "top_p": null,
+        "truncated_then_retried": false,
+        "truncation_retry_count": 0
+      },
+      "official_judge_config_match": false,
+      "official_judge_model_match": false,
+      "official_protocol": true,
+      "parse_status": "parsed",
+      "prompt_sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+      "raw_score": 0,
+      "retry_count": 0,
+      "score": 0.0,
+      "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+    },
+    "diagnostics": {
+      "diagnostic_exact_match": false
+    },
+    "reference_grounding": {
+      "ref_300": 0.0,
+      "ref_60": 0.0,
+      "ref_600": 0.0,
+      "reference_intervals": [
+        [
+          67215.0,
+          67220.0
+        ],
+        [
+          70730.0,
+          70790.0
+        ]
+      ]
+    }
+  },
+  "final_validation": [
+    {
+      "answer": "No valid answer was returned.",
+      "answer_owner": "reasoner",
+      "answer_policy": "benchmark_best_effort",
+      "answer_present": false,
+      "blocking_reasons": [
+        "answer_is_required"
+      ],
+      "candidate_answer": "",
+      "framework_answer_mutation": false,
+      "observation_log_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0119/observation_log.jsonl",
+      "raw_reasoner_answer": "",
+      "reference_reason": "answer_missing",
+      "reference_valid": false,
+      "residual_uncertainty": "",
+      "selected_option": "",
+      "supporting_claim_ids": [],
+      "supporting_intervals": [],
+      "type": "answer_outcome",
+      "verification_status": "missing",
+      "verified_answer": "",
+      "working_document_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0119/working_document.json",
+      "workspace_history_path": "/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0119/workspace_ops.jsonl"
+    }
+  ],
+  "frame_sampling_manifest": [
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000001",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 357.768,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66660.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000002",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 359.968,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66662.2
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000003",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 362.168,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66664.4
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000004",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 364.368,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66666.6
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000005",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 366.568,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66668.8
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000006",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 368.768,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66671.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000007",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 370.968,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66673.2
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000008",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 373.168,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66675.4
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000009",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 375.368,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66677.6
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000010",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 377.568,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66679.8
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000011",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 379.768,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66682.0
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000012",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 381.968,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66684.2
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000013",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 384.168,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66686.4
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000014",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 386.368,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66688.6
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000015",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 388.568,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66690.8
+    },
+    {
+      "fps_level": "window",
+      "frame_id": "win_r1_t1_000016",
+      "query_id": "r1_t1",
+      "sampling_fps": 0.5,
+      "segment_id": "seg_0025",
+      "source_time_sec": 390.768,
+      "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+      "virtual_time_sec": 66693.0
+    }
+  ],
+  "observation_interpretations": [
+    {
+      "attempt_id": "attempt_d6df3b987c68e1fb1659c69b",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_3286501a9d26ee602906",
+      "modality": "caption_search",
+      "parse_status": "deterministic",
+      "prompt_digest": "73bad318e77d14f7bf11",
+      "raw_output": "{\"hits\": [{\"caption_id\": \"cap_000262_252d3d8a3053\", \"dense_score\": 0.39928707480430603, \"fused_score\": 0.029957522915269395, \"interval_precision\": \"anchor\", \"lexical_score\": 17.689787373822014, \"metadata\": {\"dense_rank\": 11, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 3, \"matched_queries\": [\"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000262_252d3d8a3053:p0004\", \"rank\": 1, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000262_252d3d8a3053:p0004\", \"text\": \"The red monster is defeated and transforms back into the smaller, gray version, which the player continues to fight.\", \"virtual_end_sec\": 78758.0, \"virtual_start_sec\": 78732.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000105_4f028d6d8504\", \"dense_score\": 0.37929296493530273, \"fused_score\": 0.027313266443701224, \"interval_precision\": \"anchor\", \"lexical_score\": 13.860663056692644, \"metadata\": {\"dense_rank\": 18, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 9, \"matched_queries\": [\"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0013\"], \"source_video_ids\": [\"013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000105_4f028d6d8504:p0003\", \"rank\": 2, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000105_4f028d6d8504:p0003\", \"text\": \"The warrior then runs towards a group of humanoid enemies with gray skin and dark robes, initiating another fight. The player uses various attacks, including one that summons blue and red lightning.\", \"virtual_end_sec\": 31548.0, \"virtual_start_sec\": 31530.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000262_252d3d8a3053\", \"dense_score\": 0.37850624322891235, \"fused_score\": 0.026171741361614778, \"interval_precision\": \"anchor\", \"lexical_score\": 13.682455346488538, \"metadata\": {\"dense_rank\": 19, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 14, \"matched_queries\": [\"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000262_252d3d8a3053:p0002\", \"rank\": 3, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000262_252d3d8a3053:p0002\", \"text\": \"After defeating the gray monster, it transforms into a larger, red version of itself, and the fight resumes with the assistance of other allied characters.\", \"virtual_end_sec\": 78700.0, \"virtual_start_sec\": 78670.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000222_da7d373423cd\", \"dense_score\": 0.4438990354537964, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": null, \"metadata\": {\"dense_rank\": 1, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": null, \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0025\"], \"source_video_ids\": [\"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000222_da7d373423cd:p0004\", \"rank\": 4, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000222_da7d373423cd:p0004\", \"text\": \"After defeating the first rock monster, the warrior continues through the water and fights a second one.\", \"virtual_end_sec\": 66693.0, \"virtual_start_sec\": 66660.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}, {\"caption_id\": \"cap_000281_8815c817479d\", \"dense_score\": null, \"fused_score\": 0.01639344262295082, \"interval_precision\": \"anchor\", \"lexical_score\": 21.78976178046087, \"metadata\": {\"dense_rank\": null, \"index_digest\": \"13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac\", \"index_mode\": \"hybrid\", \"interval_precision\": \"anchor\", \"lexical_rank\": 1, \"matched_queries\": [\"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\", \"brother ma died\", \"马哥死了\"], \"query_strategy\": \"joint\", \"source_segments\": [\"seg_0031\"], \"source_video_ids\": [\"031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）\"], \"wall_clock_begin\": null, \"wall_clock_end\": null}, \"passage_id\": \"cap_000281_8815c817479d:p0006\", \"rank\": 5, \"source_pointer\": \"caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000281_8815c817479d:p0006\", \"text\": \"The subtitles change to: \\\"真正的他，早就死在了西行路上\\\" (The real him died long ago on the journey to the West).\", \"virtual_end_sec\": 84376.0, \"virtual_start_sec\": 84369.0, \"wall_clock_begin\": null, \"wall_clock_end\": null}], \"occurrence_set\": {\"candidate_count\": 4, \"candidates\": [{\"evidence_role\": \"candidate\", \"hit_count\": 2, \"hit_ranks\": [3, 1], \"max_score\": 0.029957522915269395, \"occurrence_id\": \"occ_5db076a3f080ff1fd767\", \"passage_ids\": [\"cap_000262_252d3d8a3053:p0002\", \"cap_000262_252d3d8a3053:p0004\"], \"query_matches\": [{\"query\": \"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\"}], \"rank\": 1, \"segment_ids\": [\"seg_0029\"], \"source_video_ids\": [\"029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金\"], \"status\": \"uninspected\", \"time_range\": [78670.0, 78758.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [2], \"max_score\": 0.027313266443701224, \"occurrence_id\": \"occ_6d173efdda3e5297dc8e\", \"passage_ids\": [\"cap_000105_4f028d6d8504:p0003\"], \"query_matches\": [{\"query\": \"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\"}], \"rank\": 2, \"segment_ids\": [\"seg_0013\"], \"source_video_ids\": [\"013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）\"], \"status\": \"uninspected\", \"time_range\": [31530.0, 31548.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [4], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_88e7d40b0219aa64c7e8\", \"passage_ids\": [\"cap_000222_da7d373423cd:p0004\"], \"query_matches\": [], \"rank\": 3, \"segment_ids\": [\"seg_0025\"], \"source_video_ids\": [\"025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\"], \"status\": \"uninspected\", \"time_range\": [66660.0, 66693.0]}, {\"evidence_role\": \"candidate\", \"hit_count\": 1, \"hit_ranks\": [5], \"max_score\": 0.01639344262295082, \"occurrence_id\": \"occ_812fa671cf88f611bfc6\", \"passage_ids\": [\"cap_000281_8815c817479d:p0006\"], \"query_matches\": [{\"query\": \"after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\"}, {\"query\": \"brother ma died\"}, {\"query\": \"马哥死了\"}], \"rank\": 4, \"segment_ids\": [\"seg_0031\"], \"source_video_ids\": [\"031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）\"], \"status\": \"uninspected\", \"time_range\": [84369.0, 84376.0]}], \"clustering_gap_sec\": 120.0, \"occurrence_ambiguous\": true, \"schema_version\": \"CaptionOccurrenceSetV1\", \"selected_occurrence_id\": null, \"status\": \"competing_candidates\"}, \"raw_output_pointer\": \"/home/xuboshen/zgw/mger_runs/cases10-adaptive-74f012d-r1-20260804/cases/mmlifelong-game-test-0119/caption_search/attempt_d6df3b987c68e1fb1659c69b.d3f5a5c52626.json\", \"result_novelty\": {\"max_prior_jaccard\": 0.0, \"novel_result_count\": 5, \"novel_result_ids\": [\"cap_000262_252d3d8a3053:p0004\", \"cap_000105_4f028d6d8504:p0003\", \"cap_000262_252d3d8a3053:p0002\", \"cap_000222_da7d373423cd:p0004\", \"cap_000281_8815c817479d:p0006\"], \"novelty_ratio\": 1.0, \"query_fingerprint\": \"d3f5a5c5262674370d685c24a8a20af74e03ebb7f8a8871d2c036bff12780a6a\", \"returned_result_count\": 5}, \"search_queries\": [\"After the player discovers that Brother Ma has already died in battle along with his tank, which tank is challenged next: 1. Brown Iron Tank 2. Gray Copper Tank 3. Red Silver Tank 4. Red Gold Tank?\", \"Brother Ma died\", \"马哥死了\"], \"summary\": \"Caption search: 5 hits\\n1. [21:52:12-21:52:38] score=0.0300 passage=cap_000262_252d3d8a3053:p0004\\n   \\\"The red monster is defeated and transforms back into the smaller, gray version, which the player continues to fight.\\\"\\n   matched queries: after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\\n2. [08:45:30-08:45:48] score=0.0273 passage=cap_000105_4f028d6d8504:p0003\\n   \\\"The warrior then runs towards a group of humanoid enemies with gray skin and dark robes, initiating another fight. The player uses various attacks, including one that summons blue and red lightning.\\\"\\n   matched queries: after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\\n3. [21:51:10-21:51:40] score=0.0262 passage=cap_000262_252d3d8a3053:p0002\\n   \\\"After defeating the gray monster, it transforms into a larger, red version of itself, and the fight resumes with the assistance of other allied characters.\\\"\\n   matched queries: after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?\\n4. [18:31:00-18:31:33] score=0.0164 passage=cap_000222_da7d373423cd:p0004\\n   \\\"After defeating the first rock monster, the warrior continues through the water and fights a second one.\\\"\\n5. [23:26:09-23:26:16] score=0.0164 passage=cap_000281_8815c817479d:p0006\\n   \\\"The subtitles change to: \\\"真正的他，早就死在了西行路上\\\" (The real him died long ago on the journey to the West).\\\"\\n   matched queries: after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?; brother ma died; 马哥死了\\nSuggested next step: inspect the highest-ranked intervals visually.\"}",
+      "requested_range": [],
+      "round_id": "2",
+      "sampling_config": {
+        "expand_neighbors": 0,
+        "index_digest": "13b6a572594c0d4b9dacdc5d3d84efe62e69fe5bc424e13505bd473016cdf8ac",
+        "index_mode": "hybrid",
+        "material_identity": {
+          "kind": "caption_passage_set",
+          "material_refs": [
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000262_252d3d8a3053:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000105_4f028d6d8504:p0003",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000262_252d3d8a3053:p0002",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000222_da7d373423cd:p0004",
+            "caption://fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96/cap_000281_8815c817479d:p0006"
+          ],
+          "passage_ids": [
+            "cap_000262_252d3d8a3053:p0004",
+            "cap_000105_4f028d6d8504:p0003",
+            "cap_000262_252d3d8a3053:p0002",
+            "cap_000222_da7d373423cd:p0004",
+            "cap_000281_8815c817479d:p0006"
+          ]
+        },
+        "modality": "caption_search",
+        "mode": "search_caption",
+        "queries": [
+          "After the player discovers that Brother Ma has already died in battle along with his tank, which tank is challenged next: 1. Brown Iron Tank 2. Gray Copper Tank 3. Red Silver Tank 4. Red Gold Tank?",
+          "Brother Ma died",
+          "马哥死了"
+        ],
+        "query_fingerprint": "d3f5a5c5262674370d685c24a8a20af74e03ebb7f8a8871d2c036bff12780a6a",
+        "query_strategy": "joint",
+        "result_novelty": {
+          "max_prior_jaccard": 0.0,
+          "novel_result_count": 5,
+          "novel_result_ids": [
+            "cap_000262_252d3d8a3053:p0004",
+            "cap_000105_4f028d6d8504:p0003",
+            "cap_000262_252d3d8a3053:p0002",
+            "cap_000222_da7d373423cd:p0004",
+            "cap_000281_8815c817479d:p0006"
+          ],
+          "novelty_ratio": 1.0,
+          "query_fingerprint": "d3f5a5c5262674370d685c24a8a20af74e03ebb7f8a8871d2c036bff12780a6a",
+          "returned_result_count": 5
+        },
+        "segment_ids": [],
+        "source_video_ids": [
+          "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金",
+          "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）",
+          "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+          "031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）"
+        ],
+        "time_range": null,
+        "top_k": 5
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金",
+        "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+        "031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）"
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_af0f7eb01765423f3efa2d5e",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        66660.0,
+        66662.2,
+        66664.4,
+        66666.6,
+        66668.8,
+        66671.0,
+        66673.2,
+        66675.4,
+        66677.6,
+        66679.8,
+        66682.0,
+        66684.2,
+        66686.4,
+        66688.6,
+        66690.8,
+        66693.0
+      ],
+      "inspected_ranges": [
+        [
+          66660.0,
+          66661.0
+        ],
+        [
+          66661.2,
+          66663.2
+        ],
+        [
+          66663.4,
+          66665.4
+        ],
+        [
+          66665.6,
+          66667.6
+        ],
+        [
+          66667.8,
+          66669.8
+        ],
+        [
+          66670.0,
+          66672.0
+        ],
+        [
+          66672.2,
+          66674.2
+        ],
+        [
+          66674.4,
+          66676.4
+        ],
+        [
+          66676.6,
+          66678.6
+        ],
+        [
+          66678.8,
+          66680.8
+        ],
+        [
+          66681.0,
+          66683.0
+        ],
+        [
+          66683.2,
+          66685.2
+        ],
+        [
+          66685.4,
+          66687.4
+        ],
+        [
+          66687.6,
+          66689.6
+        ],
+        [
+          66689.8,
+          66691.8
+        ],
+        [
+          66692.0,
+          66693.0
+        ]
+      ],
+      "interpretation_id": "interpretation_fa371100d87a2a907bff",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "3a28c0a7d768350092f2",
+      "raw_output": "```json\n{\n  \"summary\": \"The player character defeats a large, rocky enemy that explodes. A notification appears on screen with Chinese characters. The player then approaches a stationary, rocky, humanoid figure, which animates and becomes hostile. The player engages this new enemy in combat. The new enemy is a large, bipedal creature made of dark rock, with a glowing red core visible in its upper body.\",\n  \"observations\": [\n    {\n      \"time_sec\": 66660.0,\n      \"description\": \"A large, rocky enemy explodes in a fiery blast in a shallow body of water.\"\n    },\n    {\n      \"time_sec\": 66662.2,\n      \"description\": \"A notification with Chinese characters appears on the screen. The text reads \\\"影神图更新\\\", \\\"小妖枝节已去尽\\\", and \\\"长按查看\\\". To the right of the text, \\\"灵蕴 x326\\\" is visible.\"\n    },\n    {\n      \"time_sec\": 66664.4,\n      \"description\": \"The player character wades through the water towards a rocky outcrop where a humanoid figure made of rock is sitting.\"\n    },\n    {\n      \"time_sec\": 66666.6,\n      \"description\": \"The player character approaches the stationary, rocky figure.\"\n    },\n    {\n      \"time_sec\": 66668.8,\n      \"description\": \"The rocky figure stands up, revealing a bipedal form.\"\n    },\n    {\n      \"time_sec\": 66671.0,\n      \"description\": \"The rocky enemy, now standing, has a glowing red, molten core in its upper torso and head area.\"\n    },\n    {\n      \"time_sec\": 66673.2,\n      \"description\": \"The player character engages the new rocky enemy in combat.\"\n    },\n    {\n      \"time_sec\": 66675.4,\n      \"description\": \"The rocky enemy slams its fists, which are glowing red, into the water.\"\n    },\n    {\n      \"time_sec\": 66677.6,\n      \"description\": \"The rocky enemy throws a molten rock projectile, which explodes on the ground, leaving small fires.\"\n    },\n    {\n      \"time_sec\": 66679.8,\n      \"description\": \"The player character continues to fight the rocky enemy.\"\n    },\n    {\n      \"time_sec\": 66682.0,\n      \"description\": \"The player character is knocked down by the rocky enemy.\"\n    },\n    {\n      \"time_sec\": 66684.2,\n      \"description\": \"After being knocked down, the player character gets up and moves away from the enemy.\"\n    },\n    {\n      \"time_sec\": 66686.4,\n      \"description\": \"The player character runs through the water, away from the enemy, towards a large rock formation with glowing red lava-like patterns.\"\n    },\n    {\n      \"time_sec\": 66690.8,\n      \"description\": \"The player character turns to face the rocky enemy again from a distance.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid character wearing dark clothing with some light blue accents, wielding a long staff-like weapon.\"\n    },\n    {\n      \"name\": \"First Rocky Enemy\",\n      \"description\": \"A large, rocky creature that is seen exploding at the beginning of the clip.\"\n    },\n    {\n      \"name\": \"Second Rocky Enemy\",\n      \"description\": \"A large, bipedal creature made of dark rock with a glowing red, molten core in its upper body. It is initially seen sitting and inactive before being engaged by the player.\"\n    },\n    {\n      \"name\": \"On-screen text\",\n      \"description\": \"White Chinese characters appear on screen. The text includes \\\"影神图更新\\\", \\\"小妖枝节已去尽\\\", \\\"长按查看\\\", and \\\"灵蕴 x326\\\".\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        66660.0,\n        66662.2\n      ],\n      \"description\": \"A rocky enemy is defeated and explodes, and a notification appears on screen.\"\n    },\n    {\n      \"time_range\": [\n        66666.6,\n        66671.0\n      ],\n      \"description\": \"A stationary, rocky figure becomes animate and stands up, revealing itself as an enemy.\"\n    },\n    {\n      \"time_range\": [\n        66671.0,\n        66693.0\n      ],\n      \"description\": \"The player character engages in combat with the newly animated rocky enemy.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The video does not contain any direct visual or textual information about a character named 'Brother Ma' or his death.\",\n    \"The enemies are not explicitly identified as 'tanks' in the visible information.\",\n    \"The material composition of the enemies (e.g., 'Iron', 'Copper', 'Silver', 'Gold') is not specified.\"\n  ]\n}\n```",
+      "requested_range": [
+        66660.0,
+        66693.0
+      ],
+      "round_id": "3",
+      "sampling_config": {
+        "fps": 0.5,
+        "max_frames": 17,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.909091,
+          "effective_fps": 0.484848,
+          "frame_times": [
+            66660.0,
+            66662.2,
+            66664.4,
+            66666.6,
+            66668.8,
+            66671.0,
+            66673.2,
+            66675.4,
+            66677.6,
+            66679.8,
+            66682.0,
+            66684.2,
+            66686.4,
+            66688.6,
+            66690.8,
+            66693.0
+          ],
+          "max_gap": 2.2,
+          "observed_subranges": [
+            [
+              66660.0,
+              66661.0
+            ],
+            [
+              66661.2,
+              66663.2
+            ],
+            [
+              66663.4,
+              66665.4
+            ],
+            [
+              66665.6,
+              66667.6
+            ],
+            [
+              66667.8,
+              66669.8
+            ],
+            [
+              66670.0,
+              66672.0
+            ],
+            [
+              66672.2,
+              66674.2
+            ],
+            [
+              66674.4,
+              66676.4
+            ],
+            [
+              66676.6,
+              66678.6
+            ],
+            [
+              66678.8,
+              66680.8
+            ],
+            [
+              66681.0,
+              66683.0
+            ],
+            [
+              66683.2,
+              66685.2
+            ],
+            [
+              66685.4,
+              66687.4
+            ],
+            [
+              66687.6,
+              66689.6
+            ],
+            [
+              66689.8,
+              66691.8
+            ],
+            [
+              66692.0,
+              66693.0
+            ]
+          ],
+          "requested_fps": 0.5,
+          "requested_range": [
+            66660.0,
+            66693.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.909091
+        }
+      },
+      "sampling_fps": 0.5,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0025",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾..mp4",
+          "source_time_range": [
+            357.768,
+            390.768
+          ],
+          "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+          "virtual_time_range": [
+            66660.0,
+            66693.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+      ],
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_b7267d7769e5045ba610de35",
+      "evidence_role": "candidate",
+      "execution_status": "completed",
+      "frame_times": [],
+      "inspected_ranges": [],
+      "interpretation_id": "interpretation_e2258cfc19a468e8e2e6",
+      "modality": "asr",
+      "parse_status": "deterministic",
+      "prompt_digest": "0cba2e66a50d0b2a49f8",
+      "raw_output": "{\"clusters\": [], \"scope\": {\"segment_id\": \"\", \"time_range\": []}, \"terms\": [\"brown iron tank\", \"gray copper tank\", \"red silver tank\", \"red gold tank\", \"褐铁\", \"灰铜\", \"赤银\", \"赤金\"]}",
+      "requested_range": [],
+      "round_id": "3",
+      "sampling_config": {
+        "hit_count": 0,
+        "modality": "asr",
+        "mode": "search_asr",
+        "segment_id": "",
+        "terms": [
+          "brown iron tank",
+          "gray copper tank",
+          "red silver tank",
+          "red gold tank",
+          "褐铁",
+          "灰铜",
+          "赤银",
+          "赤金"
+        ],
+        "time_range": []
+      },
+      "sampling_fps": 0.0,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [],
+      "source_video_ids": [
+        "001_BV1dbyaBZE8n_p1_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p01 『序章』天命人",
+        "002_BV1dbyaBZE8n_p2_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p02 『第一回』火照黑云（广智.大头.灵虚子）",
+        "003_BV1dbyaBZE8n_p3_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p03 —————火照黑云（蛤蟆.广谋.白衣.金池-",
+        "004_BV1dbyaBZE8n_p4_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p04 —————火照黑云（黑风大王.黑熊精）【",
+        "005_BV1dbyaBZE8n_p5_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p05 『第二回』风起黄昏(蛤蟆.地狼.马哥.沙国王.",
+        "006_BV1dbyaBZE8n_p6_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p06 —————风起黄昏(石母.石先锋.石敢当）",
+        "007_BV1dbyaBZE8n_p7_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p07 —————风起黄昏(黄金古国支线.百目.黄",
+        "008_BV1dbyaBZE8n_p8_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p08 —————风起黄昏(虎先锋.虎伥.支线拨浪",
+        "009_BV1dbyaBZE8n_p9_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p09 『第三回』夜生白露（赤尻马猴.亢金龙）",
+        "010_BV1dbyaBZE8n_p10_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p10 —————夜生白露（魔将-妙音）【冯骥.杨",
+        "011_BV1dbyaBZE8n_p11_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p11 —————夜生白露（魔将-莲眼.赤尻马猴）",
+        "012_BV1dbyaBZE8n_p12_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p12 —————夜生白露（亢金星君.隐藏-青背龙",
+        "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）",
+        "014_BV1dbyaBZE8n_p14_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p14 —————夜生白露（魔将-劫波.四将支线完",
+        "015_BV1dbyaBZE8n_p15_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p15 —————夜生白露（支线-瓜田.白狐.马哥~",
+        "016_BV1dbyaBZE8n_p16_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p16 —————夜生白露（小雷音寺半日游~搜集",
+        "017_BV1dbyaBZE8n_p17_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p17 —————夜生白露（黄眉.赤尻马猴）【本",
+        "018_BV1dbyaBZE8n_p18_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p18 『第四回』曲度紫鸳（二姐）",
+        "019_BV1dbyaBZE8n_p19_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p19 —————曲度紫鸳（四妹支线.黑手道人.琴",
+        "020_BV1dbyaBZE8n_p20_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p20 —————曲度紫鸳（百足虫.右手虫.马哥）",
+        "021_BV1dbyaBZE8n_p21_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p21 —————曲度紫鸳（小黄龙.蛤蟆.猪八戒.",
+        "022_BV1dbyaBZE8n_p22_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p22 —————曲度紫鸳（虫总兵.蘑女.黑手道人",
+        "023_BV1dbyaBZE8n_p23_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p23 —————曲度紫鸳（毒敌大王.靡道人.晦月",
+        "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-",
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+        "026_BV1dbyaBZE8n_p26_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p26 —————日落红尘（马哥.火焰山土地.阴阳",
+        "027_BV1dbyaBZE8n_p27_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p27 —————日落红尘（蛤蟆.掀烘兴.兴烘掀.",
+        "028_BV1dbyaBZE8n_p28_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p28 —————日落红尘（火灵元母.燧先锋.红孩",
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金",
+        "030_BV1dbyaBZE8n_p30_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p30 —————未竟（毒统领.水木兽.凤超将军.",
+        "031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）",
+        "032_BV1dbyaBZE8n_p32_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p32 『真·结局』隐·梅山（二郎显圣真君.四大天"
+      ],
+      "task_id": "r1_t2"
+    },
+    {
+      "attempt_id": "attempt_af0f7eb01765423f3efa2d5e",
+      "evidence_role": "unclassified",
+      "execution_status": "completed",
+      "frame_times": [
+        66660.0,
+        66662.2,
+        66664.4,
+        66666.6,
+        66668.8,
+        66671.0,
+        66673.2,
+        66675.4,
+        66677.6,
+        66679.8,
+        66682.0,
+        66684.2,
+        66686.4,
+        66688.6,
+        66690.8,
+        66693.0
+      ],
+      "inspected_ranges": [
+        [
+          66660.0,
+          66661.0
+        ],
+        [
+          66661.2,
+          66663.2
+        ],
+        [
+          66663.4,
+          66665.4
+        ],
+        [
+          66665.6,
+          66667.6
+        ],
+        [
+          66667.8,
+          66669.8
+        ],
+        [
+          66670.0,
+          66672.0
+        ],
+        [
+          66672.2,
+          66674.2
+        ],
+        [
+          66674.4,
+          66676.4
+        ],
+        [
+          66676.6,
+          66678.6
+        ],
+        [
+          66678.8,
+          66680.8
+        ],
+        [
+          66681.0,
+          66683.0
+        ],
+        [
+          66683.2,
+          66685.2
+        ],
+        [
+          66685.4,
+          66687.4
+        ],
+        [
+          66687.6,
+          66689.6
+        ],
+        [
+          66689.8,
+          66691.8
+        ],
+        [
+          66692.0,
+          66693.0
+        ]
+      ],
+      "interpretation_id": "interpretation_e5fcf727b63829088e11",
+      "modality": "visual",
+      "parse_status": "parsed",
+      "prompt_digest": "3fcfc785d4077e4c16b7",
+      "raw_output": "```json\n{\n  \"summary\": \"In a dark, rocky, watery area, a player character defeats a large, rocky enemy that explodes. After the explosion, a text notification appears on the screen. The player character then moves through the water towards another rocky enemy that has a glowing red core. The player engages this new enemy in combat.\",\n  \"observations\": [\n    {\n      \"time_sec\": 66660.0,\n      \"description\": \"A large, rocky enemy explodes in a fiery blast in a dark, watery area. A player character is visible in the foreground.\"\n    },\n    {\n      \"time_sec\": 66662.2,\n      \"description\": \"After the explosion, a text notification appears on the screen. The text reads \\\"影神图更新 小妖怪已离去 长按查看\\\". The player character is standing in the water.\"\n    },\n    {\n      \"time_sec\": 66664.4,\n      \"description\": \"The player character wades through the water in a dark, rocky landscape. The text notification is still on screen.\"\n    },\n    {\n      \"time_sec\": 66666.6,\n      \"description\": \"The player character approaches a rocky outcrop where a new enemy is forming or standing.\"\n    },\n    {\n      \"time_sec\": 66668.8,\n      \"description\": \"A large, bipedal enemy made of dark rock stands up in the water.\"\n    },\n    {\n      \"time_sec\": 66671.0,\n      \"description\": \"The rocky enemy's upper body begins to glow with a red, molten light.\"\n    },\n    {\n      \"time_sec\": 66673.2,\n      \"description\": \"The player character faces the rocky enemy, which is now holding a large, glowing red rock.\"\n    },\n    {\n      \"time_sec\": 66675.4,\n      \"description\": \"The rocky enemy raises the glowing rock above its head as the player character stands in the water.\"\n    },\n    {\n      \"time_sec\": 66677.6,\n      \"description\": \"The player character dodges as the rocky enemy prepares to attack.\"\n    },\n    {\n      \"time_sec\": 66679.8,\n      \"description\": \"The rocky enemy throws the glowing rock, which explodes on the ground, leaving small fires.\"\n    },\n    {\n      \"time_sec\": 66682.0,\n      \"description\": \"The rocky enemy's core glows red again as it faces the player character, who is surrounded by small fires.\"\n    },\n    {\n      \"time_sec\": 66684.2,\n      \"description\": \"The player character performs a flying kick attack, hitting the rocky enemy.\"\n    },\n    {\n      \"time_sec\": 66686.4,\n      \"description\": \"The player character lands in the water after the attack.\"\n    },\n    {\n      \"time_sec\": 66688.6,\n      \"description\": \"The player character runs on a rocky path along the water's edge.\"\n    },\n    {\n      \"time_sec\": 66690.8,\n      \"description\": \"The player character wades back into the water, approaching another rocky enemy in the distance near a wall with glowing red cracks.\"\n    },\n    {\n      \"time_sec\": 66693.0,\n      \"description\": \"The player character stands in the water, facing a rocky enemy in the distance.\"\n    }\n  ],\n  \"entities\": [\n    {\n      \"name\": \"Player Character\",\n      \"description\": \"A humanoid character wearing dark clothing with some teal accents, wielding a long polearm. The character has a monkey-like tail.\"\n    },\n    {\n      \"name\": \"Rocky Enemy\",\n      \"description\": \"A large, bipedal creature made of dark rock. It can form a glowing red, molten core and throw explosive rocks.\"\n    },\n    {\n      \"name\": \"UI Text Notification\",\n      \"description\": \"A box with white Chinese characters appears on the screen. The header is \\\"影神图更新\\\" and the body text is \\\"小妖怪已离去 长按查看\\\".\"\n    }\n  ],\n  \"events\": [\n    {\n      \"time_range\": [\n        66660.0,\n        66662.2\n      ],\n      \"description\": \"A rocky enemy is defeated and explodes, and a text notification appears on screen.\"\n    },\n    {\n      \"time_range\": [\n        66666.6,\n        66684.2\n      ],\n      \"description\": \"The player character engages in combat with a new rocky enemy that uses glowing, explosive rocks.\"\n    }\n  ],\n  \"uncertainties\": [\n    \"The video does not contain any direct visual or literal information about a character named 'Brother Ma' or their death. A text notification appears after an enemy is defeated, but its contents do not mention 'Brother Ma'.\"\n  ]\n}\n```",
+      "requested_range": [
+        66660.0,
+        66693.0
+      ],
+      "round_id": "4",
+      "sampling_config": {
+        "fps": 0.5,
+        "max_frames": 17,
+        "modality": "visual",
+        "mode": "window",
+        "sampling_manifest": {
+          "coverage_ratio": 0.909091,
+          "effective_fps": 0.484848,
+          "frame_times": [
+            66660.0,
+            66662.2,
+            66664.4,
+            66666.6,
+            66668.8,
+            66671.0,
+            66673.2,
+            66675.4,
+            66677.6,
+            66679.8,
+            66682.0,
+            66684.2,
+            66686.4,
+            66688.6,
+            66690.8,
+            66693.0
+          ],
+          "max_gap": 2.2,
+          "observed_subranges": [
+            [
+              66660.0,
+              66661.0
+            ],
+            [
+              66661.2,
+              66663.2
+            ],
+            [
+              66663.4,
+              66665.4
+            ],
+            [
+              66665.6,
+              66667.6
+            ],
+            [
+              66667.8,
+              66669.8
+            ],
+            [
+              66670.0,
+              66672.0
+            ],
+            [
+              66672.2,
+              66674.2
+            ],
+            [
+              66674.4,
+              66676.4
+            ],
+            [
+              66676.6,
+              66678.6
+            ],
+            [
+              66678.8,
+              66680.8
+            ],
+            [
+              66681.0,
+              66683.0
+            ],
+            [
+              66683.2,
+              66685.2
+            ],
+            [
+              66685.4,
+              66687.4
+            ],
+            [
+              66687.6,
+              66689.6
+            ],
+            [
+              66689.8,
+              66691.8
+            ],
+            [
+              66692.0,
+              66693.0
+            ]
+          ],
+          "requested_fps": 0.5,
+          "requested_range": [
+            66660.0,
+            66693.0
+          ],
+          "requires_refinement": false,
+          "sampling_fidelity": 0.909091
+        }
+      },
+      "sampling_fps": 0.5,
+      "schema_version": "ObservationInterpretationV1",
+      "source_lineage": [
+        {
+          "segment_id": "seg_0025",
+          "source_path": "/m2v_intern/xuboshen/data/MM-Lifelong/videos/day/bilibili/025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾..mp4",
+          "source_time_range": [
+            357.768,
+            390.768
+          ],
+          "source_video_id": "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.",
+          "virtual_time_range": [
+            66660.0,
+            66693.0
+          ]
+        }
+      ],
+      "source_video_ids": [
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+      ],
+      "task_id": "r1_t1"
+    }
+  ],
+  "occurrence_candidates": [
+    {
+      "artifact": "attempt_d6df3b987c68e1fb1659c69b.d3f5a5c52626.json",
+      "evidence_role": "candidate",
+      "hit_count": 2,
+      "hit_ranks": [
+        3,
+        1
+      ],
+      "max_score": 0.029957522915269395,
+      "occurrence_id": "occ_5db076a3f080ff1fd767",
+      "passage_ids": [
+        "cap_000262_252d3d8a3053:p0002",
+        "cap_000262_252d3d8a3053:p0004"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?"
+        }
+      ],
+      "rank": 1,
+      "segment_ids": [
+        "seg_0029"
+      ],
+      "source_video_ids": [
+        "029_BV1dbyaBZE8n_p29_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p29 『第六回』未竟（王灵官.跳浪蛟.毒统领.金"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        78670.0,
+        78758.0
+      ]
+    },
+    {
+      "artifact": "attempt_d6df3b987c68e1fb1659c69b.d3f5a5c52626.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        2
+      ],
+      "max_score": 0.027313266443701224,
+      "occurrence_id": "occ_6d173efdda3e5297dc8e",
+      "passage_ids": [
+        "cap_000105_4f028d6d8504:p0003"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?"
+        }
+      ],
+      "rank": 2,
+      "segment_ids": [
+        "seg_0013"
+      ],
+      "source_video_ids": [
+        "013_BV1dbyaBZE8n_p13_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p13 —————夜生白露（无量蝠.不白）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        31530.0,
+        31548.0
+      ]
+    },
+    {
+      "artifact": "attempt_d6df3b987c68e1fb1659c69b.d3f5a5c52626.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        4
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_88e7d40b0219aa64c7e8",
+      "passage_ids": [
+        "cap_000222_da7d373423cd:p0004"
+      ],
+      "query_matches": [],
+      "rank": 3,
+      "segment_ids": [
+        "seg_0025"
+      ],
+      "source_video_ids": [
+        "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+      ],
+      "status": "uninspected",
+      "time_range": [
+        66660.0,
+        66693.0
+      ]
+    },
+    {
+      "artifact": "attempt_d6df3b987c68e1fb1659c69b.d3f5a5c52626.json",
+      "evidence_role": "candidate",
+      "hit_count": 1,
+      "hit_ranks": [
+        5
+      ],
+      "max_score": 0.01639344262295082,
+      "occurrence_id": "occ_812fa671cf88f611bfc6",
+      "passage_ids": [
+        "cap_000281_8815c817479d:p0006"
+      ],
+      "query_matches": [
+        {
+          "query": "after the player discovers that brother ma has already died in battle along with his tank, which tank is challenged next: 1. brown iron tank 2. gray copper tank 3. red silver tank 4. red gold tank?"
+        },
+        {
+          "query": "brother ma died"
+        },
+        {
+          "query": "马哥死了"
+        }
+      ],
+      "rank": 4,
+      "segment_ids": [
+        "seg_0031"
+      ],
+      "source_video_ids": [
+        "031_BV1dbyaBZE8n_p31_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p31 『结局』石卵（石猿.大圣残躯）"
+      ],
+      "status": "uninspected",
+      "time_range": [
+        84369.0,
+        84376.0
+      ]
+    }
+  ],
+  "prediction": {
+    "answer": "No valid answer was returned.",
+    "answer_present": false,
+    "benchmark": "MM-Lifelong/MM-Lifelong",
+    "candidate_answer": "",
+    "case_id": "mmlifelong-game-test-0119",
+    "runtime_metadata": {
+      "dataset": "MM-Lifelong",
+      "duration_sec": 88733.909,
+      "source_index": 119,
+      "source_subset": "day"
+    },
+    "schema_version": "RuntimePredictionV1",
+    "selected_option": "",
+    "split": "test",
+    "subset": "game",
+    "supporting_attempt_ids": [],
+    "supporting_intervals": [],
+    "verification_status": "missing",
+    "verified_answer": ""
+  },
+  "reasoner_decisions": [
+    {
+      "api_response": {
+        "completion_tokens": 557,
+        "content_chars": 1457,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9680,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "23904610491c761f6c0c62b79b3faf3d",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 65,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Brother Ma died",
+              "Brother Ma's tank",
+              "Brown Iron Tank",
+              "Gray Copper Tank"
+            ],
+            "goal": "Find the moment the player discovers Brother Ma has died and identify the next tank challenged.",
+            "index_mode": "hybrid",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "source_video_ids": [
+              "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 —————日落红尘（皓斧力士.褐铁~灰铜-",
+              "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+            ],
+            "top_k": 12
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Brother Ma died",
+              "Brother Ma's tank",
+              "Brown Iron Tank",
+              "Gray Copper Tank"
+            ],
+            "goal": "Find the moment the player discovers Brother Ma has died and identify the next tank challenged.",
+            "index_mode": "hybrid",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "source_video_ids": [
+              "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 —————日落红尘（皓斧力士.褐铁~灰铜-",
+              "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+            ],
+            "top_k": 12
+          }
+        ]
+      },
+      "raw_sha256": "2885edcf9684a3fd77025ea6e2fe25eb697dae01c0021d0316e096a2d849834b",
+      "repair_failed": false,
+      "round": 1,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 309,
+        "content_chars": 912,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 9839,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "7b05a6d2951e16796f3b44297eeeb837",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 54,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Brother Ma died",
+              "马哥死了"
+            ],
+            "goal": "Find when the player discovers Brother Ma has died.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "Brother Ma died",
+              "马哥死了"
+            ],
+            "goal": "Find when the player discovers Brother Ma has died.",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1",
+            "top_k": 5
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "c58758beeed6918033a1575661770c88a97955d109161d338ef0352c8ff49e53",
+      "repair_failed": false,
+      "round": 2,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 736,
+        "content_chars": 2475,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 15032,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "09ee87ac4ae105be46603fbabacaae64",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 73,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Find the moment the player discovers Brother Ma's death and identify the next tank challenged.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0025",
+            "time_range": [
+              66660.0,
+              66693.0
+            ]
+          },
+          {
+            "goal": "Search for the tank names mentioned in the options.",
+            "inspection_mode": "search_asr",
+            "query_id": "r1_t2",
+            "search_terms": [
+              "Brown Iron Tank",
+              "Gray Copper Tank",
+              "Red Silver Tank",
+              "Red Gold Tank",
+              "褐铁",
+              "灰铜",
+              "赤银",
+              "赤金"
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Find the moment the player discovers Brother Ma's death and identify the next tank challenged.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0025",
+            "time_range": [
+              66660.0,
+              66693.0
+            ]
+          },
+          {
+            "goal": "Search for the tank names mentioned in the options.",
+            "inspection_mode": "search_asr",
+            "query_id": "r1_t2",
+            "search_terms": [
+              "Brown Iron Tank",
+              "Gray Copper Tank",
+              "Red Silver Tank",
+              "Red Gold Tank",
+              "褐铁",
+              "灰铜",
+              "赤银",
+              "赤金"
+            ]
+          }
+        ],
+        "workspace_ops": []
+      },
+      "raw_sha256": "4b615e77c9cfa6e83cf3b244ac0d3369eca2cacb6fd74d5c35e66684d9ee2759",
+      "repair_failed": false,
+      "round": 3,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 404,
+        "content_chars": 1081,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 522,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "03c4de4711d4c6606426b8eb73d55017",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 59,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Find the moment the player discovers Brother Ma has died.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0025",
+            "time_range": [
+              66660,
+              66693
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player discovers that Brother Ma has died."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c2",
+              "confidence": "medium",
+              "derived_from": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The next tank challenged is one of the following: Brown Iron Tank, Gray Copper Tank, Red Silver Tank, Red Gold Tank."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Find the moment the player discovers Brother Ma has died.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0025",
+            "time_range": [
+              66660,
+              66693
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player discovers that Brother Ma has died."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c2",
+              "confidence": "medium",
+              "derived_from": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The next tank challenged is one of the following: Brown Iron Tank, Gray Copper Tank, Red Silver Tank, Red Gold Tank."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "raw_excerpt": "```json\n{\n  \"action\": \"investigate\",\n  \"tasks\": [\n    {\n      \"query_id\": \"r1_t1\",\n      \"goal\": \"Find the moment the player discovers Brother Ma has died.\",\n      \"segment_id\": \"seg_0025\",\n      \"time_range\": [\n        66660,\n        66693\n      ],\n      \"inspection_mode\": \"window\",\n      \"expected_evidence\": \"direct observation\"\n    }\n  ],\n  \"workspace_ops\": [\n    {\n      \"op\": \"add_claim\",\n      \"claim\": {\n        \"claim_id\": \"c1\",\n        \"text\": \"The player discovers that Brother Ma has died.\",\n        \"source\": \"hypothesis\",\n        \"cites\": [],\n        \"derived_from\": [],\n        \"status\": \"active\",\n        \"confidence\": \"medium\",\n        \"metadata\": {}\n      }\n    },\n    {\n      \"op\": \"add_claim\",\n      \"claim\": {\n        \"claim_id\": \"c2\",\n        \"text\": \"The next tank challenged is one of the following: Brown Iron Tank, Gray Copper Tank, Red Silver Tank, Red Gold Tank.\",\n        \"source\": \"hypothesis\",\n        \"cites\": [],\n        \"derived_from\": [],\n        \"status\": \"active\",\n        \"confidence\": \"medium\",\n        \"metadata\": {}\n      }\n    }\n  ]\n}\n```",
+      "raw_sha256": "dc667d601cbe1c259ae706ea0ef67a6a6c9d7a3197370211bef04584f6387dd9",
+      "round": 4,
+      "type": "reasoner_json_repair"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 529,
+        "content_chars": 1614,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18126,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "e0cdf45b5a27b5219378be5fcab23903",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 65,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "expected_evidence": "direct observation",
+            "goal": "Find the moment the player discovers Brother Ma has died.",
+            "inspection_mode": "window",
+            "query_id": "r1_t1",
+            "segment_id": "seg_0025",
+            "time_range": [
+              66660,
+              66693
+            ]
+          }
+        ],
+        "workspace_ops": [
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c1",
+              "confidence": "medium",
+              "derived_from": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The player discovers that Brother Ma has died."
+            },
+            "op": "add_claim"
+          },
+          {
+            "claim": {
+              "cites": [],
+              "claim_id": "c2",
+              "confidence": "medium",
+              "derived_from": [],
+              "metadata": {},
+              "source": "hypothesis",
+              "status": "active",
+              "text": "The next tank challenged is one of the following: Brown Iron Tank, Gray Copper Tank, Red Silver Tank, Red Gold Tank."
+            },
+            "op": "add_claim"
+          }
+        ]
+      },
+      "format_repaired": true,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {},
+      "raw_sha256": "2cc1781a2b99390c19ace2bb861ebeb8e4c390e67050696c6611eac29bd2ba60",
+      "repair_failed": false,
+      "round": 4,
+      "schema_unwrapped": true,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1534,
+        "content_chars": 3677,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 1449,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "4092a298c2b24797d0124e791b90e532",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 59,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace": [
+          {
+            "box_2d": [
+              66662.2,
+              66662.2
+            ],
+            "box_3d": [
+              66662.2,
+              66662.2
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c3",
+            "claim_text": "At 66662.2, a notification appears on screen: \"影神图更新 小妖怪已离去 长按查看\" (Yǐng shén tú gēngxīn xiǎo yāoguài yǐ lí qù zhǎng àn chákàn), which translates to \"Shadow God Map updated, the little demon has left, long press to view.\"",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66662.2,
+              66662.2
+            ]
+          },
+          {
+            "box_2d": [
+              66660,
+              66661
+            ],
+            "box_3d": [
+              66660,
+              66661
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c4",
+            "claim_text": "At 66660.0, a large, rocky enemy, which is the Brown Iron Tank, explodes after being defeated by the player.",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66660,
+              66661
+            ]
+          },
+          {
+            "box_2d": [
+              66667.8,
+              66680.8
+            ],
+            "box_3d": [
+              66667.8,
+              66680.8
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c5",
+            "claim_text": "After defeating the Brown Iron Tank, the player approaches and engages a new enemy that is a large, bipedal figure made of dark, gray rock with a glowing red core.",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66667.8,
+              66680.8
+            ]
+          },
+          {
+            "box_2d": [
+              66302.232,
+              69214.808
+            ],
+            "box_3d": [
+              66302.232,
+              69214.808
+            ],
+            "cites": [],
+            "claim_id": "c6",
+            "claim_text": "The video title for segment 25 is \"『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\", which mentions \"马哥\" (Brother Ma).",
+            "confidence": "high",
+            "derived_from": [],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              63133.464,
+              66302.232
+            ],
+            "box_3d": [
+              63133.464,
+              66302.232
+            ],
+            "cites": [],
+            "claim_id": "c7",
+            "claim_text": "The video title for segment 24 is \"『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", which mentions \"褐铁~灰铜\" (Brown Iron ~ Gray Copper).",
+            "confidence": "high",
+            "derived_from": [],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              66662.2,
+              66662.2
+            ],
+            "box_3d": [
+              66662.2,
+              66662.2
+            ],
+            "cites": [],
+            "claim_id": "c8",
+            "claim_text": "The notification \"小妖怪已离去\" (the little demon has left) signifies the death of Brother Ma, who was accompanying the player in the form of the Brown Iron Tank.",
+            "confidence": "medium",
+            "derived_from": [
+              "c3",
+              "c4",
+              "c6"
+            ],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              66667.8,
+              66680.8
+            ],
+            "box_3d": [
+              66667.8,
+              66680.8
+            ],
+            "cites": [],
+            "claim_id": "c9",
+            "claim_text": "The next enemy challenged after the death of Brother Ma (as the Brown Iron Tank) is the Gray Copper Tank.",
+            "confidence": "medium",
+            "derived_from": [
+              "c5",
+              "c7",
+              "c8"
+            ],
+            "source": "derived",
+            "status": "active"
+          }
+        ]
+      },
+      "parsed": {
+        "action": "update_workspace",
+        "workspace": [
+          {
+            "box_2d": [
+              66662.2,
+              66662.2
+            ],
+            "box_3d": [
+              66662.2,
+              66662.2
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c3",
+            "claim_text": "At 66662.2, a notification appears on screen: \"影神图更新 小妖怪已离去 长按查看\" (Yǐng shén tú gēngxīn xiǎo yāoguài yǐ lí qù zhǎng àn chákàn), which translates to \"Shadow God Map updated, the little demon has left, long press to view.\"",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66662.2,
+              66662.2
+            ]
+          },
+          {
+            "box_2d": [
+              66660,
+              66661
+            ],
+            "box_3d": [
+              66660,
+              66661
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c4",
+            "claim_text": "At 66660.0, a large, rocky enemy, which is the Brown Iron Tank, explodes after being defeated by the player.",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66660,
+              66661
+            ]
+          },
+          {
+            "box_2d": [
+              66667.8,
+              66680.8
+            ],
+            "box_3d": [
+              66667.8,
+              66680.8
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c5",
+            "claim_text": "After defeating the Brown Iron Tank, the player approaches and engages a new enemy that is a large, bipedal figure made of dark, gray rock with a glowing red core.",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66667.8,
+              66680.8
+            ]
+          },
+          {
+            "box_2d": [
+              66302.232,
+              69214.808
+            ],
+            "box_3d": [
+              66302.232,
+              69214.808
+            ],
+            "cites": [],
+            "claim_id": "c6",
+            "claim_text": "The video title for segment 25 is \"『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\", which mentions \"马哥\" (Brother Ma).",
+            "confidence": "high",
+            "derived_from": [],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              63133.464,
+              66302.232
+            ],
+            "box_3d": [
+              63133.464,
+              66302.232
+            ],
+            "cites": [],
+            "claim_id": "c7",
+            "claim_text": "The video title for segment 24 is \"『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", which mentions \"褐铁~灰铜\" (Brown Iron ~ Gray Copper).",
+            "confidence": "high",
+            "derived_from": [],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              66662.2,
+              66662.2
+            ],
+            "box_3d": [
+              66662.2,
+              66662.2
+            ],
+            "cites": [],
+            "claim_id": "c8",
+            "claim_text": "The notification \"小妖怪已离去\" (the little demon has left) signifies the death of Brother Ma, who was accompanying the player in the form of the Brown Iron Tank.",
+            "confidence": "medium",
+            "derived_from": [
+              "c3",
+              "c4",
+              "c6"
+            ],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              66667.8,
+              66680.8
+            ],
+            "box_3d": [
+              66667.8,
+              66680.8
+            ],
+            "cites": [],
+            "claim_id": "c9",
+            "claim_text": "The next enemy challenged after the death of Brother Ma (as the Brown Iron Tank) is the Gray Copper Tank.",
+            "confidence": "medium",
+            "derived_from": [
+              "c5",
+              "c7",
+              "c8"
+            ],
+            "source": "derived",
+            "status": "active"
+          }
+        ]
+      },
+      "raw_excerpt": "```json\n{\n  \"action\": \"update_workspace\",\n  \"workspace\": [\n    {\n      \"box_2d\": [\n        66662.2,\n        66662.2\n      ],\n      \"box_3d\": [\n        66662.2,\n        66662.2\n      ],\n      \"claim_id\": \"c3\",\n      \"claim_text\": \"At 66662.2, a notification appears on screen: \\\"影神图更新 小妖怪已离去 长按查看\\\" (Yǐng shén tú gēngxīn xiǎo yāoguài yǐ lí qù zhǎng àn chákàn), which translates to \\\"Shadow God Map updated, the little demon has left, long press to view.\\\"\",\n      \"source\": \"observation\",\n      \"cites\": [\n        \"attempt_af0f7eb01765423f3efa2d5e\"\n      ],\n      \"time_anchor\": [\n        66662.2,\n        66662.2\n      ],\n      \"status\": \"active\",\n      \"confidence\": \"high\"\n    },\n    {\n      \"box_2d\": [\n        66660,\n        66661\n      ],\n      \"box_3d\": [\n        66660,\n        66661\n      ],\n      \"claim_id\": \"c4\",\n      \"claim_text\": \"At 66660.0, a large, rocky enemy, which is the Brown Iron Tank, explodes after being defeated by the player.\",\n      \"source\": \"observation\",\n      \"cites\": [\n        \"attempt_af0f7eb01765423f3efa2d5e\"\n      ],\n      \"time_anchor\": [\n        66660,\n        66661\n      ],\n      \"status\": \"active\",\n      \"confidence\": \"high\"\n    },\n    {\n      \"box_2d\": [",
+      "raw_sha256": "3d2484da2abe1522c1ad81353143534390bbd02900fc21b470f682c668fd3554",
+      "round": 5,
+      "type": "reasoner_json_repair"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 1458,
+        "content_chars": 3452,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 18025,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "7836773450de32ddd86c94347cb4b6ae",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 67,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "update_workspace",
+        "workspace": [
+          {
+            "box_2d": [
+              66662.2,
+              66662.2
+            ],
+            "box_3d": [
+              66662.2,
+              66662.2
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c3",
+            "claim_text": "At 66662.2, a notification appears on screen: \"影神图更新 小妖怪已离去 长按查看\" (Yǐng shén tú gēngxīn xiǎo yāoguài yǐ lí qù zhǎng àn chákàn), which translates to \"Shadow God Map updated, the little demon has left, long press to view.\"",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66662.2,
+              66662.2
+            ]
+          },
+          {
+            "box_2d": [
+              66660,
+              66661
+            ],
+            "box_3d": [
+              66660,
+              66661
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c4",
+            "claim_text": "At 66660.0, a large, rocky enemy, which is the Brown Iron Tank, explodes after being defeated by the player.",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66660,
+              66661
+            ]
+          },
+          {
+            "box_2d": [
+              66667.8,
+              66680.8
+            ],
+            "box_3d": [
+              66667.8,
+              66680.8
+            ],
+            "cites": [
+              "attempt_af0f7eb01765423f3efa2d5e"
+            ],
+            "claim_id": "c5",
+            "claim_text": "After defeating the Brown Iron Tank, the player approaches and engages a new enemy that is a large, bipedal figure made of dark, gray rock with a glowing red core.",
+            "confidence": "high",
+            "source": "observation",
+            "status": "active",
+            "time_anchor": [
+              66667.8,
+              66680.8
+            ]
+          },
+          {
+            "box_2d": [
+              66302.232,
+              69214.808
+            ],
+            "box_3d": [
+              66302.232,
+              69214.808
+            ],
+            "cites": [],
+            "claim_id": "c6",
+            "claim_text": "The video title for segment 25 is \"『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾.\", which mentions \"马哥\" (Brother Ma).",
+            "confidence": "high",
+            "derived_from": [],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              63133.464,
+              66302.232
+            ],
+            "box_3d": [
+              63133.464,
+              66302.232
+            ],
+            "cites": [],
+            "claim_id": "c7",
+            "claim_text": "The video title for segment 24 is \"『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 『第五回』日落红尘（皓斧力士.褐铁~灰铜-\", which mentions \"褐铁~灰铜\" (Brown Iron ~ Gray Copper).",
+            "confidence": "high",
+            "derived_from": [],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              66662.2,
+              66662.2
+            ],
+            "box_3d": [
+              66662.2,
+              66662.2
+            ],
+            "cites": [],
+            "claim_id": "c8",
+            "claim_text": "The notification \"小妖怪已离去\" (the little demon has left) signifies the death of Brother Ma, who was accompanying the player in the form of the Brown Iron Tank.",
+            "confidence": "medium",
+            "derived_from": [
+              "c3",
+              "c4",
+              "c6"
+            ],
+            "source": "derived",
+            "status": "active"
+          },
+          {
+            "box_2d": [
+              66667.8,
+              66680.8
+            ],
+            "box_3d": [
+              66667.8,
+              66680.8
+            ],
+            "cites": [],
+            "claim_id": "c9",
+            "claim_text": "The next enemy challenged after the death of Brother Ma (as the Brown Iron Tank) is the Gray Copper Tank.",
+            "confidence": "medium",
+            "derived_from": [
+              "c5",
+              "c7",
+              "c8"
+            ],
+            "source": "derived",
+            "status": "active"
+          }
+        ]
+      },
+      "format_repaired": true,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {},
+      "raw_sha256": "a4da61fd7644929a9df491d0f266e610170c5a26c01058a71991d3451c68f528",
+      "repair_failed": false,
+      "round": 5,
+      "schema_unwrapped": true,
+      "type": "reasoner_workspace"
+    },
+    {
+      "api_response": {
+        "completion_tokens": 424,
+        "content_chars": 1050,
+        "finish_reason": "stop",
+        "image_attachment_warning": false,
+        "image_label_count": 0,
+        "images_attached": 0,
+        "images_dropped": 0,
+        "images_requested": 0,
+        "prompt_position": "first",
+        "prompt_tokens": 16825,
+        "provider_reported_seed_support": "unknown",
+        "provider_request_id": "3c873cd1247c85e0e2e8049afa216e49",
+        "provider_seed_supported": false,
+        "reasoning_tokens": 119,
+        "requested_completion_tokens": 4096,
+        "requested_seed": null,
+        "retry_count": 0,
+        "temperature": null,
+        "top_p": null
+      },
+      "decision_payload": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "马哥"
+            ],
+            "goal": "Find when Brother Ma dies",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1"
+          }
+        ]
+      },
+      "format_repaired": false,
+      "model": "pa/gmn-2.5-pr",
+      "parsed": {
+        "action": "investigate",
+        "tasks": [
+          {
+            "caption_queries": [
+              "马哥"
+            ],
+            "goal": "Find when Brother Ma dies",
+            "inspection_mode": "search_caption",
+            "query_id": "r1_t1"
+          }
+        ]
+      },
+      "raw_sha256": "212e51e97c4db8445f95a8e7e1bf846a52cb3b514c32199d141c6595be72a411",
+      "repair_failed": false,
+      "round": 6,
+      "schema_unwrapped": false,
+      "type": "reasoner_workspace"
+    }
+  ],
+  "runtime_summary": {
+    "answer": "No valid answer was returned.",
+    "answer_policy": "benchmark_best_effort",
+    "answer_present": false,
+    "blocking_reasons": [
+      "answer_is_required"
+    ],
+    "candidate_answer": "",
+    "case_id": "mmlifelong-game-test-0119",
+    "investigation_count": 3,
+    "reference_reason": "answer_missing",
+    "reference_valid": false,
+    "residual_uncertainty": "",
+    "rounds": 6,
+    "runtime_metrics": {
+      "answer_rate": 0.0,
+      "candidate_to_support_conversion": 0.0,
+      "caption_material_attempts": 1,
+      "caption_occurrence_ambiguous_search_count": 1,
+      "caption_occurrence_candidate_count": 4,
+      "caption_result_dedup_rate": 0.0,
+      "caption_result_novelty_rate": 1.0,
+      "caption_result_set_reuse_count": 0,
+      "caption_searches": 1,
+      "dedicated_read_rounds": 0,
+      "duplicate_search_count": 0,
+      "empty_search_count": 0,
+      "reference_valid_rate": 0.0,
+      "rounds": 6,
+      "unique_visual_material_attempts": 1,
+      "visual_confirmations": 1,
+      "visual_frames_inspected": 16,
+      "visual_interpretation_count": 2,
+      "visual_reinterpretation_count": 1
+    },
+    "selected_option": "",
+    "supporting_claim_ids": [],
+    "supporting_intervals": [],
+    "verification_status": "missing",
+    "verified_answer": ""
+  },
+  "sampling_manifests": [
+    {
+      "attempt_id": "attempt_af0f7eb01765423f3efa2d5e",
+      "round_id": "3",
+      "sampling_manifest": {
+        "coverage_ratio": 0.909091,
+        "effective_fps": 0.484848,
+        "frame_times": [
+          66660.0,
+          66662.2,
+          66664.4,
+          66666.6,
+          66668.8,
+          66671.0,
+          66673.2,
+          66675.4,
+          66677.6,
+          66679.8,
+          66682.0,
+          66684.2,
+          66686.4,
+          66688.6,
+          66690.8,
+          66693.0
+        ],
+        "max_gap": 2.2,
+        "observed_subranges": [
+          [
+            66660.0,
+            66661.0
+          ],
+          [
+            66661.2,
+            66663.2
+          ],
+          [
+            66663.4,
+            66665.4
+          ],
+          [
+            66665.6,
+            66667.6
+          ],
+          [
+            66667.8,
+            66669.8
+          ],
+          [
+            66670.0,
+            66672.0
+          ],
+          [
+            66672.2,
+            66674.2
+          ],
+          [
+            66674.4,
+            66676.4
+          ],
+          [
+            66676.6,
+            66678.6
+          ],
+          [
+            66678.8,
+            66680.8
+          ],
+          [
+            66681.0,
+            66683.0
+          ],
+          [
+            66683.2,
+            66685.2
+          ],
+          [
+            66685.4,
+            66687.4
+          ],
+          [
+            66687.6,
+            66689.6
+          ],
+          [
+            66689.8,
+            66691.8
+          ],
+          [
+            66692.0,
+            66693.0
+          ]
+        ],
+        "requested_fps": 0.5,
+        "requested_range": [
+          66660.0,
+          66693.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.909091
+      },
+      "task_id": "r1_t1"
+    },
+    {
+      "attempt_id": "attempt_af0f7eb01765423f3efa2d5e",
+      "round_id": "4",
+      "sampling_manifest": {
+        "coverage_ratio": 0.909091,
+        "effective_fps": 0.484848,
+        "frame_times": [
+          66660.0,
+          66662.2,
+          66664.4,
+          66666.6,
+          66668.8,
+          66671.0,
+          66673.2,
+          66675.4,
+          66677.6,
+          66679.8,
+          66682.0,
+          66684.2,
+          66686.4,
+          66688.6,
+          66690.8,
+          66693.0
+        ],
+        "max_gap": 2.2,
+        "observed_subranges": [
+          [
+            66660.0,
+            66661.0
+          ],
+          [
+            66661.2,
+            66663.2
+          ],
+          [
+            66663.4,
+            66665.4
+          ],
+          [
+            66665.6,
+            66667.6
+          ],
+          [
+            66667.8,
+            66669.8
+          ],
+          [
+            66670.0,
+            66672.0
+          ],
+          [
+            66672.2,
+            66674.2
+          ],
+          [
+            66674.4,
+            66676.4
+          ],
+          [
+            66676.6,
+            66678.6
+          ],
+          [
+            66678.8,
+            66680.8
+          ],
+          [
+            66681.0,
+            66683.0
+          ],
+          [
+            66683.2,
+            66685.2
+          ],
+          [
+            66685.4,
+            66687.4
+          ],
+          [
+            66687.6,
+            66689.6
+          ],
+          [
+            66689.8,
+            66691.8
+          ],
+          [
+            66692.0,
+            66693.0
+          ]
+        ],
+        "requested_fps": 0.5,
+        "requested_range": [
+          66660.0,
+          66693.0
+        ],
+        "requires_refinement": false,
+        "sampling_fidelity": 0.909091
+      },
+      "task_id": "r1_t1"
+    }
+  ],
+  "schema_version": "MGERPhase3CaseDiagnosticV1",
+  "task_outcomes": [
+    {
+      "completed_tasks": 0,
+      "outcomes": [
+        {
+          "attempt_ids": [],
+          "consumes_budget": false,
+          "evidence_ids": [],
+          "failure_reason": "unknown Caption source_video_ids: 024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 —————日落红尘（皓斧力士.褐铁~灰铜-",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "failed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 1,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_d6df3b987c68e1fb1659c69b"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 2,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_af0f7eb01765423f3efa2d5e"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t1_3efa2d5e"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        },
+        {
+          "attempt_ids": [
+            "attempt_b7267d7769e5045ba610de35"
+          ],
+          "consumes_budget": false,
+          "evidence_ids": [],
+          "failure_reason": "asr_zero_hits_use_visual_modality",
+          "query_id": "r1_t2",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 2,
+      "round": 3,
+      "type": "investigator_batch"
+    },
+    {
+      "completed_tasks": 1,
+      "outcomes": [
+        {
+          "attempt_ids": [
+            "attempt_af0f7eb01765423f3efa2d5e"
+          ],
+          "consumes_budget": true,
+          "evidence_ids": [
+            "ev_r1_t1_3efa2d5e"
+          ],
+          "failure_reason": "",
+          "query_id": "r1_t1",
+          "reused": false,
+          "status": "completed"
+        }
+      ],
+      "requested_tasks": 1,
+      "round": 4,
+      "type": "investigator_batch"
+    }
+  ],
+  "task_requests": [
+    {
+      "action": "investigate",
+      "round": 1,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Brother Ma died",
+            "Brother Ma's tank",
+            "Brown Iron Tank",
+            "Gray Copper Tank"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "hybrid",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [
+            "024_BV1dbyaBZE8n_p24_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p24 —————日落红尘（皓斧力士.褐铁~灰铜-",
+            "025_BV1dbyaBZE8n_p25_『黑神话：悟空』4K丨影视级画质 全流程通关实况攻略 动作角色扮演游戏-Black Myth： Wukong p25 —————日落红尘（马哥.燧统领.云里雾."
+          ],
+          "time_range": [],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 2,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "Brother Ma died",
+            "马哥死了"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 5
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 3,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "seg_0025",
+          "source_video_ids": [],
+          "time_range": [
+            66660.0,
+            66693.0
+          ],
+          "top_k": 12
+        },
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_asr",
+          "query_id": "r1_t2",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 4,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "window",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "seg_0025",
+          "source_video_ids": [],
+          "time_range": [
+            66660.0,
+            66693.0
+          ],
+          "top_k": 12
+        }
+      ]
+    },
+    {
+      "action": "investigate",
+      "round": 6,
+      "tasks": [
+        {
+          "arbitration_attempt_id": "",
+          "caption_queries": [
+            "马哥"
+          ],
+          "conversion_trace": [],
+          "coordinate_space": "virtual",
+          "expand_neighbors": 0,
+          "force_reinspect": false,
+          "index_mode": "lexical",
+          "inspection_mode": "search_caption",
+          "query_id": "r1_t1",
+          "sampling_floor_fps": 0.5,
+          "segment_id": "",
+          "source_video_ids": [],
+          "time_range": [],
+          "top_k": 12
+        }
+      ]
+    }
+  ],
+  "workspace_rejection_events": []
+}
