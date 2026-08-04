@@ -227,6 +227,34 @@ def test_plan_compiler_canonicalizes_duplicate_names_without_overwrite() -> None
     assert obligations[1].depends_on == (obligations[0].requirement_id,)
 
 
+def test_plan_normalizes_external_temporal_enums_before_compilation() -> None:
+    plan = EvidencePlan.from_mapping(
+        {
+            "requirements": [
+                {"name": "anchor", "goal": "Locate the anchor.", "role": "locator"},
+                {
+                    "name": "target",
+                    "goal": "Inspect the event during the anchor.",
+                    "role": "answer_bearing",
+                    "depends_on": ["anchor"],
+                    "dependency_type": "temporal",
+                    "temporal_relation": "during",
+                    "temporal_selection": "earliest",
+                },
+            ]
+        },
+        question="What happens during the anchor?",
+    )
+    document = WorkingDocument.with_question_premise("question")
+
+    compilation = compile_evidence_plan(document, plan, question="question")
+
+    assert compilation["compiled"] is True
+    assert plan.requirements[1].temporal_relation == "within"
+    assert plan.requirements[1].temporal_selection == "unspecified"
+    assert next(iter(document.temporal_scopes.values())).relation == "within"
+
+
 def test_catalog_exposes_short_handles_and_caps_refinable_items(tmp_path: Path) -> None:
     document = WorkingDocument.with_question_premise("question")
     compile_evidence_plan(document, EvidencePlan.fallback("question"), question="question")

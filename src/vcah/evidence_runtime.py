@@ -12,7 +12,7 @@ from vcah.evidence_state import (
     EvidenceObligation,
     EvidenceObligationState,
 )
-from vcah.temporal_scope import TemporalScope
+from vcah.temporal_scope import TEMPORAL_RELATIONS, TEMPORAL_SELECTIONS, TemporalScope
 from vcah.workspace import ObservationLog, WorkingDocument
 
 
@@ -45,6 +45,24 @@ class EvidenceRequirementSpec:
             role = "answer_bearing"
         if dependency_type not in DEPENDENCY_TYPES:
             dependency_type = "locator"
+        temporal_relation = str(
+            value.get("temporal_relation", value.get("relation", "")) or ""
+        ).strip().casefold()
+        temporal_relation = {
+            "during": "within",
+            "while": "within",
+            "immediately_after": "after",
+            "immediately after": "after",
+            "prior": "before",
+        }.get(temporal_relation, temporal_relation)
+        if temporal_relation not in TEMPORAL_RELATIONS:
+            temporal_relation = ""
+        temporal_selection = str(
+            value.get("temporal_selection", value.get("selection", "unspecified"))
+            or "unspecified"
+        ).strip().casefold()
+        if temporal_selection not in TEMPORAL_SELECTIONS:
+            temporal_selection = "unspecified"
         raw_dependencies = value.get("depends_on", ()) or ()
         if isinstance(raw_dependencies, str):
             raw_dependencies = (raw_dependencies,)
@@ -62,8 +80,8 @@ class EvidenceRequirementSpec:
             role=role,
             depends_on=depends_on,
             dependency_type=dependency_type,
-            temporal_relation=str(value.get("temporal_relation", value.get("relation", "")) or "").casefold(),
-            temporal_selection=str(value.get("temporal_selection", value.get("selection", "unspecified")) or "unspecified").casefold(),
+            temporal_relation=temporal_relation,
+            temporal_selection=temporal_selection,
         )
 
 

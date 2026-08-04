@@ -1758,8 +1758,9 @@ def _evidence_plan_prompt(kwargs: Mapping[str, Any]) -> str:
         '{"requirements":[{"name":"short_name","goal":"one observable goal",'
         '"kind":"generic|text_exact|ui_text|persistent_state|transient_event|relation",'
         '"role":"premise|locator|answer_bearing|disambiguation","depends_on":[],'
-        '"dependency_type":"locator|temporal|semantic","temporal_relation":"",'
-        '"temporal_selection":"unspecified"}]}. '
+        '"dependency_type":"locator|temporal|semantic",'
+        '"temporal_relation":"before|after|within|between|",'
+        '"temporal_selection":"first|next|last|all|unspecified"}]}. '
         "Plan once; use at most six requirements. A condition explicitly stated by the question is a premise, not an "
         "answer-bearing requirement. A premise may be a locator when multiple occurrences require disambiguation, but "
         "locator dependencies do not become final grounding requirements. Only the observation needed to answer, plus a "
