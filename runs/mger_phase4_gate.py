@@ -90,6 +90,7 @@ def evaluate_root(
     expected_case_count: int = EXPECTED_CASE_COUNT,
     max_mean_frames: float = MAX_MEAN_FRAMES,
     expected_judge_model: str = "",
+    expected_state_mode: str = "runtime_derived",
 ) -> dict[str, Any]:
     normalized_stage = str(stage or "first").strip().casefold()
     if normalized_stage not in {"first", "strict"}:
@@ -130,6 +131,12 @@ def evaluate_root(
         for case in rows
         if str(case.get("evidence_control_mode", "")) != expected_control_mode
     )
+    state_mode_mismatches = sorted(
+        str(case.get("case_id", ""))
+        for case in rows
+        if expected_state_mode
+        and str(case.get("evidence_state_mode", "")) != expected_state_mode
+    )
     regression = next(
         (
             case
@@ -143,6 +150,7 @@ def evaluate_root(
         "judge_parse_complete": not parse_failures,
         "judge_model_consistent": not judge_mismatches,
         "evidence_control_mode_consistent": not control_mode_mismatches,
+        "evidence_state_mode_consistent": not state_mode_mismatches,
         "mean_frames_within_limit": mean_frames <= float(max_mean_frames),
         "silent_drops_zero": silent_drops == 0,
     }
@@ -186,6 +194,7 @@ def evaluate_root(
         "parse_failures": parse_failures,
         "judge_model_mismatches": judge_mismatches,
         "evidence_control_mode_mismatches": control_mode_mismatches,
+        "evidence_state_mode_mismatches": state_mode_mismatches,
         "checks": checks,
         "passed": not failures,
         "failures": failures,

@@ -16,10 +16,13 @@ ObligationStatus = Literal[
     "open",
     "candidate_found",
     "observed",
+    "supported",
     "contested",
     "satisfied",
     "unresolved",
 ]
+EvidenceRole = Literal["premise", "locator", "answer_bearing", "disambiguation"]
+DependencyType = Literal["locator", "temporal", "semantic"]
 
 EVIDENCE_KINDS = {
     "generic",
@@ -33,10 +36,13 @@ OBLIGATION_STATUSES = {
     "open",
     "candidate_found",
     "observed",
+    "supported",
     "contested",
     "satisfied",
     "unresolved",
 }
+EVIDENCE_ROLES = {"premise", "locator", "answer_bearing", "disambiguation"}
+DEPENDENCY_TYPES = {"locator", "temporal", "semantic"}
 CUE_STATUSES = {"unverified", "verified", "rejected"}
 
 
@@ -48,6 +54,8 @@ class EvidenceObligation:
     temporal_relation: str | None = None
     depends_on: tuple[str, ...] = ()
     answer_bearing: bool = True
+    role: EvidenceRole = "answer_bearing"
+    dependency_type: DependencyType = "semantic"
 
     def __post_init__(self) -> None:
         requirement_id = str(self.requirement_id or "").strip()
@@ -63,22 +71,47 @@ class EvidenceObligation:
         if requirement_id in depends_on:
             raise ValueError(f"obligation_cannot_depend_on_itself:{requirement_id}")
         temporal_relation = str(self.temporal_relation or "").strip().casefold() or None
+        role = str(self.role or "answer_bearing").strip().casefold()
+        if not bool(self.answer_bearing) and role == "answer_bearing":
+            role = "locator"
+        if role not in EVIDENCE_ROLES:
+            raise ValueError(f"invalid_evidence_role:{role}")
+        dependency_type = str(self.dependency_type or "semantic").strip().casefold()
+        if dependency_type not in DEPENDENCY_TYPES:
+            raise ValueError(f"invalid_dependency_type:{dependency_type}")
         object.__setattr__(self, "requirement_id", requirement_id)
         object.__setattr__(self, "observable_goal", observable_goal)
         object.__setattr__(self, "evidence_kind", evidence_kind)
         object.__setattr__(self, "temporal_relation", temporal_relation)
         object.__setattr__(self, "depends_on", depends_on)
-        object.__setattr__(self, "answer_bearing", bool(self.answer_bearing))
+        object.__setattr__(
+            self,
+            "answer_bearing",
+            role in {"answer_bearing", "disambiguation"},
+        )
+        object.__setattr__(self, "role", role)
+        object.__setattr__(self, "dependency_type", dependency_type)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> "EvidenceObligation":
+        answer_bearing = bool(value.get("answer_bearing", True))
         return cls(
             requirement_id=str(value.get("requirement_id", value.get("id", "")) or ""),
             observable_goal=str(value.get("observable_goal", value.get("goal", "")) or ""),
             evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),  # type: ignore[arg-type]
             temporal_relation=value.get("temporal_relation"),  # type: ignore[arg-type]
             depends_on=tuple(value.get("depends_on", ()) or ()),  # type: ignore[arg-type]
-            answer_bearing=bool(value.get("answer_bearing", True)),
+            answer_bearing=answer_bearing,
+            role=str(
+                value.get(
+                    "role",
+                    "answer_bearing" if answer_bearing else "locator",
+                )
+                or "answer_bearing"
+            ),  # type: ignore[arg-type]
+            dependency_type=str(
+                value.get("dependency_type", "semantic") or "semantic"
+            ),  # type: ignore[arg-type]
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -91,6 +124,7 @@ class EvidenceObligationState:
     status: ObligationStatus = "open"
     supporting_claim_ids: tuple[str, ...] = ()
     supporting_attempt_ids: tuple[str, ...] = ()
+    supporting_item_ids: tuple[str, ...] = ()
     residual_uncertainty: str = ""
 
     def __post_init__(self) -> None:
@@ -104,6 +138,7 @@ class EvidenceObligationState:
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "supporting_claim_ids", _ids(self.supporting_claim_ids))
         object.__setattr__(self, "supporting_attempt_ids", _ids(self.supporting_attempt_ids))
+        object.__setattr__(self, "supporting_item_ids", _ids(self.supporting_item_ids))
         object.__setattr__(self, "residual_uncertainty", str(self.residual_uncertainty or "").strip())
 
     @classmethod
@@ -113,6 +148,7 @@ class EvidenceObligationState:
             status=str(value.get("status", "open") or "open"),  # type: ignore[arg-type]
             supporting_claim_ids=tuple(value.get("supporting_claim_ids", ()) or ()),  # type: ignore[arg-type]
             supporting_attempt_ids=tuple(value.get("supporting_attempt_ids", ()) or ()),  # type: ignore[arg-type]
+            supporting_item_ids=tuple(value.get("supporting_item_ids", ()) or ()),  # type: ignore[arg-type]
             residual_uncertainty=str(value.get("residual_uncertainty", "") or ""),
         )
 

@@ -220,6 +220,8 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         occurrence_id=str(value.get("occurrence_id", "") or ""),
         temporal_scope_id=str(value.get("temporal_scope_id", "") or ""),
         evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),
+        requirement_id=str(value.get("requirement", value.get("requirement_id", "")) or ""),
+        refine_item_id=str(value.get("refine_item", value.get("refine_item_id", "")) or ""),
         parent_attempt_id=str(value.get("parent_attempt_id", "") or ""),
         cue_id=str(value.get("cue_id", "") or ""),
         window_radius_sec=float(value.get("window_radius_sec", 5.0) or 5.0),
@@ -237,6 +239,7 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
     if mode == "window" and not (
         task.segment_id
         or task.time_range
+        or task.refine_item_id
         or (task.parent_attempt_id and task.cue_id)
     ):
         return None
@@ -317,6 +320,21 @@ def _normalize_decision(
         "citations": tuple(str(item) for item in payload.get("citations", ()) or () if str(item).strip()),
         "workspace_ops": tuple(dict(item) for item in raw_workspace_ops if isinstance(item, Mapping)),
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
+        "supporting_item_ids": tuple(
+            str(item)
+            for item in payload.get("support_items", payload.get("supporting_item_ids", ())) or ()
+            if str(item).strip()
+        ),
+        "supports_requirement_ids": tuple(
+            str(item)
+            for item in payload.get("supports_requirements", payload.get("supports_requirement_ids", ())) or ()
+            if str(item).strip()
+        ),
+        "unresolved_requirement_ids": tuple(
+            str(item)
+            for item in payload.get("unresolved_requirements", payload.get("unresolved_requirement_ids", ())) or ()
+            if str(item).strip()
+        ),
         "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
         "observation_requests": tuple(dict(item) for item in payload.get("observation_requests", ()) or () if isinstance(item, Mapping)),
     }
@@ -335,6 +353,42 @@ class WorkspaceReasoner:
         self.trace_path = trace_path
         self.calls = 0
         self._last_decision_metadata: dict[str, Any] = {}
+        self._last_plan_metadata: dict[str, Any] = {}
+
+    def plan_evidence(self, **kwargs: Any) -> Mapping[str, Any]:
+        self._last_plan_metadata = {}
+        prompt = _evidence_plan_prompt(kwargs)
+        raw = self.api.chat(prompt, max_tokens=_completion_budget(1200))
+        api_response = dict(self.api.last_response_metadata)
+        parsed = _parse_json(raw)
+        payload = dict(parsed) if isinstance(parsed, Mapping) else {}
+        requirements = payload.get("requirements", ())
+        if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes)):
+            payload = {}
+        self._last_plan_metadata = {
+            "prompt_char_count": len(prompt),
+            "prompt_schema_token_cost": _prompt_schema_token_estimate(prompt),
+            "plan_payload_valid": bool(payload),
+        }
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": "reasoner_evidence_plan",
+                "model": self.api.model,
+                "prompt": prompt,
+                "raw": raw,
+                "parsed": parsed,
+                "plan_payload_valid": bool(payload),
+                "api_response": api_response,
+                "time": time.time(),
+            },
+        )
+        return payload
+
+    def consume_plan_metadata(self) -> Mapping[str, Any]:
+        metadata = dict(self._last_plan_metadata)
+        self._last_plan_metadata = {}
+        return metadata
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
@@ -398,6 +452,8 @@ class WorkspaceReasoner:
             "internal_control_retry_count": int(repair_attempted),
             "format_repaired": repaired,
             "repair_failed": not bool(payload),
+            "prompt_char_count": len(prompt),
+            "prompt_schema_token_cost": _prompt_schema_token_estimate(prompt),
         }
         _append_jsonl(
             self.trace_path,
@@ -1695,7 +1751,92 @@ class VisionInvestigator(VirtualVideoInvestigator):
         )
 
 
+def _evidence_plan_prompt(kwargs: Mapping[str, Any]) -> str:
+    return (
+        "Create one minimal evidence plan for long-video QA. Return JSON only with "
+        '{"requirements":[{"name":"short_name","goal":"one observable goal",'
+        '"kind":"generic|text_exact|ui_text|persistent_state|transient_event|relation",'
+        '"role":"premise|locator|answer_bearing|disambiguation","depends_on":[],'
+        '"dependency_type":"locator|temporal|semantic","temporal_relation":"",'
+        '"temporal_selection":"unspecified"}]}. '
+        "Plan once; use at most six requirements. A condition explicitly stated by the question is a premise, not an "
+        "answer-bearing requirement. A premise may be a locator when multiple occurrences require disambiguation, but "
+        "locator dependencies do not become final grounding requirements. Only the observation needed to answer, plus a "
+        "genuine ambiguity that changes the answer, should be answer_bearing or disambiguation. Use temporal dependency "
+        "for material ordering and semantic dependency only when the answer truly requires a derived relation. Do not "
+        "invent IDs, tool calls, evidence, or answers.\n"
+        f"Question: {kwargs.get('question', '')}\n"
+        f"Options: {json.dumps(dict(kwargs.get('options') or {}), ensure_ascii=False)}"
+    )
+
+
+def _runtime_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
+    final = bool(kwargs.get("force_finalize"))
+    options = dict(kwargs.get("options") or {})
+    mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    if final:
+        action_rule = "Investigation is closed. Return action=answer with the best semantic prediction available."
+    else:
+        action_rule = "Choose one action: investigate or answer."
+    if options:
+        answer_rule = (
+            'Answer with one exact option as "A. option text". '
+            'Schema: {"action":"answer","answer":"A. exact option text",'
+            '"support_items":["E1"],"supports_requirements":["R1"],'
+            '"unresolved_requirements":[],"residual_uncertainty":""}.'
+        )
+    else:
+        answer_rule = (
+            "Answer concisely. Schema: {\"action\":\"answer\",\"answer\":\"fact\","
+            '"support_items":["E1"],"supports_requirements":["R1"],'
+            '"unresolved_requirements":[],"residual_uncertainty":""}.'
+        )
+    compact_status = {
+        key: mechanical_status.get(key)
+        for key in (
+            "pending_caption_candidates",
+            "recommended_temporal_candidate",
+            "remaining_unresolved_conditions",
+            "source_coverage",
+        )
+        if mechanical_status.get(key)
+    }
+    return (
+        "You are the semantic controller for long-video QA. Runtime owns IDs, material lineage, evidence state, "
+        "requirement progress, refinement lineage, and grounding audit. Never create or mutate obligations, cue states, "
+        "canonical IDs, or dependency transactions. Claims are optional reasoning memory for genuine multi-hop conflicts; "
+        "direct observation answers do not need claims or workspace operations.\n"
+        f"{action_rule}\n"
+        "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"goal\":\"observable target\","
+        '"requirement":"R1","inspection_mode":"search_caption|search_asr|window",'
+        '"caption_queries":["short target query"],"search_terms":[],"top_k":12,'
+        '"time_range":null,"segment_id":"","occurrence_id":"O1","temporal_scope_id":"S1",'
+        '"refine_item":"E1","window_radius_sec":5.0,"expected_evidence":"direct observation"}]}. '
+        "Provide only fields needed by the chosen mode. Runtime fills the requirement evidence kind and all canonical "
+        "foreign keys. Caption/ASR results are locator candidates, never answer support; inspect decisive content visually. "
+        "Use occurrence handles when the catalog exposes competing candidates. Use refine_item on a refinable E handle for "
+        "a narrow child observation. Do not repeat a text_exact material read; Runtime schedules its same-material reread.\n"
+        "Final support may cite observation E handles directly. Cite only items that visibly support the answer. Mark a "
+        "requirement unresolved only when evidence is genuinely insufficient; still provide the best semantic prediction "
+        "in shadow mode. Search miss does not prove absence.\n"
+        f"{answer_rule}\n"
+        f"Question: {kwargs.get('question', '')}\n"
+        f"Options: {json.dumps(options, ensure_ascii=False)}\n"
+        f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
+        f"Runtime status: {json.dumps(compact_status, ensure_ascii=False)}\n"
+        f"Evidence state:\n{kwargs.get('working_document_view', '')}\n"
+        f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
+    )
+
+
+def _prompt_schema_token_estimate(prompt: str) -> int:
+    schema = str(prompt or "").split("Question:", 1)[0]
+    return (len(schema) + 3) // 4
+
+
 def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
+    if str(kwargs.get("evidence_state_mode", "llm_authored") or "llm_authored") == "runtime_derived":
+        return _runtime_reasoner_prompt(kwargs)
     final = bool(kwargs.get("force_finalize"))
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})

@@ -55,6 +55,42 @@ def export_supporting_intervals(
     return merge_intervals(intervals)
 
 
+def export_item_supporting_intervals(
+    supporting_item_ids: Sequence[str],
+    observation_rows: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[float, float], ...]:
+    requested = {str(item) for item in supporting_item_ids if str(item)}
+    intervals: list[tuple[float, float]] = []
+    for row in observation_rows:
+        fps = max(1e-6, float(row.get("sampling_fps", 0.0) or 0.0))
+        inspected = tuple(row.get("inspected_ranges", ()) or ())
+        for item in tuple(row.get("interpretation_items", ()) or ()):
+            if not isinstance(item, Mapping) or str(item.get("item_id", "") or "") not in requested:
+                continue
+            anchor = tuple(item.get("time_anchor", ()) or ())
+            if len(anchor) != 2:
+                continue
+            start, end = sorted((float(anchor[0]), float(anchor[1])))
+            if end <= start:
+                half_width = 0.5 / fps
+                containing = next(
+                    (
+                        tuple(sorted((float(value[0]), float(value[1]))))
+                        for value in inspected
+                        if len(value) == 2
+                        and float(value[0]) - 1e-6 <= start <= float(value[1]) + 1e-6
+                    ),
+                    None,
+                )
+                lower = containing[0] if containing else start - half_width
+                upper = containing[1] if containing else start + half_width
+                start = max(lower, start - half_width)
+                end = min(upper, start + 2 * half_width)
+            if end > start:
+                intervals.append((start, end))
+    return merge_intervals(intervals)
+
+
 def retrieval_dedup_rate(
     hits: Sequence[CaptionHitV1 | Mapping[str, Any]],
 ) -> float:
@@ -191,6 +227,12 @@ def agent_run_metrics(
     control_retries = tuple(row for row in trace if row.get("type") == "control_retry")
     closure_repairs = tuple(row for row in trace if row.get("type") == "closure_repair")
     answer_outcomes = tuple(row for row in trace if row.get("type") == "answer_outcome")
+    ignored_state_ops = tuple(
+        row for row in trace if row.get("type") == "runtime_state_ops_ignored"
+    )
+    evidence_plans = tuple(
+        row for row in trace if row.get("type") == "runtime_evidence_plan"
+    )
     obligation_summary = dict(
         answer_outcomes[-1].get("obligation_summary", {})
         if answer_outcomes
@@ -359,6 +401,17 @@ def agent_run_metrics(
         ),
         "decision_repair_count": sum(
             max(0, int(row.get("count", 1) or 0)) for row in control_retries
+        ),
+        "state_mutation_op_count": sum(
+            int(row.get("state_mutation_op_count", 0) or 0) for row in decisions
+        )
+        + sum(len(tuple(row.get("operations", ()) or ())) for row in ignored_state_ops),
+        "prompt_schema_token_cost": sum(
+            int(row.get("prompt_schema_token_cost", 0) or 0) for row in decisions
+        )
+        + sum(
+            int(row.get("prompt_schema_token_cost", 0) or 0)
+            for row in evidence_plans
         ),
         "closure_repair_count": sum(
             max(0, int(row.get("count", 1) or 0)) for row in closure_repairs

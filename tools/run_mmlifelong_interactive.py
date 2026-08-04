@@ -16,7 +16,6 @@ from vcah.model_client import OpenAICompatibleClient
 from vcah.multiround import VirtualVideoMultiRoundDriver
 from vcah.runtime_metrics import agent_run_metrics
 from vcah.virtual_video import VirtualVideoWorkspace
-from vcah.workspace import evidence_attempt_id
 
 
 def main() -> None:
@@ -80,6 +79,7 @@ def main() -> None:
         closure_repair_budget=1,
         answer_policy=args.answer_policy,
         evidence_control_mode=args.evidence_control_mode,
+        evidence_state_mode=args.evidence_state_mode,
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
@@ -96,6 +96,7 @@ def main() -> None:
         "case_id": workspace.case.case_id,
         "answer_policy": args.answer_policy,
         "evidence_control_mode": args.evidence_control_mode,
+        "evidence_state_mode": args.evidence_state_mode,
         "max_rounds": args.max_rounds,
         "semantic_round_budget": args.max_rounds,
         "control_retry_budget": args.control_retry_budget,
@@ -129,18 +130,13 @@ def main() -> None:
     }
     config["config_digest"] = stable_digest(config)
     _write_json(workspace.root_dir / "run_config.json", config)
-    cited_evidence_ids = set(result.citations)
-    supporting_attempt_ids = tuple(
-        evidence_attempt_id(record)
-        for record in result.evidence
-        if record.evidence_id in cited_evidence_ids
-    )
     prediction = prediction_artifact(
         runtime_question,
         answer=result.answer,
         selected_option=result.selected_option,
         supporting_intervals=result.supporting_intervals,
-        supporting_attempt_ids=supporting_attempt_ids,
+        supporting_attempt_ids=result.supporting_attempt_ids,
+        supporting_item_ids=result.supporting_item_ids,
         answer_present=result.answer_present,
         candidate_answer=result.candidate_answer,
         verified_answer=result.verified_answer,
@@ -213,6 +209,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
         Path("src/vcah/evidence_state.py"),
+        Path("src/vcah/evidence_runtime.py"),
         Path("src/vcah/sampling.py"),
         Path("src/vcah/temporal_scope.py"),
         Path("benchmarks/schema.py"),
@@ -257,6 +254,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--investigator-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
     parser.add_argument("--evidence-control-mode", choices=("shadow", "strict"), default="shadow")
+    parser.add_argument(
+        "--evidence-state-mode",
+        choices=("llm_authored", "runtime_derived"),
+        default="runtime_derived",
+    )
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)

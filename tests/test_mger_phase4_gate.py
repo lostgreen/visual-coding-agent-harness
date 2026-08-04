@@ -11,6 +11,7 @@ def _cases(
     decision_repairs: int = 5,
     task_errors: int = 2,
     control_mode: str = "shadow",
+    state_mode: str = "runtime_derived",
 ) -> dict[str, dict[str, object]]:
     case_ids = [f"case-{index:04d}" for index in range(9)] + ["case-0117"]
     rows: dict[str, dict[str, object]] = {}
@@ -31,6 +32,7 @@ def _cases(
             "answer_present": answer_present,
             "reference_valid": reference_valid,
             "evidence_control_mode": control_mode,
+            "evidence_state_mode": state_mode,
             "visual_frames_inspected": 55,
             "silently_dropped_acquisition_count": 0,
             "decision_repair_count": 1 if index < decision_repairs else 0,
@@ -83,6 +85,18 @@ def test_strict_gate_uses_second_round_reliability_targets() -> None:
     assert report["passed"] is True
     assert report["categories"]["GroundedCorrect"] >= 2
     assert report["categories"]["WrongButVerified"] <= 2
+
+
+def test_phase4_gate_rejects_llm_authored_state_roots() -> None:
+    report = evaluate_root(
+        _cases(state_mode="llm_authored"),
+        label="legacy-root",
+        stage="first",
+    )
+
+    assert report["passed"] is False
+    assert "evidence_state_mode_consistent" in report["failures"]
+    assert len(report["evidence_state_mode_mismatches"]) == 10
 
 
 def test_phase4_gate_requires_two_independent_passing_roots() -> None:

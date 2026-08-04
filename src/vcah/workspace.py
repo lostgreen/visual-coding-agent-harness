@@ -248,6 +248,7 @@ class AnswerValidation:
     passed: bool
     reason: str
     supporting_claim_ids: tuple[str, ...] = ()
+    supporting_item_ids: tuple[str, ...] = ()
     cited_attempt_ids: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     reference_integrity_ok: bool = False
@@ -426,6 +427,7 @@ class WorkingDocument:
     ) -> tuple[str, ...]:
         known_observations = {str(item) for item in observation_ids if str(item)}
         item_index = _observation_item_index(observation_rows)
+        known_item_ids = {key[2] for key in item_index}
         cue_index = _observation_cue_index(observation_rows)
         errors: list[str] = []
         active_count = sum(claim.status in {"active", "contested"} for claim in self.claims.values())
@@ -499,20 +501,33 @@ class WorkingDocument:
                 errors.append(
                     f"obligation_supporting_attempt_missing:{requirement_id}:{','.join(missing_attempts)}"
                 )
+            missing_items = tuple(
+                item_id
+                for item_id in state.supporting_item_ids
+                if item_id not in known_item_ids
+            )
+            if missing_items:
+                errors.append(
+                    f"obligation_supporting_item_missing:{requirement_id}:{','.join(missing_items)}"
+                )
             if state.status == "satisfied" and not state.supporting_claim_ids:
                 errors.append(f"satisfied_obligation_requires_claim:{requirement_id}")
             if state.status == "satisfied" and not state.supporting_attempt_ids:
                 errors.append(f"satisfied_obligation_requires_attempt:{requirement_id}")
-            if state.status == "satisfied":
+            if state.status == "supported" and not state.supporting_item_ids:
+                errors.append(f"supported_obligation_requires_item:{requirement_id}")
+            if state.status == "supported" and not state.supporting_attempt_ids:
+                errors.append(f"supported_obligation_requires_attempt:{requirement_id}")
+            if state.status in {"satisfied", "supported"} and obligation.dependency_type == "semantic":
                 for dependency in obligation.depends_on:
                     dependency_state = self.obligation_states.get(dependency)
-                    if dependency_state is None or dependency_state.status != "satisfied":
+                    if dependency_state is None or dependency_state.status not in {"satisfied", "supported"}:
                         errors.append(
                             f"obligation_dependency_unsatisfied:{requirement_id}:{dependency}"
                         )
                         continue
                     dependency_claims = set(dependency_state.supporting_claim_ids)
-                    if dependency_claims and not any(
+                    if state.supporting_claim_ids and dependency_claims and not any(
                         dependency_claims.intersection(
                             self._claim_lineage_ids(claim_id)
                         )
@@ -578,7 +593,7 @@ class WorkingDocument:
             requirement_id
             for requirement_id in answer_bearing_ids
             if self.obligation_states.get(requirement_id)
-            and self.obligation_states[requirement_id].status == "satisfied"
+            and self.obligation_states[requirement_id].status in {"satisfied", "supported"}
         )
         unresolved = tuple(
             requirement_id
@@ -676,6 +691,7 @@ class WorkingDocument:
         self,
         supporting_claim_ids: Sequence[str],
         *,
+        supporting_item_ids: Sequence[str] = (),
         observation_ids: Sequence[str],
         supporting_observation_ids: Sequence[str] | None = None,
         require_obligation_coverage: bool = False,
@@ -686,6 +702,7 @@ class WorkingDocument:
         require_evidence_kind_requirements: bool = False,
     ) -> AnswerValidation:
         support = _ids(supporting_claim_ids)
+        support_items = _ids(supporting_item_ids)
         dimension_errors: dict[str, list[str]] = {
             "reference_integrity": [],
             "material_support": [],
@@ -701,7 +718,7 @@ class WorkingDocument:
             if error not in dimension_errors[dimension]:
                 dimension_errors[dimension].append(error)
 
-        if not support:
+        if not support and not support_items:
             add("reference_integrity", "supporting_claims_missing")
         document_errors = self.validate(
             observation_ids=observation_ids,
@@ -750,12 +767,32 @@ class WorkingDocument:
             add("reference_integrity", f"supporting_claim_uncertain:{','.join(uncertain)}")
         if conflicted:
             add("reference_integrity", f"supporting_claim_conflicted:{','.join(conflicted)}")
+        item_index = _observation_item_index(observation_rows)
+        missing_items = tuple(
+            item_id
+            for item_id in support_items
+            if not any(key[2] == item_id for key in item_index)
+        )
+        if missing_items:
+            add("reference_integrity", f"supporting_item_missing:{','.join(missing_items)}")
+        item_attempts = tuple(
+            dict.fromkeys(
+                attempt_id
+                for (attempt_id, _, item_id) in item_index
+                if item_id in support_items
+            )
+        )
         cited_attempts = tuple(
             dict.fromkeys(
-                cite
-                for claim_id in support
-                if claim_id in self.claims
-                for cite in self._claim_attempts(claim_id)
+                (
+                    *(
+                        cite
+                        for claim_id in support
+                        if claim_id in self.claims
+                        for cite in self._claim_attempts(claim_id)
+                    ),
+                    *item_attempts,
+                )
             )
         )
         if not cited_attempts:
@@ -852,6 +889,12 @@ class WorkingDocument:
                             "obligation_coverage",
                             f"answer_support_does_not_close_obligation:{obligation.requirement_id}"
                         )
+                elif state.status == "supported":
+                    if not set(state.supporting_item_ids).intersection(support_items):
+                        add(
+                            "obligation_coverage",
+                            f"answer_support_does_not_close_obligation:{obligation.requirement_id}"
+                        )
                 elif state.status == "unresolved":
                     if not state.residual_uncertainty:
                         add(
@@ -875,6 +918,7 @@ class WorkingDocument:
             for error in self._evidence_kind_requirement_errors(
                 support,
                 observation_rows,
+                supporting_item_ids=support_items,
             ):
                 add("evidence_kind_requirements", error)
 
@@ -893,6 +937,7 @@ class WorkingDocument:
                 else errors[0].split(":", 1)[0]
             ),
             supporting_claim_ids=support,
+            supporting_item_ids=support_items,
             cited_attempt_ids=cited_attempts,
             errors=errors,
             reference_integrity_ok=not dimension_errors["reference_integrity"],
@@ -911,6 +956,8 @@ class WorkingDocument:
         self,
         supporting_claim_ids: Sequence[str],
         observation_rows: Sequence[Mapping[str, Any]],
+        *,
+        supporting_item_ids: Sequence[str] = (),
     ) -> tuple[str, ...]:
         rows_by_attempt: dict[str, list[Mapping[str, Any]]] = {}
         for row in observation_rows:
@@ -920,12 +967,16 @@ class WorkingDocument:
         answer_lineage = set(supporting_claim_ids)
         for claim_id in supporting_claim_ids:
             answer_lineage.update(self._claim_lineage_ids(claim_id))
+        answer_items = set(supporting_item_ids)
         errors: list[str] = []
         for requirement_id, obligation in self.obligations.items():
             state = self.obligation_states.get(requirement_id)
-            if state is None or state.status != "satisfied":
+            if state is None or state.status not in {"satisfied", "supported"}:
                 continue
-            if not answer_lineage.intersection(state.supporting_claim_ids):
+            if not (
+                answer_lineage.intersection(state.supporting_claim_ids)
+                or answer_items.intersection(state.supporting_item_ids)
+            ):
                 continue
             attempt_ids = tuple(
                 dict.fromkeys(
@@ -1096,6 +1147,7 @@ class WorkingDocument:
                 status=str(operation.get("status", "open") or "open"),  # type: ignore[arg-type]
                 supporting_claim_ids=tuple(operation.get("supporting_claim_ids", ()) or ()),
                 supporting_attempt_ids=tuple(operation.get("supporting_attempt_ids", ()) or ()),
+                supporting_item_ids=tuple(operation.get("supporting_item_ids", ()) or ()),
                 residual_uncertainty=str(operation.get("residual_uncertainty", "") or ""),
             )
             return

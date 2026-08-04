@@ -112,6 +112,7 @@ def main() -> None:
         "caption_query_strategy": args.caption_query_strategy,
         "answer_policy": args.answer_policy,
         "evidence_control_mode": args.evidence_control_mode,
+        "evidence_state_mode": args.evidence_state_mode,
         "workers": max(1, min(int(args.workers), len(selected))),
         "question_type_counts": dict(Counter(case["question_type"] for case in selected)),
         "cases": [
@@ -271,6 +272,8 @@ def _case_command(
         str(args.answer_policy),
         "--evidence-control-mode",
         str(args.evidence_control_mode),
+        "--evidence-state-mode",
+        str(args.evidence_state_mode),
         "--max-rounds",
         str(args.max_rounds),
         "--max-investigations",
@@ -342,6 +345,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--investigator-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
     parser.add_argument("--evidence-control-mode", choices=("shadow", "strict"), default="shadow")
+    parser.add_argument(
+        "--evidence-state-mode",
+        choices=("llm_authored", "runtime_derived"),
+        default="runtime_derived",
+    )
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)

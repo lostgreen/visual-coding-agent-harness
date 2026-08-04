@@ -6,6 +6,12 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.evidence_state import EVIDENCE_KINDS
+from vcah.evidence_runtime import (
+    EvidencePlan,
+    RuntimeEvidenceCatalog,
+    advance_requirement_state,
+    compile_evidence_plan,
+)
 from vcah.investigator import (
     INTERPRETATION_PURPOSES,
     InvestigationReport,
@@ -13,7 +19,10 @@ from vcah.investigator import (
     VirtualVideoInvestigator,
 )
 from vcah.memory import EvidenceStore
-from vcah.runtime_metrics import export_supporting_intervals
+from vcah.runtime_metrics import (
+    export_item_supporting_intervals,
+    export_supporting_intervals,
+)
 from vcah.temporal_scope import resolve_temporal_scope
 from vcah.types import EvidenceRecord, to_jsonable
 from vcah.virtual_index import build_workspace_overview
@@ -60,6 +69,9 @@ class InvestigationTask:
     occurrence_id: str = ""
     temporal_scope_id: str = ""
     evidence_kind: str = "generic"
+    requirement_id: str = ""
+    refine_item_id: str = ""
+    refine_interpretation_id: str = ""
     parent_attempt_id: str = ""
     cue_id: str = ""
     window_radius_sec: float = 5.0
@@ -123,6 +135,13 @@ class InvestigationTask:
         if evidence_kind not in EVIDENCE_KINDS:
             raise ValueError(f"unsupported evidence_kind: {evidence_kind}")
         object.__setattr__(self, "evidence_kind", evidence_kind)
+        object.__setattr__(self, "requirement_id", str(self.requirement_id or "").strip())
+        object.__setattr__(self, "refine_item_id", str(self.refine_item_id or "").strip())
+        object.__setattr__(
+            self,
+            "refine_interpretation_id",
+            str(self.refine_interpretation_id or "").strip(),
+        )
         object.__setattr__(self, "parent_attempt_id", str(self.parent_attempt_id or "").strip())
         object.__setattr__(self, "cue_id", str(self.cue_id or "").strip())
         object.__setattr__(
@@ -162,6 +181,9 @@ class ReasonerDecision:
     citations: tuple[str, ...] = ()
     workspace_ops: tuple[Mapping[str, Any], ...] = ()
     supporting_claim_ids: tuple[str, ...] = ()
+    supporting_item_ids: tuple[str, ...] = ()
+    supports_requirement_ids: tuple[str, ...] = ()
+    unresolved_requirement_ids: tuple[str, ...] = ()
     residual_uncertainty: str = ""
     observation_requests: tuple[Mapping[str, Any], ...] = ()
 
@@ -187,6 +209,21 @@ class ReasonerDecision:
             "supporting_claim_ids",
             tuple(dict.fromkeys(str(item).strip() for item in self.supporting_claim_ids if str(item).strip())),
         )
+        object.__setattr__(
+            self,
+            "supporting_item_ids",
+            tuple(dict.fromkeys(str(item).strip() for item in self.supporting_item_ids if str(item).strip())),
+        )
+        object.__setattr__(
+            self,
+            "supports_requirement_ids",
+            tuple(dict.fromkeys(str(item).strip() for item in self.supports_requirement_ids if str(item).strip())),
+        )
+        object.__setattr__(
+            self,
+            "unresolved_requirement_ids",
+            tuple(dict.fromkeys(str(item).strip() for item in self.unresolved_requirement_ids if str(item).strip())),
+        )
         object.__setattr__(self, "residual_uncertainty", str(self.residual_uncertainty or "").strip())
         object.__setattr__(
             self,
@@ -211,12 +248,15 @@ class MultiRoundResult:
     trace: tuple[Mapping[str, Any], ...] = ()
     answer_policy: str = "strict"
     evidence_control_mode: str = "strict"
+    evidence_state_mode: str = "llm_authored"
     answer_present: bool = False
     candidate_answer: str = ""
     verified_answer: str = ""
     verification_status: str = "missing"
     blocking_reasons: tuple[str, ...] = ()
     supporting_claim_ids: tuple[str, ...] = ()
+    supporting_item_ids: tuple[str, ...] = ()
+    supporting_attempt_ids: tuple[str, ...] = ()
     supporting_intervals: tuple[tuple[float, float], ...] = ()
     residual_uncertainty: str = ""
 
@@ -238,6 +278,7 @@ class VirtualVideoMultiRoundDriver:
         closure_repair_budget: int = 0,
         answer_policy: str = "strict",
         evidence_control_mode: str = "strict",
+        evidence_state_mode: str = "llm_authored",
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -265,6 +306,10 @@ class VirtualVideoMultiRoundDriver:
         if control_mode not in {"shadow", "strict"}:
             raise ValueError(f"unsupported evidence_control_mode: {control_mode}")
         self.evidence_control_mode = control_mode
+        state_mode = str(evidence_state_mode or "llm_authored").strip().casefold()
+        if state_mode not in {"llm_authored", "runtime_derived"}:
+            raise ValueError(f"unsupported evidence_state_mode: {state_mode}")
+        self.evidence_state_mode = state_mode
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         existing = tuple(name for name in RUN_ARTIFACT_NAMES if (workspace.root_dir / name).exists())
@@ -294,6 +339,43 @@ class VirtualVideoMultiRoundDriver:
         surfaced_observation_ids: set[str] = set()
         closure_repair_pending = False
         closure_repair_count = 0
+        runtime_catalog = RuntimeEvidenceCatalog.build(document, observation_log)
+
+        if self.evidence_state_mode == "runtime_derived":
+            raw_plan = (
+                self.reasoner.plan_evidence(
+                    question=workspace.case.question,
+                    options=dict(workspace.case.options),
+                )
+                if callable(getattr(self.reasoner, "plan_evidence", None))
+                else None
+            )
+            plan = EvidencePlan.from_mapping(raw_plan, question=workspace.case.question)
+            consume_plan_metadata = getattr(self.reasoner, "consume_plan_metadata", None)
+            plan_metadata = (
+                dict(consume_plan_metadata())
+                if callable(consume_plan_metadata)
+                else {}
+            )
+            compilation = compile_evidence_plan(
+                document,
+                plan,
+                question=workspace.case.question,
+            )
+            document.save(document_path)
+            trace.append(
+                {
+                    "type": "runtime_evidence_plan",
+                    "plan": plan.to_dict(),
+                    "compilation": compilation,
+                    "prompt_char_count": int(
+                        plan_metadata.get("prompt_char_count", 0) or 0
+                    ),
+                    "prompt_schema_token_cost": int(
+                        plan_metadata.get("prompt_schema_token_cost", 0) or 0
+                    ),
+                }
+            )
 
         for round_id in range(
             1,
@@ -328,6 +410,9 @@ class VirtualVideoMultiRoundDriver:
                 require_item_provenance=self.require_item_provenance,
                 surfaced_observation_ids=surfaced_observation_ids,
             )
+            runtime_catalog = RuntimeEvidenceCatalog.build(document, observation_log)
+            status["evidence_state_mode"] = self.evidence_state_mode
+            status["evidence_control_mode"] = self.evidence_control_mode
             force_finalize = (
                 round_id > self.semantic_round_budget or remaining <= 0
             ) and not closure_repair_active
@@ -342,11 +427,15 @@ class VirtualVideoMultiRoundDriver:
             decision: ReasonerDecision | None = None
             requested_rows: tuple[Mapping[str, Any], ...] = ()
             while True:
-                working_view = render_working_view(
-                    document,
-                    observation_log,
-                    requested_observations=requested_observations,
-                    feedback=feedback,
+                working_view = (
+                    runtime_catalog.render(document, feedback=feedback)
+                    if self.evidence_state_mode == "runtime_derived"
+                    else render_working_view(
+                        document,
+                        observation_log,
+                        requested_observations=requested_observations,
+                        feedback=feedback,
+                    )
                 )
                 surfaced_observation_ids.update(observation_log.attempt_ids)
                 raw_decision = self.reasoner.decide(
@@ -360,6 +449,7 @@ class VirtualVideoMultiRoundDriver:
                     final_attempt=forced_decision_calls if force_finalize else 0,
                     answer_policy=self.answer_policy,
                     evidence_control_mode=self.evidence_control_mode,
+                    evidence_state_mode=self.evidence_state_mode,
                     semantic_round=round_id,
                     control_attempt=control_attempt,
                     control_retry=control_attempt > 0,
@@ -404,6 +494,21 @@ class VirtualVideoMultiRoundDriver:
                         {"code": "invalid_decision_payload", "detail": str(exc)}
                     )
                 if parsed_decision is not None:
+                    if self.evidence_state_mode == "runtime_derived":
+                        parsed_decision, handle_errors, ignored_state_ops = _resolve_runtime_decision(
+                            parsed_decision,
+                            runtime_catalog,
+                            document,
+                        )
+                        schema_errors.extend(handle_errors)
+                        if ignored_state_ops:
+                            trace.append(
+                                {
+                                    "type": "runtime_state_ops_ignored",
+                                    "round": round_id,
+                                    "operations": list(ignored_state_ops),
+                                }
+                            )
                     schema_errors.extend(
                         _decision_preflight(
                             parsed_decision,
@@ -510,21 +615,48 @@ class VirtualVideoMultiRoundDriver:
                         "semantic_round": round_id,
                         "control_attempt": control_attempt,
                         "control_retry_count": control_retries_used,
-                        "semantic_committed": apply_result.accepted,
+                        "semantic_committed": (
+                            apply_result.accepted
+                            or self.evidence_state_mode == "runtime_derived"
+                        ),
                         "action": decision.action,
                         "tasks": [_task_descriptor(task) for task in decision.tasks],
                         "workspace_revision": document.revision,
                         "workspace_ops_accepted": apply_result.accepted,
                         "workspace_errors": list(apply_result.errors),
                         "supporting_claim_ids": list(decision.supporting_claim_ids),
+                        "supporting_item_ids": list(decision.supporting_item_ids),
+                        "supports_requirement_ids": list(decision.supports_requirement_ids),
                         "remaining_budget": remaining,
                         "force_finalize": force_finalize,
                         "final_attempt": forced_decision_calls if force_finalize else 0,
                         "answer_workspace_commit": answer_workspace_commit,
                         "closure_repair": closure_repair_active,
+                        "state_mutation_op_count": sum(
+                            str(operation.get("op", operation.get("type", "")) or "").casefold()
+                            in {"add_obligation", "set_obligation_status", "add_temporal_scope", "set_cue_status"}
+                            for operation in decision.workspace_ops
+                        ),
+                        "prompt_char_count": int(
+                            decision_metadata.get("prompt_char_count", 0) or 0
+                        ),
+                        "prompt_schema_token_cost": int(
+                            decision_metadata.get("prompt_schema_token_cost", 0) or 0
+                        ),
                     }
                 )
                 if apply_result.accepted:
+                    rounds_run = round_id
+                    break
+
+                if self.evidence_state_mode == "runtime_derived":
+                    trace.append(
+                        {
+                            "type": "optional_reasoning_memory_rejected",
+                            "round": round_id,
+                            "errors": list(apply_result.errors),
+                        }
+                    )
                     rounds_run = round_id
                     break
 
@@ -599,8 +731,16 @@ class VirtualVideoMultiRoundDriver:
             if decision.action == "answer":
                 candidate = replace(
                     decision,
-                    citations=_answer_citations(decision, document, evidence_store.records),
+                    citations=_answer_citations(
+                        decision,
+                        document,
+                        evidence_store.records,
+                        observation_rows=observation_log.rows,
+                    ),
                 )
+                if self.evidence_state_mode == "runtime_derived":
+                    _apply_runtime_answer_state(document, candidate, runtime_catalog)
+                    document.save(document_path)
                 validation = _validate_answer(
                     candidate,
                     document,
@@ -717,6 +857,8 @@ class VirtualVideoMultiRoundDriver:
                     for cue_id, state in document.cue_states.items()
                 },
             )
+            if self.evidence_state_mode == "runtime_derived":
+                tasks = _expand_runtime_tasks(tasks)
             if resolution_errors:
                 trace.append(
                     {
@@ -778,6 +920,14 @@ class VirtualVideoMultiRoundDriver:
                             source_lineage=_attempt_lineage(attempt, report.evidence),
                         )
                     )
+            if self.evidence_state_mode == "runtime_derived":
+                _advance_runtime_task_states(
+                    document,
+                    tasks,
+                    batch,
+                    observation_log,
+                )
+                document.save(document_path)
             requested_observations = tuple(new_rows[-12:]) or requested_rows
             feedback = {
                 "type": "investigation_completed",
@@ -858,7 +1008,12 @@ class VirtualVideoMultiRoundDriver:
         if schema_answer_present or preserve_candidate:
             answer = selected.answer
             returned_answer_present = True
-            citations = _answer_citations(selected, document, evidence_store.records)
+            citations = _answer_citations(
+                selected,
+                document,
+                evidence_store.records,
+                observation_rows=observation_log.rows,
+            )
             reference_valid = validation.passed
             reference_reason = validation.reason
         else:
@@ -867,10 +1022,18 @@ class VirtualVideoMultiRoundDriver:
             citations = ()
             reference_valid = False
             reference_reason = "answer_missing" if not selected.answer else "invalid_option_answer"
-        supporting_intervals = export_supporting_intervals(
-            document,
-            selected.supporting_claim_ids,
-            observation_log.rows,
+        supporting_intervals = _merge_intervals(
+            (
+                *export_supporting_intervals(
+                    document,
+                    selected.supporting_claim_ids,
+                    observation_log.rows,
+                ),
+                *export_item_supporting_intervals(
+                    selected.supporting_item_ids,
+                    observation_log.rows,
+                ),
+            )
         )
         candidate_answer = candidate_decision.answer
         verified_answer = final_answer.answer if final_answer is not None else ""
@@ -901,6 +1064,8 @@ class VirtualVideoMultiRoundDriver:
                 "reference_valid": reference_valid,
                 "reference_reason": reference_reason,
                 "supporting_claim_ids": list(selected.supporting_claim_ids),
+                "supporting_item_ids": list(selected.supporting_item_ids),
+                "supporting_attempt_ids": list(candidate_validation.cited_attempt_ids),
                 "residual_uncertainty": selected.residual_uncertainty,
                 "answer_owner": "reasoner",
                 "framework_answer_mutation": False,
@@ -941,12 +1106,15 @@ class VirtualVideoMultiRoundDriver:
             trace=tuple(trace),
             answer_policy=self.answer_policy,
             evidence_control_mode=self.evidence_control_mode,
+            evidence_state_mode=self.evidence_state_mode,
             answer_present=returned_answer_present,
             candidate_answer=candidate_answer,
             verified_answer=verified_answer,
             verification_status=verification_status,
             blocking_reasons=blocking_reasons,
             supporting_claim_ids=selected.supporting_claim_ids,
+            supporting_item_ids=selected.supporting_item_ids,
+            supporting_attempt_ids=candidate_validation.cited_attempt_ids,
             supporting_intervals=supporting_intervals,
             residual_uncertainty=selected.residual_uncertainty,
         )
@@ -977,6 +1145,253 @@ def _schema_error_rows(value: Any) -> list[dict[str, Any]]:
         row["code"] = str(row.get("code", "decision_schema_invalid") or "decision_schema_invalid")
         rows.append(row)
     return rows
+
+
+def _resolve_runtime_decision(
+    decision: ReasonerDecision,
+    catalog: RuntimeEvidenceCatalog,
+    document: WorkingDocument,
+) -> tuple[ReasonerDecision, list[dict[str, Any]], tuple[str, ...]]:
+    errors: list[dict[str, Any]] = []
+    ignored_state_ops: list[str] = []
+    allowed_ops = []
+    state_ops = {
+        "add_obligation",
+        "set_obligation_status",
+        "add_temporal_scope",
+        "set_cue_status",
+    }
+    for operation in decision.workspace_ops:
+        op_type = str(operation.get("op", operation.get("type", "")) or "").casefold()
+        if op_type in state_ops:
+            ignored_state_ops.append(op_type)
+        else:
+            allowed_ops.append(operation)
+
+    fallback_requirement_id = catalog.single_open_answer_requirement(document)
+    resolved_tasks = []
+    for task in decision.tasks:
+        requirement_id = ""
+        if task.requirement_id:
+            requirement_id = catalog.resolve_requirement(task.requirement_id)
+            if not requirement_id:
+                errors.append(
+                    {
+                        "code": "requirement_handle_unknown",
+                        "requested_task_ids": [task.query_id],
+                        "handle": task.requirement_id,
+                    }
+                )
+        elif fallback_requirement_id:
+            requirement_id = fallback_requirement_id
+        evidence_kind = (
+            document.obligations[requirement_id].evidence_kind
+            if requirement_id in document.obligations
+            else task.evidence_kind
+        )
+        occurrence_id = task.occurrence_id
+        locator_attempt_id = task.locator_attempt_id
+        if occurrence_id:
+            occurrence = catalog.resolve_occurrence(occurrence_id)
+            if occurrence is None:
+                errors.append(
+                    {
+                        "code": "occurrence_handle_unknown",
+                        "requested_task_ids": [task.query_id],
+                        "handle": occurrence_id,
+                    }
+                )
+            else:
+                occurrence_id = str(occurrence.get("occurrence_id", "") or "")
+                locator_attempt_id = str(
+                    occurrence.get("attempt_id", locator_attempt_id) or locator_attempt_id
+                )
+        temporal_scope_id = task.temporal_scope_id
+        if temporal_scope_id:
+            resolved_scope = catalog.resolve_scope(temporal_scope_id)
+            if not resolved_scope:
+                errors.append(
+                    {
+                        "code": "temporal_scope_handle_unknown",
+                        "requested_task_ids": [task.query_id],
+                        "handle": temporal_scope_id,
+                    }
+                )
+            temporal_scope_id = resolved_scope
+        refinement = catalog.resolve_item(task.refine_item_id) if task.refine_item_id else None
+        if task.refine_item_id and refinement is None:
+            errors.append(
+                {
+                    "code": "refine_item_handle_unknown",
+                    "requested_task_ids": [task.query_id],
+                    "handle": task.refine_item_id,
+                }
+            )
+        if refinement is not None and not refinement.refinable:
+            errors.append(
+                {
+                    "code": "refine_item_not_refinable",
+                    "requested_task_ids": [task.query_id],
+                    "handle": task.refine_item_id,
+                }
+            )
+        resolved_tasks.append(
+            replace(
+                task,
+                requirement_id=requirement_id,
+                evidence_kind=evidence_kind,
+                occurrence_id=occurrence_id,
+                locator_attempt_id=locator_attempt_id,
+                temporal_scope_id=temporal_scope_id,
+                refine_item_id=refinement.item_id if refinement else task.refine_item_id,
+                refine_interpretation_id=(
+                    refinement.interpretation_id if refinement else task.refine_interpretation_id
+                ),
+                parent_attempt_id=(
+                    refinement.attempt_id if refinement else task.parent_attempt_id
+                ),
+                cue_id=refinement.cue_id if refinement else task.cue_id,
+                inspection_mode="window" if refinement else task.inspection_mode,
+            )
+        )
+
+    support_items = []
+    for value in decision.supporting_item_ids:
+        item = catalog.resolve_item(value)
+        if item is None:
+            errors.append({"code": "support_item_handle_unknown", "handle": value})
+        else:
+            support_items.append(item.item_id)
+    support_requirements = []
+    for value in decision.supports_requirement_ids:
+        requirement_id = catalog.resolve_requirement(value)
+        if not requirement_id:
+            errors.append({"code": "support_requirement_handle_unknown", "handle": value})
+        else:
+            support_requirements.append(requirement_id)
+    if support_items and not support_requirements and fallback_requirement_id:
+        support_requirements.append(fallback_requirement_id)
+    unresolved_requirements = []
+    for value in decision.unresolved_requirement_ids:
+        requirement_id = catalog.resolve_requirement(value)
+        if not requirement_id:
+            errors.append({"code": "unresolved_requirement_handle_unknown", "handle": value})
+        else:
+            unresolved_requirements.append(requirement_id)
+    return (
+        replace(
+            decision,
+            tasks=tuple(resolved_tasks),
+            workspace_ops=tuple(allowed_ops),
+            supporting_item_ids=tuple(support_items),
+            supports_requirement_ids=tuple(support_requirements),
+            unresolved_requirement_ids=tuple(unresolved_requirements),
+        ),
+        errors,
+        tuple(ignored_state_ops),
+    )
+
+
+def _expand_runtime_tasks(
+    tasks: Sequence[InvestigationTask],
+) -> tuple[InvestigationTask, ...]:
+    expanded: list[InvestigationTask] = []
+    for task in tasks:
+        expanded.append(task)
+        if (
+            task.evidence_kind == "text_exact"
+            and task.inspection_mode == "window"
+            and not task.refine_item_id
+            and task.interpretation_purpose == "primary"
+        ):
+            expanded.append(
+                replace(
+                    task,
+                    query_id=f"{task.query_id}_reread",
+                    force_reinspect=True,
+                    interpretation_purpose="manual_reread",
+                )
+            )
+    return tuple(expanded)
+
+
+def _advance_runtime_task_states(
+    document: WorkingDocument,
+    tasks: Sequence[InvestigationTask],
+    reports: Sequence[InvestigationReport],
+    observations: ObservationLog,
+) -> None:
+    reports_by_query = {str(report.query_id): report for report in reports}
+    rows_by_task: dict[str, list[Mapping[str, Any]]] = {}
+    for row in observations.rows:
+        rows_by_task.setdefault(str(row.get("task_id", "") or ""), []).append(row)
+    for task in tasks:
+        if not task.requirement_id:
+            continue
+        report = reports_by_query.get(task.query_id)
+        if report is None or str(report.status).casefold() != "completed":
+            continue
+        rows = rows_by_task.get(task.query_id, ())
+        attempt_ids = tuple(
+            dict.fromkeys(str(row.get("attempt_id", "") or "") for row in rows)
+        )
+        if task.inspection_mode in {"search_caption", "search_asr"}:
+            candidate_found = any(
+                tuple(row.get("sampling_config", {}).get("hits", ()) or ())
+                for row in rows
+                if isinstance(row.get("sampling_config"), Mapping)
+            )
+            if candidate_found:
+                advance_requirement_state(
+                    document,
+                    task.requirement_id,
+                    "candidate_found",
+                    attempt_ids=attempt_ids,
+                )
+            continue
+        item_ids = tuple(
+            str(item.get("item_id", "") or "")
+            for row in rows
+            for item in tuple(row.get("interpretation_items", ()) or ())
+            if isinstance(item, Mapping) and str(item.get("item_id", "") or "")
+        )
+        if attempt_ids and item_ids:
+            advance_requirement_state(
+                document,
+                task.requirement_id,
+                "observed",
+                attempt_ids=attempt_ids,
+            )
+
+
+def _apply_runtime_answer_state(
+    document: WorkingDocument,
+    decision: ReasonerDecision,
+    catalog: RuntimeEvidenceCatalog,
+) -> None:
+    item_refs = tuple(
+        item
+        for item_id in decision.supporting_item_ids
+        if (item := catalog.item_by_id(item_id)) is not None
+    )
+    attempt_ids = tuple(dict.fromkeys(item.attempt_id for item in item_refs))
+    item_ids = tuple(item.item_id for item in item_refs)
+    for requirement_id in decision.supports_requirement_ids:
+        advance_requirement_state(
+            document,
+            requirement_id,
+            "supported",
+            attempt_ids=attempt_ids,
+            item_ids=item_ids,
+        )
+    uncertainty = decision.residual_uncertainty or "Reasoner marked this requirement unresolved."
+    for requirement_id in decision.unresolved_requirement_ids:
+        advance_requirement_state(
+            document,
+            requirement_id,
+            "unresolved",
+            residual_uncertainty=uncertainty,
+        )
 
 
 def _decision_preflight(
@@ -2457,6 +2872,49 @@ def _resolve_cue_bound_task(
             cue_id=task.cue_id,
         )
 
+    if task.refine_item_id:
+        if str(cue.get("item_id", "") or "") != task.refine_item_id:
+            return None, _task_resolution_error(
+                task,
+                "refine_item_cue_mismatch",
+                refine_item_id=task.refine_item_id,
+                cue_id=task.cue_id,
+            )
+        cue_time = float(cue.get("virtual_time", 0.0) or 0.0)
+        segment = next(
+            (
+                item
+                for item in workspace.manifest.segments
+                if item.virtual_start_sec - 1e-6 <= cue_time <= item.virtual_end_sec + 1e-6
+            ),
+            None,
+        )
+        if segment is None:
+            return None, _task_resolution_error(
+                task,
+                "refine_item_time_outside_workspace",
+                refine_item_id=task.refine_item_id,
+            )
+        radius = task.window_radius_sec
+        return (
+            replace(
+                task,
+                segment_id=segment.segment_id,
+                time_range=(
+                    max(float(segment.virtual_start_sec), cue_time - radius),
+                    min(float(segment.virtual_end_sec), cue_time + radius),
+                ),
+                coordinate_space="virtual",
+                source_video_ids=(segment.source_video_id,),
+                cue_stage="child_refinement",
+                cue_virtual_time=cue_time,
+                sampling_floor_fps=2.0,
+                interpretation_purpose="manual_reread",
+                force_reinspect=True,
+            ),
+            None,
+        )
+
     state = cue_states.get(task.cue_id, {})
     status = str(state.get("status", "unverified") or "unverified").casefold()
     if status == "rejected":
@@ -2534,6 +2992,7 @@ def _validate_answer(
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
+        supporting_item_ids=decision.supporting_item_ids,
         observation_ids=observation_ids,
         supporting_observation_ids=supporting_observation_ids,
         require_obligation_coverage=require_obligation_coverage,
@@ -2596,6 +3055,8 @@ def _answer_citations(
     decision: ReasonerDecision,
     document: WorkingDocument,
     evidence: Sequence[EvidenceRecord],
+    *,
+    observation_rows: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[str, ...]:
     by_id = {record.evidence_id: record for record in evidence}
     by_attempt: dict[str, list[EvidenceRecord]] = {}
@@ -2604,7 +3065,9 @@ def _answer_citations(
     citations = [citation for citation in decision.citations if citation in by_id]
     validation = document.validate_answer(
         decision.supporting_claim_ids,
+        supporting_item_ids=decision.supporting_item_ids,
         observation_ids=tuple(by_attempt),
+        observation_rows=observation_rows,
     )
     citations.extend(
         record.evidence_id
@@ -2691,6 +3154,9 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "occurrence_id": task.occurrence_id,
         "temporal_scope_id": task.temporal_scope_id,
         "evidence_kind": task.evidence_kind,
+        "requirement_id": task.requirement_id,
+        "refine_item_id": task.refine_item_id,
+        "refine_interpretation_id": task.refine_interpretation_id,
         "parent_attempt_id": task.parent_attempt_id,
         "cue_id": task.cue_id,
         "window_radius_sec": task.window_radius_sec,
@@ -2713,6 +3179,13 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         citations=tuple(value.get("citations", ()) or ()),
         workspace_ops=tuple(value.get("workspace_ops", value.get("ops", ())) or ()),
         supporting_claim_ids=tuple(value.get("supporting_claim_ids", ()) or ()),
+        supporting_item_ids=tuple(value.get("supporting_item_ids", value.get("support_items", ())) or ()),
+        supports_requirement_ids=tuple(
+            value.get("supports_requirement_ids", value.get("supports_requirements", ())) or ()
+        ),
+        unresolved_requirement_ids=tuple(
+            value.get("unresolved_requirement_ids", value.get("unresolved_requirements", ())) or ()
+        ),
         residual_uncertainty=str(value.get("residual_uncertainty", "") or ""),
         observation_requests=tuple(value.get("observation_requests", ()) or ()),
     )
@@ -2740,6 +3213,9 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         occurrence_id=str(value.get("occurrence_id", "") or ""),
         temporal_scope_id=str(value.get("temporal_scope_id", "") or ""),
         evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),
+        requirement_id=str(value.get("requirement_id", value.get("requirement", "")) or ""),
+        refine_item_id=str(value.get("refine_item_id", value.get("refine_item", "")) or ""),
+        refine_interpretation_id=str(value.get("refine_interpretation_id", "") or ""),
         parent_attempt_id=str(value.get("parent_attempt_id", "") or ""),
         cue_id=str(value.get("cue_id", "") or ""),
         window_radius_sec=float(value.get("window_radius_sec", 5.0) or 5.0),
@@ -2828,6 +3304,7 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         "answer_present": result.answer_present,
         "answer_policy": result.answer_policy,
         "evidence_control_mode": result.evidence_control_mode,
+        "evidence_state_mode": result.evidence_state_mode,
         "prediction": {
             "answer": result.answer,
             "answer_present": result.answer_present,
@@ -2847,6 +3324,8 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         "reference_valid": result.reference_valid,
         "reference_reason": result.reference_reason,
         "supporting_claim_ids": list(result.supporting_claim_ids),
+        "supporting_item_ids": list(result.supporting_item_ids),
+        "supporting_attempt_ids": list(result.supporting_attempt_ids),
         "supporting_intervals": [list(item) for item in result.supporting_intervals],
         "residual_uncertainty": result.residual_uncertainty,
         "rounds": result.rounds,

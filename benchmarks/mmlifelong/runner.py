@@ -29,6 +29,7 @@ def prediction_artifact(
     supporting_intervals: Sequence[Sequence[float]],
     supporting_attempt_ids: Sequence[str],
     answer_present: bool,
+    supporting_item_ids: Sequence[str] = (),
     candidate_answer: str = "",
     verified_answer: str = "",
     verification_status: str = "missing",
@@ -54,6 +55,9 @@ def prediction_artifact(
         ],
         "supporting_attempt_ids": list(
             dict.fromkeys(str(item) for item in supporting_attempt_ids if str(item))
+        ),
+        "supporting_item_ids": list(
+            dict.fromkeys(str(item) for item in supporting_item_ids if str(item))
         ),
         "answer_present": bool(answer_present),
         "candidate_answer": str(candidate_answer),

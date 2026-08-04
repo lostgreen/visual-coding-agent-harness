@@ -160,6 +160,62 @@ def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: 
     assert "framework always includes the original question" not in prompt
 
 
+def test_runtime_derived_prompt_uses_semantic_handles_without_state_transactions(tmp_path: Path) -> None:
+    api = FakeAPI(
+        (
+            json.dumps(
+                {
+                    "requirements": [
+                        {
+                            "name": "body_change",
+                            "goal": "Observe the visible body change.",
+                            "kind": "persistent_state",
+                            "role": "answer_bearing",
+                        }
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "action": "answer",
+                    "answer": "B",
+                    "support_items": ["E1"],
+                    "supports_requirements": ["R1"],
+                }
+            ),
+        )
+    )
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    plan = reasoner.plan_evidence(
+        question="After the stated poisoning event, what changes?",
+        options={"A": "Nothing", "B": "The body changes"},
+    )
+    decision = reasoner.decide(
+        question="After the stated poisoning event, what changes?",
+        options={"A": "Nothing", "B": "The body changes"},
+        remaining_budget=0,
+        force_finalize=True,
+        evidence_state_mode="runtime_derived",
+        mechanical_status={},
+        working_document_view="REQUIREMENTS\nR1 [answer_bearing,persistent_state] OBSERVED",
+        workspace_overview={},
+    )
+
+    assert plan["requirements"][0]["role"] == "answer_bearing"
+    assert decision.supporting_item_ids == ("E1",)
+    assert decision.supports_requirement_ids == ("R1",)
+    prompt = api.calls[1]["prompt"]
+    assert "support_items" in prompt and "refine_item" in prompt
+    assert "set_obligation_status" not in prompt
+    assert "set_cue_status" not in prompt
+    assert "supporting_attempt_ids" not in prompt
+    assert "interpretation_item_id" not in prompt
+    assert len(prompt) < 6000
+    metadata = reasoner.consume_decision_metadata()
+    assert 0 < metadata["prompt_schema_token_cost"] < 1000
+
+
 @pytest.mark.parametrize("wrapper", ("response", "responses", "items"))
 def test_reasoner_unwraps_valid_decision_wrappers(tmp_path: Path, wrapper: str) -> None:
     payload = {
