@@ -210,6 +210,10 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         top_k=int(value.get("top_k", 12) or 12),
         index_mode=str(value.get("index_mode", "lexical") or "lexical"),
         expand_neighbors=int(value.get("expand_neighbors", 0) or 0),
+        locator_attempt_id=str(value.get("locator_attempt_id", "") or ""),
+        occurrence_id=str(value.get("occurrence_id", "") or ""),
+        temporal_scope_id=str(value.get("temporal_scope_id", "") or ""),
+        evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
@@ -553,6 +557,10 @@ class VisionInvestigator(VirtualVideoInvestigator):
             frame_times,
             requested_fps=fps,
         )
+        candidate_binding = _candidate_binding_for_task(
+            task,
+            self.workspace.root_dir / "observation_log.jsonl",
+        )
         observed_subranges = tuple(
             tuple(float(value) for value in interval)
             for interval in sampling_manifest["observed_subranges"]
@@ -638,6 +646,9 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "mode": "window",
                 "modality": "visual",
                 "sampling_manifest": sampling_manifest,
+                "evidence_kind": str(getattr(task, "evidence_kind", "generic") or "generic"),
+                "temporal_scope_id": str(getattr(task, "temporal_scope_id", "") or ""),
+                **({"candidate_binding": candidate_binding} if candidate_binding else {}),
             },
             images_requested=counts["requested"],
             images_attached=counts["attached"],
@@ -872,21 +883,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
         query_id = str(getattr(task, "query_id", "") or "search_caption")
         goal_query = str(getattr(task, "goal", "") or "").strip()
         requested_queries = tuple(getattr(task, "caption_queries", ()) or ())
-        if self.caption_query_strategy == "rema":
-            queries = _rema_caption_queries(
-                goal_query,
-                requested_queries,
-                fallback=self.workspace.case.question,
-            )
-        else:
-            query_candidates = (self.workspace.case.question, *requested_queries)
-            queries = tuple(
-                dict.fromkeys(
-                    str(query).strip()
-                    for query in query_candidates
-                    if str(query).strip()
-                )
-            )[:5]
+        queries = _select_caption_queries(
+            goal_query,
+            requested_queries,
+            fallback=self.workspace.case.question,
+            strategy=self.caption_query_strategy,
+        )
         time_range = getattr(task, "time_range", None)
         segment_id = str(getattr(task, "segment_id", "") or "")
         requested_source_video_ids = tuple(getattr(task, "source_video_ids", ()) or ())
@@ -1578,8 +1580,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         )
     else:
         caption_search_rule = (
-            "When available, search_caption is a locator: the framework always includes the original question, and you may "
-            "add caption_queries (1-4 complementary formulations), top_k, optional time_range, segment_id/source_video_ids, "
+            "When available, search_caption is a locator. Explicit caption_queries are used in isolation and are never "
+            "prepended with the whole question. Provide 1-4 short complementary anchor-side and target-side queries, top_k, "
+            "optional time_range, segment_id/source_video_ids, "
             "and index_mode=lexical, dense, or hybrid when configured. Treat returned ranges as candidates and inspect "
             "decisive claims visually. "
         )
@@ -1641,6 +1644,12 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"status\":\"open|candidate_found|observed|contested|satisfied|unresolved\","
         "\"supporting_claim_ids\":[],\"supporting_attempt_ids\":[],\"residual_uncertainty\":\"\"}. "
         "The framework checks only state and foreign keys; you remain responsible for semantic decomposition and truth.\n"
+        "Do not collapse a multi-statement question or an anchor -> intermediate event -> target -> measurement chain into "
+        "one obligation. Create one observable obligation per hop and connect downstream hops with depends_on.\n"
+        "Represent generic ordering with {\"op\":\"add_temporal_scope\",\"temporal_scope\":{"
+        "\"scope_id\":\"scope_1\",\"relation\":\"before|after|within|between\","
+        "\"selection\":\"first|next|last|all|unspecified\",\"anchor_requirement_id\":\"req_anchor\","
+        "\"target_requirement_id\":\"req_target\"}}. Do not encode first/next semantics only in prose.\n"
         "Never put investigate, read_observations, update_workspace, answer, or tasks inside workspace_ops; these belong at "
         "the top level of the Decision object.\n"
         "An observation claim must cite an attempt_id; a derived claim must name "
@@ -1654,6 +1663,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "When mechanical_status lists pending_caption_candidates, select the candidate whose query_matches and "
         "caption_excerpt best cover the unresolved condition, then inspect its time_range with inspection_mode=window; "
         "rank is retrieval priority, not proof. Caption_search and search_asr attempts cannot directly support an answer.\n"
+        "When inspecting a caption occurrence, copy its locator attempt_id and occurrence_id into locator_attempt_id and "
+        "occurrence_id. If a TemporalScope applies, also provide temporal_scope_id. The framework validates only source, "
+        "range, and ordering foreign keys; it does not decide which occurrence is semantically correct.\n"
         "When recommended_temporal_candidate is present, it is a locator-only join for an explicit after/before/first "
         "condition. Inspect its full inspection_range before unrelated Caption candidates; do not replace it with only "
         "the last seconds adjacent to the target event. Then visually verify the target identity, ordering, and requested "
@@ -1668,7 +1680,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"source_video_ids\":[],"
         "\"inspection_mode\":\"window|search_asr|search_caption|arbitrate_observation\","
         "\"search_terms\":[],\"caption_queries\":[],\"top_k\":12,\"index_mode\":\"lexical|dense|hybrid\","
-        "\"expand_neighbors\":0,\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
+        "\"expand_neighbors\":0,\"locator_attempt_id\":\"\",\"occurrence_id\":\"\","
+        "\"temporal_scope_id\":\"\",\"evidence_kind\":\"generic\","
+        "\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
         "\"expected_evidence\":\"direct observation\","
         "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
         "time_range defaults to virtual workspace seconds. segment_local requires a known segment_id and is converted with "
@@ -1891,6 +1905,35 @@ def _observation_rows(path: Path, attempt_id: str) -> tuple[dict[str, Any], ...]
     return tuple(rows)
 
 
+def _candidate_binding_for_task(task: Any, observation_path: Path) -> dict[str, Any]:
+    locator_attempt_id = str(getattr(task, "locator_attempt_id", "") or "")
+    occurrence_id = str(getattr(task, "occurrence_id", "") or "")
+    if not locator_attempt_id or not occurrence_id:
+        return {}
+    rows = _observation_rows(observation_path, locator_attempt_id)
+    for row in reversed(rows):
+        config = row.get("sampling_config")
+        if not isinstance(config, Mapping):
+            continue
+        occurrence_set = config.get("occurrence_set")
+        if not isinstance(occurrence_set, Mapping):
+            continue
+        for candidate in tuple(occurrence_set.get("candidates", ()) or ()):
+            if not isinstance(candidate, Mapping):
+                continue
+            if str(candidate.get("occurrence_id", "") or "") != occurrence_id:
+                continue
+            return {
+                "locator_attempt_id": locator_attempt_id,
+                "occurrence_id": occurrence_id,
+                "candidate_range": list(candidate.get("time_range", ()) or ()),
+                "passage_ids": list(candidate.get("passage_ids", ()) or ()),
+                "source_video_ids": list(candidate.get("source_video_ids", ()) or ()),
+                "segment_ids": list(candidate.get("segment_ids", ()) or ()),
+            }
+    return {}
+
+
 def _string_values(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         values = (value,)
@@ -1954,7 +1997,35 @@ def _rema_caption_queries(
         _LOCATOR_PREFIX_RE.sub("", str(goal or "")).strip(" .,:;"),
     )
     normalized = tuple(dict.fromkeys(query for query in candidates if query))[:5]
-    return normalized or (str(fallback or "").strip(),)
+    fallback_query = str(fallback or "").strip()
+    return normalized or ((fallback_query,) if fallback_query else ())
+
+
+def _select_caption_queries(
+    goal: str,
+    requested_queries: Sequence[str],
+    *,
+    fallback: str,
+    strategy: str,
+) -> tuple[str, ...]:
+    explicit = tuple(
+        dict.fromkeys(
+            text
+            for value in requested_queries
+            if (text := str(value or "").strip())
+        )
+    )[:5]
+    if explicit:
+        return explicit
+    goal_query = str(goal or "").strip()
+    if goal_query:
+        if str(strategy or "joint").strip().casefold() == "rema":
+            generated = _rema_caption_queries(goal_query, (), fallback="")
+            if generated:
+                return generated
+        return (goal_query,)
+    fallback_query = str(fallback or "").strip()
+    return (fallback_query,) if fallback_query else ()
 
 
 def _temporal_caption_contract(question: str) -> dict[str, Any] | None:

@@ -225,7 +225,7 @@ def test_search_caption_creates_one_locator_attempt_and_caches_zero_hits(tmp_pat
     assert report.evidence == ()
     assert attempt.modality == "caption_search"
     assert attempt.inspected_ranges == ()
-    assert attempt.sampling_config["queries"][0] == workspace.case.question
+    assert attempt.sampling_config["queries"] == ["red temple door"]
     assert attempt.sampling_config["hits"][0]["passage_id"] == "p0"
     assert row["attempt_id"] == attempt.attempt_id
     assert repeated.cost["reused"] is True
@@ -451,15 +451,15 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
     )
 
     assert calls == [
-        ("red temple door", "红色寺庙大门", "the target"),
-        ("red temple doorway", "红色寺庙大门", "the target"),
+        ("red temple door", "红色寺庙大门"),
+        ("red temple doorway", "红色寺庙大门"),
     ]
-    assert top_ks == [8, 8]
+    assert top_ks == [6, 6]
     assert workspace.case.question not in calls[0]
     assert first.cost["reused"] is False
     assert refined.cost["reused"] is False
     assert first.attempts[0].sampling_config["query_strategy"] == "rema"
-    assert first.attempts[0].sampling_config["top_k"] == 8
+    assert first.attempts[0].sampling_config["top_k"] == 6
     assert first.attempts[0].sampling_config["requested_top_k"] == 5
 
 
@@ -499,13 +499,7 @@ def test_rema_caption_queries_split_temporal_goal_before_entity_terms(
         )
     )
 
-    assert captured == [
-        "the player first fights Yin Tiger",
-        "the first fight against Yin Tiger",
-        "Yin Tiger",
-        "Flaming Mountains",
-        "the chapter start",
-    ]
+    assert captured == ["Yin Tiger", "Flaming Mountains"]
 
 
 def test_rema_caption_queries_extract_temporal_contract_from_question() -> None:
@@ -646,7 +640,7 @@ def test_rema_temporal_locator_selects_first_target_after_shared_chapter_boundar
 
     locator = report.attempts[0].sampling_config["temporal_locator"]
     recommended = locator["recommended"]
-    assert calls[0]["top_k"] == 12
+    assert calls[0]["top_k"] == 5
     assert [call["top_k"] for call in calls[1:]] == [6, 6, 6]
     assert recommended["scope_anchor"]["time_range"] == [63135.0, 63144.0]
     assert recommended["target_event"]["time_range"] == [66215.0, 66300.0]

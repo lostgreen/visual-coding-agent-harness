@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
 from vcah.evidence_state import EvidenceObligation, EvidenceObligationState
+from vcah.temporal_scope import TemporalScope
 
 
 ClaimSource = Literal["premise", "observation", "derived", "hypothesis"]
@@ -25,6 +26,7 @@ _OP_TYPES = {
     "update_entity",
     "add_obligation",
     "set_obligation_status",
+    "add_temporal_scope",
 }
 
 
@@ -234,6 +236,7 @@ class WorkingDocument:
     timeline: list[IntervalNote] = field(default_factory=list)
     obligations: dict[str, EvidenceObligation] = field(default_factory=dict)
     obligation_states: dict[str, EvidenceObligationState] = field(default_factory=dict)
+    temporal_scopes: dict[str, TemporalScope] = field(default_factory=dict)
     revision: int = 0
     active_claim_limit: int = 60
 
@@ -288,13 +291,19 @@ class WorkingDocument:
                 if isinstance(item, Mapping)
                 and (state := EvidenceObligationState.from_mapping(item)).requirement_id
             },
+            temporal_scopes={
+                scope.scope_id: scope
+                for item in _mapping_values(value.get("temporal_scopes"))
+                if isinstance(item, Mapping)
+                and (scope := TemporalScope.from_mapping(item)).scope_id
+            },
             revision=max(0, int(value.get("revision", 0) or 0)),
             active_claim_limit=max(1, int(value.get("active_claim_limit", 60) or 60)),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "WorkingDocumentV3",
+            "schema_version": "WorkingDocumentV4",
             "revision": self.revision,
             "active_claim_limit": self.active_claim_limit,
             "claims": {claim_id: asdict(claim) for claim_id, claim in sorted(self.claims.items())},
@@ -307,6 +316,10 @@ class WorkingDocument:
             "obligation_states": {
                 requirement_id: state.to_dict()
                 for requirement_id, state in sorted(self.obligation_states.items())
+            },
+            "temporal_scopes": {
+                scope_id: scope.to_dict()
+                for scope_id, scope in sorted(self.temporal_scopes.items())
             },
         }
 
@@ -346,6 +359,7 @@ class WorkingDocument:
         self.timeline = staged.timeline
         self.obligations = staged.obligations
         self.obligation_states = staged.obligation_states
+        self.temporal_scopes = staged.temporal_scopes
         self.revision += 1
         return WorkspaceApplyResult(True, self.revision, len(ops), ())
 
@@ -453,6 +467,15 @@ class WorkingDocument:
         if orphan_states:
             errors.append(f"obligation_definition_missing:{','.join(orphan_states)}")
         errors.extend(self._obligation_cycle_errors())
+        for scope_id, scope in self.temporal_scopes.items():
+            if scope.anchor_requirement_id not in self.obligations:
+                errors.append(
+                    f"temporal_scope_anchor_obligation_missing:{scope_id}:{scope.anchor_requirement_id}"
+                )
+            if scope.target_requirement_id not in self.obligations:
+                errors.append(
+                    f"temporal_scope_target_obligation_missing:{scope_id}:{scope.target_requirement_id}"
+                )
         return tuple(dict.fromkeys(errors))
 
     def obligation_summary(self) -> dict[str, Any]:
@@ -687,6 +710,17 @@ class WorkingDocument:
                 supporting_attempt_ids=tuple(operation.get("supporting_attempt_ids", ()) or ()),
                 residual_uncertainty=str(operation.get("residual_uncertainty", "") or ""),
             )
+            return
+        if op_type == "add_temporal_scope":
+            payload = (
+                operation.get("temporal_scope")
+                if isinstance(operation.get("temporal_scope"), Mapping)
+                else operation
+            )
+            scope = TemporalScope.from_mapping(payload)
+            if scope.scope_id in self.temporal_scopes:
+                raise ValueError(f"temporal_scope_already_exists:{scope.scope_id}")
+            self.temporal_scopes[scope.scope_id] = scope
             return
         entity_payload = operation.get("entity") if isinstance(operation.get("entity"), Mapping) else operation
         entity = Entity.from_mapping(entity_payload)
@@ -978,6 +1012,14 @@ def render_working_view(
                 f"- {note.time_range[0]:.3f}-{note.time_range[1]:.3f}s role={note.role} "
                 f"{note.label} claims={list(note.claim_ids)}"
             )
+    lines.append("TEMPORAL SCOPES")
+    lines.append(
+        json.dumps(
+            [scope.to_dict() for scope in document.temporal_scopes.values()],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
     lines.append("EVIDENCE OBLIGATIONS")
     if not document.obligations:
         lines.append("[]")

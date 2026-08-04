@@ -203,6 +203,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
         Path("src/vcah/evidence_state.py"),
+        Path("src/vcah/temporal_scope.py"),
         Path("benchmarks/schema.py"),
         Path("benchmarks/mmlifelong/runner.py"),
     )

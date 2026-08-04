@@ -147,6 +147,48 @@ def clue_frame_coverage(
     return covered / len(clues)
 
 
+def candidate_clue_recall(
+    observation_rows: Sequence[Mapping[str, Any]],
+    reference_intervals: Sequence[Sequence[float]],
+    *,
+    tolerance_sec: float = 5.0,
+) -> float:
+    candidate_intervals = tuple(
+        interval
+        for row in observation_rows
+        if isinstance((config := row.get("sampling_config")), Mapping)
+        and config.get("mode") == "search_caption"
+        for hit in tuple(config.get("hits", ()) or ())
+        if isinstance(hit, Mapping)
+        and (interval := _hit_interval(hit)) is not None
+    )
+    return _interval_recall(
+        candidate_intervals,
+        reference_intervals,
+        tolerance_sec=tolerance_sec,
+    )
+
+
+def occurrence_candidate_recall(
+    observation_rows: Sequence[Mapping[str, Any]],
+    reference_intervals: Sequence[Sequence[float]],
+    *,
+    tolerance_sec: float = 5.0,
+) -> float:
+    candidate_intervals = tuple(
+        interval
+        for candidate in caption_occurrence_candidates_from_observation_rows(
+            observation_rows
+        )
+        if (interval := _interval(candidate.get("time_range", ()))) is not None
+    )
+    return _interval_recall(
+        candidate_intervals,
+        reference_intervals,
+        tolerance_sec=tolerance_sec,
+    )
+
+
 def recorded_case_diagnostics(
     evaluation: Mapping[str, Any],
     document: WorkingDocument,
@@ -231,6 +273,14 @@ def recorded_case_diagnostics(
             runtime_metrics.get("visual_frames_inspected", len(frame_times)) or 0
         ),
         "clue_frame_coverage": clue_frame_coverage(frame_times, reference_intervals),
+        "candidate_clue_recall": candidate_clue_recall(
+            observation_rows,
+            reference_intervals,
+        ),
+        "occurrence_candidate_recall": occurrence_candidate_recall(
+            observation_rows,
+            reference_intervals,
+        ),
         "retrieval_dedup_rate": caption_dedup_rate,
         "caption_result_novelty_rate": 1.0 - caption_dedup_rate if caption_hits else 0.0,
         "caption_occurrence_candidate_count": len(occurrence_candidates),
@@ -271,7 +321,55 @@ def _interval_bins(
     return bins
 
 
-def _hit_interval(hit: CaptionHitV1) -> tuple[float, float]:
+def _interval_recall(
+    candidate_intervals: Sequence[Sequence[float]],
+    reference_intervals: Sequence[Sequence[float]],
+    *,
+    tolerance_sec: float,
+) -> float:
+    candidates = tuple(
+        interval
+        for value in candidate_intervals
+        if (interval := _interval(value)) is not None
+    )
+    references = tuple(
+        interval
+        for value in reference_intervals
+        if (interval := _interval(value)) is not None
+    )
+    if not references:
+        return 0.0
+    tolerance = max(0.0, float(tolerance_sec))
+    recalled = sum(
+        any(
+            min(candidate[1] + tolerance, reference[1])
+            >= max(candidate[0] - tolerance, reference[0])
+            for candidate in candidates
+        )
+        for reference in references
+    )
+    return recalled / len(references)
+
+
+def _interval(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 2:
+        return None
+    try:
+        start, end = sorted((float(value[0]), float(value[1])))
+    except (TypeError, ValueError):
+        return None
+    return (start, end) if end >= start else None
+
+
+def _hit_interval(hit: CaptionHitV1 | Mapping[str, Any]) -> tuple[float, float]:
+    if isinstance(hit, Mapping):
+        raw_range = tuple(hit.get("range", ()) or ())
+        if len(raw_range) == 2:
+            start, end = float(raw_range[0]), float(raw_range[1])
+        else:
+            start = float(hit.get("virtual_start_sec", 0.0) or 0.0)
+            end = float(hit.get("virtual_end_sec", start) or start)
+        return min(start, end), max(start, end)
     return float(hit.virtual_start_sec), float(hit.virtual_end_sec)
 
 

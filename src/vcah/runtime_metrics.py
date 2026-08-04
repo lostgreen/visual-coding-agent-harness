@@ -196,6 +196,23 @@ def agent_run_metrics(
         and isinstance(answer_outcomes[-1].get("obligation_summary"), Mapping)
         else {}
     )
+    temporal_scope_summary = dict(
+        answer_outcomes[-1].get("temporal_scope_summary", {})
+        if answer_outcomes
+        and isinstance(answer_outcomes[-1].get("temporal_scope_summary"), Mapping)
+        else {}
+    )
+    executed_ledger_ids = {
+        str(row.get("ledger_id", "") or "")
+        for row in task_outcomes
+        if row.get("status") == "executed"
+    }
+    occurrence_request_ids = {
+        str(row.get("ledger_id", "") or "")
+        for row in task_requests
+        if isinstance(row.get("task"), Mapping)
+        and str(row["task"].get("occurrence_id", "") or "")
+    }
     source_rows: dict[str, Mapping[str, Any]] = {}
     for row in observation_rows:
         source_rows.setdefault(str(row.get("attempt_id", "")), row)
@@ -241,6 +258,14 @@ def agent_run_metrics(
         for row in visual_interpretation_rows
         if str(row.get("attempt_id", "") or "")
     }
+    bound_visual_attempt_ids = {
+        str(row.get("attempt_id", "") or "")
+        for row in visual_interpretation_rows
+        if isinstance(row.get("sampling_config"), Mapping)
+        and isinstance(row["sampling_config"].get("candidate_binding"), Mapping)
+        and str(row.get("attempt_id", "") or "")
+    }
+    executed_occurrence_requests = occurrence_request_ids.intersection(executed_ledger_ids)
     seen_visual_attempts: set[str] = set()
     deliberate_reinterpretations = 0
     accidental_reinterpretations = 0
@@ -319,6 +344,21 @@ def agent_run_metrics(
         ),
         "obligation_coverage_rate": float(
             obligation_summary.get("obligation_coverage_rate", 0.0) or 0.0
+        ),
+        "occurrence_bound_material_count": len(bound_visual_attempt_ids),
+        "occurrence_binding_rate": (
+            min(1.0, len(bound_visual_attempt_ids) / len(executed_occurrence_requests))
+            if executed_occurrence_requests
+            else 0.0
+        ),
+        "temporal_scope_count": int(
+            temporal_scope_summary.get("temporal_scope_count", 0) or 0
+        ),
+        "resolved_temporal_scope_count": int(
+            temporal_scope_summary.get("resolved_temporal_scope_count", 0) or 0
+        ),
+        "temporal_scope_resolved_rate": float(
+            temporal_scope_summary.get("temporal_scope_resolved_rate", 0.0) or 0.0
         ),
         "dedicated_read_rounds": sum(
             row.get("action") == "read_observations" for row in committed_decisions

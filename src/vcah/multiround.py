@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+from vcah.evidence_state import EVIDENCE_KINDS
 from vcah.investigator import (
     INTERPRETATION_PURPOSES,
     InvestigationReport,
@@ -13,6 +14,7 @@ from vcah.investigator import (
 )
 from vcah.memory import EvidenceStore
 from vcah.runtime_metrics import export_supporting_intervals
+from vcah.temporal_scope import resolve_temporal_scope
 from vcah.types import EvidenceRecord, to_jsonable
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace, select_uniform_items
@@ -54,6 +56,10 @@ class InvestigationTask:
     top_k: int = 12
     index_mode: str = "lexical"
     expand_neighbors: int = 0
+    locator_attempt_id: str = ""
+    occurrence_id: str = ""
+    temporal_scope_id: str = ""
+    evidence_kind: str = "generic"
     sampling_floor_fps: float | None = None
     arbitration_attempt_id: str = ""
     force_reinspect: bool = False
@@ -105,6 +111,13 @@ class InvestigationTask:
             raise ValueError(f"unsupported caption index_mode: {index_mode}")
         object.__setattr__(self, "index_mode", index_mode)
         object.__setattr__(self, "expand_neighbors", min(3, max(0, int(self.expand_neighbors))))
+        object.__setattr__(self, "locator_attempt_id", str(self.locator_attempt_id or "").strip())
+        object.__setattr__(self, "occurrence_id", str(self.occurrence_id or "").strip())
+        object.__setattr__(self, "temporal_scope_id", str(self.temporal_scope_id or "").strip())
+        evidence_kind = str(self.evidence_kind or "generic").strip().casefold()
+        if evidence_kind not in EVIDENCE_KINDS:
+            raise ValueError(f"unsupported evidence_kind: {evidence_kind}")
+        object.__setattr__(self, "evidence_kind", evidence_kind)
         object.__setattr__(
             self,
             "sampling_floor_fps",
@@ -556,6 +569,14 @@ class VirtualVideoMultiRoundDriver:
                 limit=min(self.max_tasks_per_round, remaining),
                 errors=resolution_errors,
                 resolutions=task_resolutions,
+                observation_rows=observation_log.rows,
+                temporal_scope_ids=tuple(document.temporal_scopes),
+                temporal_scope_resolutions={
+                    str(row.get("scope_id", "") or ""): row
+                    for row in tuple(status.get("temporal_scope_statuses", ()) or ())
+                    if isinstance(row, Mapping)
+                    and str(row.get("scope_id", "") or "")
+                },
             )
             if resolution_errors:
                 trace.append(
@@ -724,6 +745,7 @@ class VirtualVideoMultiRoundDriver:
                 "answer_present": returned_answer_present,
                 "supporting_intervals": [list(item) for item in supporting_intervals],
                 "obligation_summary": document.obligation_summary(),
+                "temporal_scope_summary": _temporal_scope_summary(document, observation_log),
                 "working_document_path": str(document_path),
                 "observation_log_path": str(observation_log.path),
                 "workspace_history_path": str(history_path),
@@ -1282,6 +1304,11 @@ def _mechanical_status(
             for candidate in occurrence_set["candidates"]
         )
     )
+    temporal_scope_summary = _temporal_scope_summary(
+        document,
+        observations,
+        candidates=caption_occurrence_candidates,
+    )
     temporal_status: dict[str, Any] = {}
     if temporal_locators:
         latest_locator = temporal_locators[-1]
@@ -1359,6 +1386,12 @@ def _mechanical_status(
             "An explicit after/before/first contract produced a scoped temporal locator. "
             "Inspect recommended_temporal_candidate.inspection_range before unrelated Caption hits."
         )
+    if temporal_scope_summary["temporal_scope_count"] and not temporal_scope_summary[
+        "temporal_scope_resolved_rate"
+    ]:
+        hints.append(
+            "A declared TemporalScope is unresolved. Establish its anchor material and bind target occurrence candidates."
+        )
     if unrefined_visual_attempts:
         hints.append(
             "Wide visual scans are locator candidates only; refine a relevant neighborhood to <=120 seconds before "
@@ -1414,6 +1447,7 @@ def _mechanical_status(
         "caption_occurrence_ambiguous": bool(unresolved_competing_occurrence_sets),
         "caption_occurrence_sets": list(caption_occurrence_sets[-4:]),
         **temporal_status,
+        **temporal_scope_summary,
         "entity_count": len(document.entities),
         "candidate_interval_count": sum(note.role == "candidate" for note in document.timeline),
         "supporting_interval_count": sum(note.role == "supporting" for note in document.timeline),
@@ -1446,6 +1480,81 @@ def _mechanical_status(
         **obligation_summary,
         **runtime,
     }
+
+
+def _temporal_scope_summary(
+    document: WorkingDocument,
+    observations: ObservationLog,
+    *,
+    candidates: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    source_rows = observations.catalog_source_rows()
+    rows_by_attempt = {
+        str(row.get("attempt_id", "") or ""): row
+        for row in source_rows
+        if str(row.get("attempt_id", "") or "")
+    }
+    occurrence_candidates = tuple(candidates or _occurrence_candidates(observations.rows))
+    statuses = []
+    for scope in document.temporal_scopes.values():
+        anchor_state = document.obligation_states.get(scope.anchor_requirement_id)
+        target_state = document.obligation_states.get(scope.target_requirement_id)
+        anchor_ranges = tuple(
+            interval
+            for attempt_id in tuple(
+                anchor_state.supporting_attempt_ids if anchor_state is not None else ()
+            )
+            if (row := rows_by_attempt.get(attempt_id)) is not None
+            for value in tuple(row.get("inspected_ranges", ()) or ())
+            if (interval := _time_range(value)) is not None
+        )
+        target_attempt_ids = set(
+            target_state.supporting_attempt_ids if target_state is not None else ()
+        )
+        scoped_candidates = tuple(
+            candidate
+            for candidate in occurrence_candidates
+            if not target_attempt_ids
+            or str(candidate.get("attempt_id", "") or "") in target_attempt_ids
+        )
+        statuses.append(
+            resolve_temporal_scope(
+                scope,
+                anchor_intervals=anchor_ranges,
+                candidates=scoped_candidates,
+            )
+        )
+    resolved_count = sum(bool(status.get("resolved")) for status in statuses)
+    return {
+        "temporal_scope_count": len(statuses),
+        "resolved_temporal_scope_count": resolved_count,
+        "temporal_scope_resolved_rate": (
+            resolved_count / len(statuses) if statuses else 0.0
+        ),
+        "temporal_scope_statuses": statuses,
+    }
+
+
+def _occurrence_candidates(
+    observation_rows: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    candidates = []
+    for row in observation_rows:
+        config = row.get("sampling_config")
+        if not isinstance(config, Mapping):
+            continue
+        occurrence_set = config.get("occurrence_set")
+        if not isinstance(occurrence_set, Mapping):
+            continue
+        for value in tuple(occurrence_set.get("candidates", ()) or ()):
+            if isinstance(value, Mapping):
+                candidates.append(
+                    {
+                        **dict(value),
+                        "attempt_id": str(row.get("attempt_id", "") or ""),
+                    }
+                )
+    return tuple(candidates)
 
 
 def _visual_sampling_status(row: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -1542,6 +1651,9 @@ def _resolve_tasks(
     limit: int,
     errors: list[dict[str, Any]] | None = None,
     resolutions: list[dict[str, Any]] | None = None,
+    observation_rows: Sequence[Mapping[str, Any]] = (),
+    temporal_scope_ids: Sequence[str] = (),
+    temporal_scope_resolutions: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[InvestigationTask, ...]:
     limit = max(0, int(limit))
     segments = tuple(workspace.manifest.segments)
@@ -1555,6 +1667,22 @@ def _resolve_tasks(
         task_error = _task_executability_error(requested_task)
         if task_error:
             resolution_errors.append(_task_resolution_error(requested_task, task_error))
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
+            continue
+        binding_error = validate_occurrence_material_binding(
+            requested_task,
+            observation_rows,
+            temporal_scope_ids=temporal_scope_ids,
+            temporal_scope_resolutions=temporal_scope_resolutions,
+        )
+        if binding_error is not None:
+            resolution_errors.append(binding_error)
             groups.append(
                 {
                     "requested_task": requested_task,
@@ -1834,6 +1962,116 @@ def _task_resolution_error(
     }
 
 
+def validate_occurrence_material_binding(
+    task: InvestigationTask,
+    observation_rows: Sequence[Mapping[str, Any]],
+    *,
+    temporal_scope_ids: Sequence[str] = (),
+    temporal_scope_resolutions: Mapping[str, Mapping[str, Any]] | None = None,
+    neighborhood_tolerance_sec: float = 120.0,
+) -> dict[str, Any] | None:
+    known_scope_ids = {str(value) for value in temporal_scope_ids if str(value)}
+    if task.temporal_scope_id and task.temporal_scope_id not in known_scope_ids:
+        return _task_resolution_error(
+            task,
+            "temporal_scope_missing",
+            temporal_scope_id=task.temporal_scope_id,
+        )
+    has_locator = bool(task.locator_attempt_id)
+    has_occurrence = bool(task.occurrence_id)
+    if has_locator != has_occurrence:
+        return _task_resolution_error(task, "occurrence_binding_incomplete")
+    if not has_locator:
+        return None
+    if task.inspection_mode != "window":
+        return _task_resolution_error(task, "occurrence_binding_requires_visual_window")
+
+    locator = next(
+        (
+            row
+            for row in observation_rows
+            if str(row.get("attempt_id", "") or "") == task.locator_attempt_id
+        ),
+        None,
+    )
+    if locator is None:
+        return _task_resolution_error(
+            task,
+            "locator_attempt_missing",
+            locator_attempt_id=task.locator_attempt_id,
+        )
+    config = locator.get("sampling_config")
+    if not isinstance(config, Mapping) or config.get("mode") != "search_caption":
+        return _task_resolution_error(task, "locator_attempt_not_caption_search")
+    occurrence_set = config.get("occurrence_set")
+    candidates = (
+        tuple(occurrence_set.get("candidates", ()) or ())
+        if isinstance(occurrence_set, Mapping)
+        else ()
+    )
+    candidate = next(
+        (
+            value
+            for value in candidates
+            if isinstance(value, Mapping)
+            and str(value.get("occurrence_id", "") or "") == task.occurrence_id
+        ),
+        None,
+    )
+    if candidate is None:
+        return _task_resolution_error(
+            task,
+            "occurrence_not_in_locator",
+            locator_attempt_id=task.locator_attempt_id,
+            occurrence_id=task.occurrence_id,
+        )
+    scope_resolution = dict(
+        (temporal_scope_resolutions or {}).get(task.temporal_scope_id, {})
+        if task.temporal_scope_id
+        else {}
+    )
+    selected_occurrences = {
+        str(value)
+        for value in tuple(scope_resolution.get("selected_occurrence_ids", ()) or ())
+        if str(value)
+    }
+    if (
+        scope_resolution.get("resolved")
+        and selected_occurrences
+        and task.occurrence_id not in selected_occurrences
+    ):
+        return _task_resolution_error(
+            task,
+            "occurrence_outside_temporal_selection",
+            selected_occurrence_ids=sorted(selected_occurrences),
+        )
+    candidate_sources = {
+        str(value) for value in tuple(candidate.get("source_video_ids", ()) or ()) if str(value)
+    }
+    if task.source_video_ids and candidate_sources and not candidate_sources.intersection(task.source_video_ids):
+        return _task_resolution_error(task, "occurrence_source_mismatch")
+    candidate_segments = {
+        str(value) for value in tuple(candidate.get("segment_ids", ()) or ()) if str(value)
+    }
+    if task.segment_id and candidate_segments and task.segment_id not in candidate_segments:
+        return _task_resolution_error(task, "occurrence_segment_mismatch")
+    candidate_range = _time_range(candidate.get("time_range"))
+    if task.time_range is not None and candidate_range is not None:
+        gap = max(
+            candidate_range[0] - task.time_range[1],
+            task.time_range[0] - candidate_range[1],
+            0.0,
+        )
+        if gap > max(0.0, float(neighborhood_tolerance_sec)):
+            return _task_resolution_error(
+                task,
+                "occurrence_range_mismatch",
+                candidate_range=list(candidate_range),
+                neighborhood_tolerance_sec=float(neighborhood_tolerance_sec),
+            )
+    return None
+
+
 def _task_executability_error(task: InvestigationTask) -> str:
     if not task.query_id:
         return "query_id_missing"
@@ -2017,6 +2255,10 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "top_k": task.top_k,
         "index_mode": task.index_mode,
         "expand_neighbors": task.expand_neighbors,
+        "locator_attempt_id": task.locator_attempt_id,
+        "occurrence_id": task.occurrence_id,
+        "temporal_scope_id": task.temporal_scope_id,
+        "evidence_kind": task.evidence_kind,
         "sampling_floor_fps": task.sampling_floor_fps,
         "arbitration_attempt_id": task.arbitration_attempt_id,
         "force_reinspect": task.force_reinspect,
@@ -2057,6 +2299,10 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         top_k=int(value.get("top_k", 12) or 12),
         index_mode=str(value.get("index_mode", "lexical") or "lexical"),
         expand_neighbors=int(value.get("expand_neighbors", 0) or 0),
+        locator_attempt_id=str(value.get("locator_attempt_id", "") or ""),
+        occurrence_id=str(value.get("occurrence_id", "") or ""),
+        temporal_scope_id=str(value.get("temporal_scope_id", "") or ""),
+        evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
