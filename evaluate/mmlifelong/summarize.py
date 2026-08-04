@@ -8,6 +8,31 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping, Sequence
 
+from evaluate.common.io import stable_digest
+
+
+_CASE_SPECIFIC_CONFIG_KEYS = frozenset(
+    {
+        "case_id",
+        "config_digest",
+        "effective_caption_query_strategy",
+        "input_digest",
+    }
+)
+_EVALUATOR_CONFIG_KEYS = (
+    "benchmark",
+    "benchmark_revision",
+    "evaluator_revision",
+    "official_eval_file_sha256",
+    "official_ref_file_sha256",
+    "official_prompt_sha256",
+    "judge_model",
+    "judge_endpoint_family",
+    "judge_temperature",
+    "official_judge_model_match",
+    "official_judge_config_match",
+)
+
 
 def collect_evaluations(run_roots: Sequence[Path]) -> tuple[dict[str, Any], ...]:
     rows: list[dict[str, Any]] = []
@@ -50,19 +75,9 @@ def collect_evaluations(run_roots: Sequence[Path]) -> tuple[dict[str, Any], ...]
 def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in rows:
-        evaluation = row.get("evaluation", {})
         config = row.get("config", {})
         provenance = row.get("provenance", {})
-        evaluator_digest = (
-            provenance.get("evaluator_revision", "unknown")
-            if isinstance(provenance, Mapping)
-            else "unknown"
-        )
-        runtime_digest = evaluation.get(
-            "config_digest",
-            config.get("config_digest", "unknown"),
-        )
-        digest = f"{runtime_digest}:{evaluator_digest}"
+        digest = _comparison_config_digest(config, provenance)
         grouped[digest].append(row)
     aggregates = []
     for digest, group in sorted(grouped.items()):
@@ -122,6 +137,25 @@ def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
             }
         )
     return tuple(aggregates)
+
+
+def _comparison_config_digest(config: Any, provenance: Any) -> str:
+    runtime_config = dict(config) if isinstance(config, Mapping) else {}
+    evaluator_config = dict(provenance) if isinstance(provenance, Mapping) else {}
+    return stable_digest(
+        {
+            "runtime": {
+                key: value
+                for key, value in runtime_config.items()
+                if key not in _CASE_SPECIFIC_CONFIG_KEYS
+            },
+            "evaluator": {
+                key: evaluator_config[key]
+                for key in _EVALUATOR_CONFIG_KEYS
+                if key in evaluator_config
+            },
+        }
+    )
 
 
 def render_markdown(rows: Sequence[Mapping[str, Any]]) -> str:

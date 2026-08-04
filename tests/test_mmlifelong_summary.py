@@ -60,7 +60,13 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
                     "visual_frames_inspected": 4,
                 },
             },
-            "config": {"caption_index_mode": "hybrid", "answer_policy": "benchmark_best_effort"},
+            "config": {
+                "case_id": "case-a",
+                "config_digest": "case-a-digest",
+                "input_digest": "case-a-input",
+                "caption_index_mode": "hybrid",
+                "answer_policy": "benchmark_best_effort",
+            },
         },
         {
             "evaluation": {
@@ -83,7 +89,13 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
                     "visual_frames_inspected": 8,
                 },
             },
-            "config": {"caption_index_mode": "hybrid", "answer_policy": "benchmark_best_effort"},
+            "config": {
+                "case_id": "case-b",
+                "config_digest": "case-b-digest",
+                "input_digest": "case-b-input",
+                "caption_index_mode": "hybrid",
+                "answer_policy": "benchmark_best_effort",
+            },
         },
     )
 
