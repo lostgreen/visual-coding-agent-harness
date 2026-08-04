@@ -86,7 +86,7 @@ def main() -> None:
         caption_query_strategy=args.caption_query_strategy,
     )
     effective_control_retry_budget = (
-        0 if protocol.controller_mode == "frozen_baseline" else args.control_retry_budget
+        1 if protocol.controller_mode == "frozen_baseline" else args.control_retry_budget
     )
     effective_evidence_control_mode = (
         args.evidence_control_mode if protocol.controller_mode == "mger" else "shadow"
@@ -117,6 +117,7 @@ def main() -> None:
         evidence_control_mode=effective_evidence_control_mode,
         evidence_state_mode=effective_evidence_state_mode,
         allowed_inspection_modes=protocol.allowed_inspection_modes,
+        controller_mode=protocol.controller_mode,
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")

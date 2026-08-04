@@ -422,6 +422,8 @@ class WorkspaceReasoner:
             0,
             int(kwargs.get("control_retries_remaining", 1) or 0),
         )
+        if self.controller_mode == "frozen_baseline":
+            control_retries_remaining = max(1, control_retries_remaining)
         repair_attempted = repair_needed and control_retries_remaining > 0
         repaired = False
         if repair_attempted:

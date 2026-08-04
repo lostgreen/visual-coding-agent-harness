@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from vcah.interactive_agents import _frozen_reasoner_prompt
+from vcah.interactive_agents import WorkspaceReasoner, _frozen_reasoner_prompt
 from vcah.phase5 import (
     Phase5Protocol,
     blind_prior_prompt,
     inspection_mode_policy_errors,
 )
 from vcah.runtime_metrics import agent_run_metrics
+from vcah.workspace import ObservationLog, WorkingDocument, render_frozen_working_view
 
 
 def test_blind_arm_receives_no_visual_or_caption_tools() -> None:
@@ -56,6 +57,44 @@ def test_frozen_prompt_excludes_mger_control_plane() -> None:
     assert "obligation" not in prompt.casefold()
     assert "closure" not in prompt.casefold()
     assert "supporting_claim_ids" in prompt
+
+
+def test_frozen_working_view_excludes_mger_state(tmp_path) -> None:
+    document = WorkingDocument.with_question_premise("What changes?")
+    observations = ObservationLog(tmp_path / "observations.jsonl")
+
+    view = render_frozen_working_view(document, observations)
+
+    assert "EVIDENCE OBLIGATIONS" not in view
+    assert "TEMPORAL SCOPES" not in view
+    assert "OBSERVATION CUE STATES" not in view
+    assert "OBSERVATION CATALOG" in view
+
+
+def test_frozen_reasoner_retains_historical_single_json_repair(tmp_path) -> None:
+    class FakeAPI:
+        model = "fake"
+        last_response_metadata = {}
+
+        def __init__(self) -> None:
+            self.outputs = iter(("not json", '{"action":"answer","answer":"fact"}'))
+
+        def chat(self, prompt, *, max_tokens):
+            return next(self.outputs)
+
+    reasoner = WorkspaceReasoner(
+        FakeAPI(),
+        trace_path=tmp_path / "trace.jsonl",
+        controller_mode="frozen_baseline",
+    )
+
+    decision = reasoner.decide(question="What changes?", options={})
+    metadata = reasoner.consume_decision_metadata()
+
+    assert decision.action == "answer"
+    assert decision.answer == "fact"
+    assert metadata["internal_control_retry_count"] == 1
+    assert metadata["format_repaired"] is True
 
 
 def test_observed_case_and_malformed_decision_metrics() -> None:

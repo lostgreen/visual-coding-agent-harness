@@ -34,6 +34,7 @@ from vcah.workspace import (
     WorkingDocument,
     append_workspace_history,
     evidence_attempt_id,
+    render_frozen_working_view,
     render_working_view,
 )
 
@@ -47,6 +48,49 @@ RUN_ARTIFACT_NAMES = (
     "workspace_ops.jsonl",
     "exploration_ledger.jsonl",
     "run_summary.json",
+)
+_FROZEN_MECHANICAL_STATUS_KEYS = frozenset(
+    {
+        "schema_version",
+        "working_document_revision",
+        "workspace_valid",
+        "workspace_errors",
+        "active_claim_count",
+        "non_premise_claim_count",
+        "supported_observation_claim_count",
+        "unresolved_observation_count",
+        "active_claim_limit",
+        "observation_attempt_count",
+        "observation_interpretation_count",
+        "asr_search_count",
+        "caption_search_count",
+        "visual_window_attempt_count",
+        "unrefined_visual_attempt_count",
+        "unrefined_visual_attempts",
+        "low_fidelity_visual_attempt_count",
+        "low_fidelity_visual_attempts",
+        "caption_cited_claim_count",
+        "visual_confirmed_claim_count",
+        "pending_caption_candidate_count",
+        "pending_caption_candidates",
+        "caption_occurrence_candidate_count",
+        "pending_caption_occurrence_count",
+        "pending_caption_occurrences",
+        "caption_occurrence_ambiguous",
+        "caption_occurrence_sets",
+        "recommended_temporal_candidate",
+        "temporal_candidate_groups",
+        "entity_count",
+        "candidate_interval_count",
+        "supporting_interval_count",
+        "negative_interval_count",
+        "confirmed_occurrence_count",
+        "candidate_occurrence_count",
+        "prompt_hints",
+        "source_coverage",
+        "missing_segment_ids",
+        "answer_owner",
+    }
 )
 
 
@@ -281,6 +325,7 @@ class VirtualVideoMultiRoundDriver:
         evidence_control_mode: str = "strict",
         evidence_state_mode: str = "llm_authored",
         allowed_inspection_modes: frozenset[str] | None = None,
+        controller_mode: str = "mger",
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -312,6 +357,10 @@ class VirtualVideoMultiRoundDriver:
         if state_mode not in {"llm_authored", "runtime_derived"}:
             raise ValueError(f"unsupported evidence_state_mode: {state_mode}")
         self.evidence_state_mode = state_mode
+        controller = str(controller_mode or "mger").strip().casefold()
+        if controller not in {"frozen_baseline", "minimal_tool", "mger"}:
+            raise ValueError(f"unsupported controller_mode: {controller}")
+        self.controller_mode = controller
         self.allowed_inspection_modes = (
             None
             if allowed_inspection_modes is None
@@ -422,13 +471,17 @@ class VirtualVideoMultiRoundDriver:
                 surfaced_observation_ids=surfaced_observation_ids,
             )
             runtime_catalog = RuntimeEvidenceCatalog.build(document, observation_log)
-            status["evidence_state_mode"] = self.evidence_state_mode
-            status["evidence_control_mode"] = self.evidence_control_mode
+            if self.controller_mode == "frozen_baseline":
+                status = _frozen_mechanical_status(status, runtime_status)
+            else:
+                status["evidence_state_mode"] = self.evidence_state_mode
+                status["evidence_control_mode"] = self.evidence_control_mode
             force_finalize = (
                 round_id > self.semantic_round_budget or remaining <= 0
             ) and not closure_repair_active
-            status["closure_repair_active"] = closure_repair_active
-            status["closure_repair_count"] = closure_repair_count
+            if self.controller_mode != "frozen_baseline":
+                status["closure_repair_active"] = closure_repair_active
+                status["closure_repair_count"] = closure_repair_count
             if force_finalize:
                 forced_decision_calls += 1
             final_retry_available = force_finalize and forced_decision_calls < 2
@@ -441,6 +494,13 @@ class VirtualVideoMultiRoundDriver:
                 working_view = (
                     runtime_catalog.render(document, feedback=feedback)
                     if self.evidence_state_mode == "runtime_derived"
+                    else render_frozen_working_view(
+                        document,
+                        observation_log,
+                        requested_observations=requested_observations,
+                        feedback=feedback,
+                    )
+                    if self.controller_mode == "frozen_baseline"
                     else render_working_view(
                         document,
                         observation_log,
@@ -494,8 +554,13 @@ class VirtualVideoMultiRoundDriver:
                     control_attempt=control_attempt,
                     errors=tuple(decision_metadata.get("task_resolution_errors", ()) or ()),
                 )
-                schema_errors = _schema_error_rows(
+                raw_schema_errors = _schema_error_rows(
                     decision_metadata.get("decision_schema_errors", ())
+                )
+                schema_errors = (
+                    []
+                    if self.controller_mode == "frozen_baseline"
+                    else list(raw_schema_errors)
                 )
                 try:
                     parsed_decision = _decision(raw_decision)
@@ -520,14 +585,15 @@ class VirtualVideoMultiRoundDriver:
                                     "operations": list(ignored_state_ops),
                                 }
                             )
-                    schema_errors.extend(
-                        _decision_preflight(
-                            parsed_decision,
-                            closure_repair=closure_repair_active,
-                            runtime_derived=self.evidence_state_mode
-                            == "runtime_derived",
+                    if self.controller_mode != "frozen_baseline":
+                        schema_errors.extend(
+                            _decision_preflight(
+                                parsed_decision,
+                                closure_repair=closure_repair_active,
+                                runtime_derived=self.evidence_state_mode
+                                == "runtime_derived",
+                            )
                         )
-                    )
                     schema_errors.extend(
                         inspection_mode_policy_errors(
                             parsed_decision.tasks,
@@ -546,8 +612,8 @@ class VirtualVideoMultiRoundDriver:
                             if parsed_decision is not None
                             else ""
                         ),
-                        "schema_valid": not schema_errors,
-                        "errors": list(schema_errors),
+                        "schema_valid": not raw_schema_errors and not schema_errors,
+                        "errors": list(raw_schema_errors or schema_errors),
                     }
                 )
                 if schema_errors:
@@ -1161,6 +1227,19 @@ def _consume_decision_metadata(reasoner: Any) -> dict[str, Any]:
         return {}
     value = consume()
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _frozen_mechanical_status(
+    status: Mapping[str, Any],
+    runtime_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    runtime_keys = {str(key) for key in runtime_status}
+    return {
+        str(key): value
+        for key, value in status.items()
+        if str(key) in _FROZEN_MECHANICAL_STATUS_KEYS
+        or str(key) in runtime_keys
+    }
 
 
 def _schema_error_rows(value: Any) -> list[dict[str, Any]]:

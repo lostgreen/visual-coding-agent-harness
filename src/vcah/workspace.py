@@ -1593,6 +1593,96 @@ def render_working_view(
     return "\n".join(lines)
 
 
+def render_frozen_working_view(
+    document: WorkingDocument,
+    observations: ObservationLog,
+    *,
+    requested_observations: Sequence[Mapping[str, Any]] = (),
+    feedback: Mapping[str, Any] | None = None,
+    requested_observation_chars: int = 2400,
+    max_observations_per_round: int = 8,
+) -> str:
+    """Render the pre-MGER controller view without Phase 3/4 state sections."""
+    lines = [f"WORKING DOCUMENT revision={document.revision}"]
+    if feedback:
+        lines.extend(
+            (
+                "WORKSPACE FEEDBACK",
+                json.dumps(
+                    dict(feedback),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        )
+    if document.entities:
+        lines.append("ENTITIES")
+        for entity in document.entities.values():
+            aliases = f" aliases={list(entity.aliases)}" if entity.aliases else ""
+            lines.append(f"- [{entity.entity_id}] {entity.description}{aliases}")
+    active = [
+        claim
+        for claim in document.claims.values()
+        if claim.status in {"active", "contested"}
+    ]
+    history = [
+        claim
+        for claim in document.claims.values()
+        if claim.status in {"superseded", "retracted"}
+    ]
+    lines.append("ACTIVE CLAIMS")
+    for claim in sorted(active, key=_claim_sort_key):
+        lines.append(_render_claim(claim))
+    if history:
+        lines.append("CLAIM HISTORY")
+        for claim in sorted(history, key=_claim_sort_key):
+            successor = f" -> {claim.superseded_by}" if claim.superseded_by else ""
+            lines.append(
+                f"- [{claim.claim_id}] {claim.status}{successor}: "
+                f"{_compact_text(claim.text, 180)}"
+            )
+    if document.timeline:
+        lines.append("TIMELINE")
+        for note in sorted(document.timeline, key=lambda item: item.time_range):
+            lines.append(
+                f"- {note.time_range[0]:.3f}-{note.time_range[1]:.3f}s "
+                f"role={note.role} {note.label} claims={list(note.claim_ids)}"
+            )
+    lines.append("COVERAGE LEDGER")
+    lines.append(
+        json.dumps(
+            observations.coverage_ledger(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+    lines.append("OBSERVATION CATALOG")
+    lines.append(
+        json.dumps(
+            observations.catalog(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
+    if requested_observations:
+        lines.append("REQUESTED OBSERVATION PREVIEWS")
+        selected = tuple(requested_observations)[
+            -max(1, int(max_observations_per_round)) :
+        ]
+        for row in selected:
+            raw = _compact_text(
+                str(row.get("raw_output", "") or ""),
+                max(1, int(requested_observation_chars)),
+            )
+            lines.append(
+                f"- [{row.get('attempt_id', '')}/{row.get('interpretation_id', '')}] "
+                f"modality={row.get('modality', '')} "
+                f"ranges={row.get('inspected_ranges', ())} "
+                f"raw_pointer={observations.path}::{row.get('interpretation_id', '')} {raw}"
+            )
+    return "\n".join(lines)
+
+
 def append_workspace_history(
     path: str | Path,
     *,
