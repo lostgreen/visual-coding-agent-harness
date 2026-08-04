@@ -210,6 +210,7 @@ class MultiRoundResult:
     reports: tuple[InvestigationReport, ...]
     trace: tuple[Mapping[str, Any], ...] = ()
     answer_policy: str = "strict"
+    evidence_control_mode: str = "strict"
     answer_present: bool = False
     candidate_answer: str = ""
     verified_answer: str = ""
@@ -236,6 +237,7 @@ class VirtualVideoMultiRoundDriver:
         require_evidence_kind_requirements: bool = False,
         closure_repair_budget: int = 0,
         answer_policy: str = "strict",
+        evidence_control_mode: str = "strict",
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -259,6 +261,10 @@ class VirtualVideoMultiRoundDriver:
         if policy not in {"strict", "benchmark_best_effort"}:
             raise ValueError(f"unsupported answer_policy: {policy}")
         self.answer_policy = policy
+        control_mode = str(evidence_control_mode or "strict").strip().casefold()
+        if control_mode not in {"shadow", "strict"}:
+            raise ValueError(f"unsupported evidence_control_mode: {control_mode}")
+        self.evidence_control_mode = control_mode
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         existing = tuple(name for name in RUN_ARTIFACT_NAMES if (workspace.root_dir / name).exists())
@@ -353,6 +359,7 @@ class VirtualVideoMultiRoundDriver:
                     force_finalize=force_finalize,
                     final_attempt=forced_decision_calls if force_finalize else 0,
                     answer_policy=self.answer_policy,
+                    evidence_control_mode=self.evidence_control_mode,
                     semantic_round=round_id,
                     control_attempt=control_attempt,
                     control_retry=control_attempt > 0,
@@ -421,6 +428,23 @@ class VirtualVideoMultiRoundDriver:
                             "errors": schema_errors,
                         }
                     )
+                    if (
+                        self.evidence_control_mode == "shadow"
+                        and parsed_decision is not None
+                        and parsed_decision.action == "answer"
+                        and parsed_decision.answer
+                    ):
+                        trace.append(
+                            {
+                                "type": "shadow_prediction_preserved",
+                                "round": round_id,
+                                "stage": "decision_preflight",
+                                "grounding_errors": schema_errors,
+                            }
+                        )
+                        decision = parsed_decision
+                        rounds_run = round_id
+                        break
                     if control_retries_used >= self.control_retry_budget:
                         trace.append(
                             {
@@ -504,6 +528,22 @@ class VirtualVideoMultiRoundDriver:
                     rounds_run = round_id
                     break
 
+                if (
+                    self.evidence_control_mode == "shadow"
+                    and decision.action == "answer"
+                    and decision.answer
+                ):
+                    trace.append(
+                        {
+                            "type": "shadow_prediction_preserved",
+                            "round": round_id,
+                            "stage": "workspace_transaction",
+                            "grounding_errors": list(apply_result.errors),
+                        }
+                    )
+                    rounds_run = round_id
+                    break
+
                 workspace_errors = [
                     {
                         "code": "workspace_transaction_rejected",
@@ -582,6 +622,16 @@ class VirtualVideoMultiRoundDriver:
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
                     final_answer = candidate
+                    break
+                if self.evidence_control_mode == "shadow":
+                    trace.append(
+                        {
+                            "type": "shadow_prediction_preserved",
+                            "round": round_id,
+                            "stage": "closure_validation",
+                            "grounding_errors": list(validation.errors),
+                        }
+                    )
                     break
                 feedback = {
                     "type": "answer_reference_rejected",
@@ -749,9 +799,13 @@ class VirtualVideoMultiRoundDriver:
 
         empty_answer = ReasonerDecision(action="answer")
         candidate_decision = final_answer or latest_answer_candidate or empty_answer
+        preserve_raw_prediction = (
+            self.evidence_control_mode == "shadow"
+            or self.answer_policy == "benchmark_best_effort"
+        )
         selected = final_answer or (
             latest_answer_candidate
-            if self.answer_policy == "benchmark_best_effort" and latest_answer_candidate is not None
+            if preserve_raw_prediction and latest_answer_candidate is not None
             else empty_answer
         )
         selected_option = _letter(selected.answer) or _option_letter_from_answer(
@@ -760,7 +814,7 @@ class VirtualVideoMultiRoundDriver:
         )
         schema_answer_present = bool(selected.answer) if not workspace.case.options else bool(selected_option)
         candidate_present = bool(selected.answer)
-        preserve_candidate = self.answer_policy == "benchmark_best_effort" and candidate_present
+        preserve_candidate = preserve_raw_prediction and candidate_present
         validation = _validate_answer(
             selected,
             document,
@@ -851,6 +905,7 @@ class VirtualVideoMultiRoundDriver:
                 "answer_owner": "reasoner",
                 "framework_answer_mutation": False,
                 "answer_policy": self.answer_policy,
+                "evidence_control_mode": self.evidence_control_mode,
                 "answer_present": returned_answer_present,
                 "supporting_intervals": [list(item) for item in supporting_intervals],
                 "obligation_summary": document.obligation_summary(),
@@ -885,6 +940,7 @@ class VirtualVideoMultiRoundDriver:
             reports=tuple(reports),
             trace=tuple(trace),
             answer_policy=self.answer_policy,
+            evidence_control_mode=self.evidence_control_mode,
             answer_present=returned_answer_present,
             candidate_answer=candidate_answer,
             verified_answer=verified_answer,
@@ -2771,6 +2827,15 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         "answer": result.answer,
         "answer_present": result.answer_present,
         "answer_policy": result.answer_policy,
+        "evidence_control_mode": result.evidence_control_mode,
+        "prediction": {
+            "answer": result.answer,
+            "answer_present": result.answer_present,
+        },
+        "grounding": {
+            "passed": result.reference_valid,
+            "errors": list(result.blocking_reasons),
+        },
         "candidate_answer": result.candidate_answer,
         "verified_answer": result.verified_answer,
         "verification_status": result.verification_status,

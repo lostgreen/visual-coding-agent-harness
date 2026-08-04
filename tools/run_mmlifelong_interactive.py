@@ -79,6 +79,7 @@ def main() -> None:
         require_evidence_kind_requirements=True,
         closure_repair_budget=1,
         answer_policy=args.answer_policy,
+        evidence_control_mode=args.evidence_control_mode,
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
@@ -94,6 +95,7 @@ def main() -> None:
         "schema_version": "MMLifelongRunConfigV1",
         "case_id": workspace.case.case_id,
         "answer_policy": args.answer_policy,
+        "evidence_control_mode": args.evidence_control_mode,
         "max_rounds": args.max_rounds,
         "semantic_round_budget": args.max_rounds,
         "control_retry_budget": args.control_retry_budget,
@@ -143,6 +145,8 @@ def main() -> None:
         candidate_answer=result.candidate_answer,
         verified_answer=result.verified_answer,
         verification_status=result.verification_status,
+        grounding_passed=result.reference_valid,
+        grounding_errors=result.blocking_reasons,
         duration_sec=workspace.manifest.duration_sec,
     )
     _write_json(workspace.root_dir / "prediction.json", prediction)
@@ -252,6 +256,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--reasoner-section", default="investigator_api")
     parser.add_argument("--investigator-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
+    parser.add_argument("--evidence-control-mode", choices=("shadow", "strict"), default="shadow")
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)

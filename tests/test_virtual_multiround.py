@@ -416,6 +416,57 @@ def test_benchmark_best_effort_preserves_last_candidate_and_invalid_reference(tm
     assert summary["verification_status"] == "candidate_only"
 
 
+def test_shadow_control_preserves_first_prediction_without_closure_retry(tmp_path: Path) -> None:
+    invalid = ReasonerDecision(
+        action="answer",
+        answer="A. A book",
+        supporting_claim_ids=("claim_missing",),
+    )
+    reasoner = ScriptedReasoner((_investigate(), invalid, invalid))
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=1,
+        max_investigations=1,
+        answer_policy="benchmark_best_effort",
+        evidence_control_mode="shadow",
+    ).run(_workspace(tmp_path))
+
+    assert result.answer == "A. A book"
+    assert result.answer_present
+    assert not result.reference_valid
+    assert result.evidence_control_mode == "shadow"
+    assert reasoner.calls[-1]["final_attempt"] == 1
+    assert len(reasoner.calls) == 2
+    assert any(
+        row.get("type") == "shadow_prediction_preserved"
+        and row.get("stage") == "closure_validation"
+        for row in result.trace
+    )
+    assert not any(row.get("type") == "closure_repair" for row in result.trace)
+    summary = json.loads((tmp_path / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["evidence_control_mode"] == "shadow"
+    assert summary["prediction"] == {
+        "answer": "A. A book",
+        "answer_present": True,
+    }
+    assert summary["grounding"]["passed"] is False
+    assert any(
+        error.startswith("supporting_claim_missing")
+        for error in summary["grounding"]["errors"]
+    )
+
+
+def test_driver_rejects_unknown_evidence_control_mode() -> None:
+    with pytest.raises(ValueError, match="unsupported evidence_control_mode"):
+        VirtualVideoMultiRoundDriver(
+            reasoner=object(),
+            investigator=FakeInvestigator(),
+            evidence_control_mode="audit-ish",
+        )
+
+
 def test_answer_and_claims_validate_in_one_transaction(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id

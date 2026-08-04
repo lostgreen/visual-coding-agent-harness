@@ -22,6 +22,8 @@ def test_prediction_artifact_contains_runtime_data_only() -> None:
         supporting_intervals=((10.0, 12.0),),
         supporting_attempt_ids=("attempt-1",),
         answer_present=True,
+        grounding_passed=False,
+        grounding_errors=("supporting_claim_missing:claim-1",),
         duration_sec=100.0,
     )
     encoded = json.dumps(payload, sort_keys=True)
@@ -29,6 +31,14 @@ def test_prediction_artifact_contains_runtime_data_only() -> None:
     assert payload["schema_version"] == "RuntimePredictionV1"
     assert payload["supporting_attempt_ids"] == ["attempt-1"]
     assert payload["runtime_metadata"]["duration_sec"] == 100.0
+    assert payload["prediction"] == {
+        "answer": "Old Rattle-Drum",
+        "answer_present": True,
+    }
+    assert payload["grounding"] == {
+        "passed": False,
+        "errors": ["supporting_claim_missing:claim-1"],
+    }
     for forbidden in (
         "gold",
         "reference_answer",

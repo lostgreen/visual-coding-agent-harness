@@ -32,6 +32,8 @@ def prediction_artifact(
     candidate_answer: str = "",
     verified_answer: str = "",
     verification_status: str = "missing",
+    grounding_passed: bool | None = None,
+    grounding_errors: Sequence[str] = (),
     duration_sec: float | None = None,
 ) -> dict[str, Any]:
     runtime_metadata = dict(question.runtime_metadata)
@@ -57,6 +59,16 @@ def prediction_artifact(
         "candidate_answer": str(candidate_answer),
         "verified_answer": str(verified_answer),
         "verification_status": str(verification_status),
+        "prediction": {
+            "answer": str(answer),
+            "answer_present": bool(answer_present),
+        },
+        "grounding": {
+            "passed": bool(grounding_passed),
+            "errors": list(
+                dict.fromkeys(str(item) for item in grounding_errors if str(item))
+            ),
+        },
         "runtime_metadata": runtime_metadata,
     }
     assert_runtime_artifact(payload)
