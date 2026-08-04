@@ -7,7 +7,12 @@ from typing import Any
 
 
 def _load_summary_module() -> Any:
-    path = Path(__file__).resolve().parents[1] / "tools" / "summarize_mmlifelong_runs.py"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "evaluate"
+        / "mmlifelong"
+        / "summarize.py"
+    )
     spec = importlib.util.spec_from_file_location("mmlifelong_summary", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -120,24 +125,6 @@ def test_implementation_digest_includes_caption_occurrence_logic(monkeypatch: An
     assert any(path.name == "caption_occurrence.py" for path in hashed_paths)
 
 
-def test_correctness_outcome_defers_free_form_to_answer_judge() -> None:
-    assert RUNNER._correctness_outcome(
-        has_options=True,
-        mcq_correct=True,
-        judge=None,
-    ) == (True, "mcq_exact")
-    assert RUNNER._correctness_outcome(
-        has_options=False,
-        mcq_correct=False,
-        judge={"raw_score": 5},
-    ) == (True, "answer_judge")
-    assert RUNNER._correctness_outcome(
-        has_options=False,
-        mcq_correct=True,
-        judge={"raw_score": 3},
-    ) == (False, "answer_judge")
-    assert RUNNER._correctness_outcome(
-        has_options=False,
-        mcq_correct=False,
-        judge=None,
-    ) == (None, "unjudged")
+def test_runtime_runner_has_no_correctness_or_judge_helper() -> None:
+    assert not hasattr(RUNNER, "_correctness_outcome")
+    assert not hasattr(RUNNER, "judge_free_form_answer")

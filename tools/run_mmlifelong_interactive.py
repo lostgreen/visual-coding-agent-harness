@@ -7,19 +7,16 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from benchmarks.mmlifelong.adapter import runtime_question_from_case
+from benchmarks.mmlifelong.runner import prediction_artifact
 from vcah.caption_schema import stable_digest
 from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
-from vcah.mmlifelong_metrics import (
-    agent_run_metrics,
-    caption_hits_from_observation_rows,
-    judge_free_form_answer,
-    ref_scores,
-    retrieval_metrics,
-)
 from vcah.model_client import OpenAICompatibleClient
 from vcah.multiround import VirtualVideoMultiRoundDriver
+from vcah.runtime_metrics import agent_run_metrics
 from vcah.virtual_video import VirtualVideoWorkspace
+from vcah.workspace import evidence_attempt_id
 
 
 def main() -> None:
@@ -29,9 +26,20 @@ def main() -> None:
     if run_root.exists() and any(run_root.iterdir()):
         raise FileExistsError(f"run output is not empty: {run_root}")
     run_root.mkdir(parents=True, exist_ok=True)
-    case_payload = json.loads((source.root_dir / "case.json").read_text(encoding="utf-8"))
-    case_payload["asset_ref"] = str(source.asset_root.resolve())
-    _write_json(run_root / "case.json", case_payload)
+    runtime_question = runtime_question_from_case(
+        {
+            "case_id": source.case.case_id,
+            "question": source.case.question,
+            "options": source.case.options,
+            "question_type": source.case.question_type,
+            "subset": source.case.subset,
+            "split": source.case.split,
+            "runtime_metadata": source.case.metadata,
+        }
+    )
+    runtime_case_payload = runtime_question.to_dict()
+    runtime_case_payload["asset_ref"] = str(source.asset_root.resolve())
+    _write_json(run_root / "case.json", runtime_case_payload)
     workspace = VirtualVideoWorkspace.load(run_root)
 
     reasoner_api = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.reasoner_section)
@@ -69,59 +77,13 @@ def main() -> None:
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
-    caption_hits = caption_hits_from_observation_rows(observation_rows)
-
-    evaluation: dict[str, Any] = {
-        "schema_version": "MMLifelongCaseEvaluationV1",
-        "case_id": workspace.case.case_id,
-        "subset": workspace.case.subset,
-        "split": workspace.case.split,
-        "answer": result.answer,
-        "answer_present": result.answer_present,
-        "candidate_answer": result.candidate_answer,
-        "verified_answer": result.verified_answer,
-        "verification_status": result.verification_status,
-        "blocking_reasons": list(result.blocking_reasons),
-        "reference_valid": result.reference_valid,
-        "reference_reason": result.reference_reason,
-        "mcq_correct": result.correct if workspace.case.options else None,
-        "accuracy_score": float(result.correct) if workspace.case.options else None,
-        "correct": result.correct if workspace.case.options else None,
-        "correctness_source": "mcq_exact" if workspace.case.options else "unjudged",
-        "gold_answer": workspace.case.gold,
-        "gold_clue_intervals": [list(item) for item in workspace.case.gold_clue_intervals],
-        "supporting_intervals": [list(item) for item in result.supporting_intervals],
-        "ref": ref_scores(result.supporting_intervals, workspace.case.gold_clue_intervals),
-        "retrieval": retrieval_metrics(caption_hits, workspace.case.gold_clue_intervals),
-        "agent": agent_run_metrics(
-            result.trace,
-            observation_rows,
-            answer_present=result.answer_present,
-            reference_valid=result.reference_valid,
-            supporting_intervals=result.supporting_intervals,
-        ),
-        "judge": None,
-    }
-    judge_model = ""
-    if not workspace.case.options and result.answer_present and args.judge:
-        judge_api = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.judge_section)
-        judged = judge_free_form_answer(
-            lambda prompt: judge_api.chat(prompt, max_tokens=4096),
-            question=workspace.case.question,
-            reference_answer=workspace.case.gold,
-            predicted_answer=result.answer,
-            judge_model=judge_api.model,
-            max_retries=args.judge_max_retries,
-            response_metadata=lambda: judge_api.last_response_metadata,
-        )
-        evaluation["judge"] = judged.to_dict()
-        evaluation["accuracy_score"] = judged.smoothed_score
-        evaluation["correct"], evaluation["correctness_source"] = _correctness_outcome(
-            has_options=False,
-            mcq_correct=None,
-            judge=evaluation["judge"],
-        )
-        judge_model = judge_api.model
+    runtime_metrics = agent_run_metrics(
+        result.trace,
+        observation_rows,
+        answer_present=result.answer_present,
+        reference_valid=result.reference_valid,
+        supporting_intervals=result.supporting_intervals,
+    )
 
     config = {
         "schema_version": "MMLifelongRunConfigV1",
@@ -145,26 +107,43 @@ def main() -> None:
             }
         ),
         "implementation_digest": _implementation_digest(),
-        "input_digest": _input_digest(source),
+        "input_digest": _input_digest(source, runtime_question.to_dict()),
         "models": {
             "reasoner": reasoner_api.model,
             "investigator": investigator_api.model,
-            "judge": judge_model,
         },
         "web_enabled": False,
     }
     config["config_digest"] = stable_digest(config)
-    evaluation["config_digest"] = config["config_digest"]
     _write_json(workspace.root_dir / "run_config.json", config)
-    _write_json(workspace.root_dir / "mmlifelong_metrics.json", evaluation)
+    cited_evidence_ids = set(result.citations)
+    supporting_attempt_ids = tuple(
+        evidence_attempt_id(record)
+        for record in result.evidence
+        if record.evidence_id in cited_evidence_ids
+    )
+    prediction = prediction_artifact(
+        runtime_question,
+        answer=result.answer,
+        selected_option=result.selected_option,
+        supporting_intervals=result.supporting_intervals,
+        supporting_attempt_ids=supporting_attempt_ids,
+        answer_present=result.answer_present,
+        candidate_answer=result.candidate_answer,
+        verified_answer=result.verified_answer,
+        verification_status=result.verification_status,
+        duration_sec=workspace.manifest.duration_sec,
+    )
+    _write_json(workspace.root_dir / "prediction.json", prediction)
     summary_path = workspace.root_dir / "run_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary["correct"] = evaluation["correct"]
-    summary["correctness_source"] = evaluation["correctness_source"]
-    summary["accuracy_score"] = evaluation["accuracy_score"]
-    summary["evaluation"] = evaluation
+    summary.pop("correct", None)
+    summary.pop("correctness_source", None)
+    summary["schema_version"] = "RuntimeSummaryV1"
+    summary["runtime_metrics"] = runtime_metrics
     summary["config_digest"] = config["config_digest"]
     _write_json(summary_path, summary)
+    _write_json(workspace.root_dir / "runtime_summary.json", summary)
 
     print(
         json.dumps(
@@ -172,11 +151,9 @@ def main() -> None:
                 "case_id": result.case_id,
                 "answer_present": result.answer_present,
                 "reference_valid": result.reference_valid,
-                "judge_smoothed": (
-                    evaluation["judge"]["smoothed_score"] if evaluation["judge"] else None
-                ),
-                "ref": evaluation["ref"],
-                "retrieval": evaluation["retrieval"],
+                "prediction": str(workspace.root_dir / "prediction.json"),
+                "runtime_summary": str(workspace.root_dir / "runtime_summary.json"),
+                "runtime_metrics": runtime_metrics,
                 "rounds": result.rounds,
                 "investigations": result.investigation_count,
                 "config_digest": config["config_digest"],
@@ -195,19 +172,6 @@ def _read_jsonl(path: Path) -> tuple[Mapping[str, Any], ...]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and isinstance((value := json.loads(line)), Mapping)
     )
-
-
-def _correctness_outcome(
-    *,
-    has_options: bool,
-    mcq_correct: bool | None,
-    judge: Mapping[str, Any] | None,
-) -> tuple[bool | None, str]:
-    if has_options:
-        return bool(mcq_correct), "mcq_exact"
-    if not isinstance(judge, Mapping) or judge.get("raw_score") is None:
-        return None, "unjudged"
-    return int(judge["raw_score"]) in {4, 5}, "answer_judge"
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -232,7 +196,9 @@ def _implementation_digest() -> str:
         Path("src/vcah/caption_hybrid_search.py"),
         Path("src/vcah/caption_occurrence.py"),
         Path("src/vcah/embedding_adapter.py"),
-        Path("src/vcah/mmlifelong_metrics.py"),
+        Path("src/vcah/runtime_metrics.py"),
+        Path("benchmarks/schema.py"),
+        Path("benchmarks/mmlifelong/runner.py"),
     )
     return stable_digest(
         {
@@ -242,11 +208,14 @@ def _implementation_digest() -> str:
     )
 
 
-def _input_digest(source: VirtualVideoWorkspace) -> str:
+def _input_digest(
+    source: VirtualVideoWorkspace,
+    runtime_question: Mapping[str, Any],
+) -> str:
     caption_files = tuple(sorted((source.asset_root / "captions").glob("passages.*.jsonl")))
     return stable_digest(
         {
-            "case": _file_sha256(source.root_dir / "case.json"),
+            "runtime_question": stable_digest(runtime_question),
             "timeline": _file_sha256(source.asset_root / "virtual_timeline.json"),
             "captions": {path.name: _file_sha256(path) for path in caption_files},
         }
@@ -268,7 +237,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True, help="OpenAI-compatible API YAML; secrets are not copied.")
     parser.add_argument("--reasoner-section", default="investigator_api")
     parser.add_argument("--investigator-section", default="investigator_api")
-    parser.add_argument("--judge-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
@@ -284,8 +252,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
-    parser.add_argument("--judge", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--judge-max-retries", type=int, default=2)
     return parser.parse_args()
 
 

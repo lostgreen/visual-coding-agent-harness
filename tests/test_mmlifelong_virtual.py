@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from vcah.mmlifelong_virtual import build_mmlifelong_workspaces
+from benchmarks.mmlifelong.adapter import build_mmlifelong_workspaces
 from vcah.virtual_video import (
     VirtualVideoCase,
     VirtualVideoManifest,
@@ -89,8 +89,10 @@ def test_day_builder_writes_one_shared_asset_and_free_form_cases(tmp_path: Path)
     ]
     assert [segment.day_index for segment in first.manifest.segments] == [1, 1]
     assert first.case.options == {}
-    assert first.case.gold_answer == "an event"
-    assert first.case.gold_clue_intervals == ((9.0, 11.0),)
+    assert first.case.gold_answer == ""
+    assert first.case.gold_clue_intervals == ()
+    assert result.evaluation_records[0].reference_answer == "an event"
+    assert result.evaluation_records[0].clue_intervals == ((9.0, 11.0),)
     assert [window.segment_id for window in virtual_to_source_windows(first.manifest, 9.0, 11.0)] == [
         "seg_0001",
         "seg_0002",
@@ -98,14 +100,26 @@ def test_day_builder_writes_one_shared_asset_and_free_form_cases(tmp_path: Path)
 
     loaded = VirtualVideoWorkspace.load(second.root_dir)
     assert loaded.asset_root == asset_root.resolve()
-    assert loaded.case.gold_clue_intervals == ((14.0, 15.0), (20.0, 20.001))
-    assert [repair["kind"] for repair in loaded.case.metadata["clue_repairs"]] == [
+    assert loaded.case.gold_clue_intervals == ()
+    evaluation = json.loads(
+        (second.root_dir / "evaluation_case.json").read_text(encoding="utf-8")
+    )
+    assert evaluation["reference_answer"] == "two"
+    assert evaluation["clue_intervals"] == [[15.0, 14.0], [20.0, 20.0]]
+    assert [
+        repair["kind"]
+        for repair in evaluation["evaluation_metadata"]["clue_repairs"]
+    ] == [
         "reversed",
         "zero_length_expanded",
     ]
     assert not (second.root_dir / "virtual_timeline.json").exists()
     case_payload = json.loads((second.root_dir / "case.json").read_text(encoding="utf-8"))
     assert case_payload["asset_ref"]
+    assert "gold" not in case_payload
+    assert "gold_answer" not in case_payload
+    assert "gold_clue_intervals" not in case_payload
+    assert "target_virtual_interval" not in case_payload
 
 
 def test_day_builder_rejects_unmapped_clue_and_existing_output(tmp_path: Path) -> None:

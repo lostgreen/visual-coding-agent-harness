@@ -236,7 +236,9 @@ class VirtualVideoWorkspace:
             question_type=(
                 str(case_payload["question_type"]) if case_payload.get("question_type") is not None else None
             ),
-            metadata=dict(case_payload.get("metadata", {})),
+            metadata=dict(
+                case_payload.get("runtime_metadata", case_payload.get("metadata", {}))
+            ),
         )
         return cls(
             workspace_id=manifest.workspace_id,

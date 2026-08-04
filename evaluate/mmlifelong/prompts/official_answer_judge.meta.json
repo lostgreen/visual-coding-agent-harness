@@ -1,0 +1,7 @@
+{
+  "copied_value": "system_prompt",
+  "copied_verbatim": true,
+  "sha256": "239156295b8e3331e1c73e95c3bf88ca21cc94e99c1a85e5b5cef65a5ac9729b",
+  "source_file": "../vendor/upstream/eval_acc.py",
+  "upstream_revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918"
+}

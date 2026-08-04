@@ -25,7 +25,7 @@ def test_stratified_selection_balances_types_and_spreads_timeline() -> None:
         {
             "case_id": f"{question_type}-{index}",
             "question_type": question_type,
-            "target_virtual_interval": [float(index * 100), float(index * 100 + 10)],
+            "selection_coordinate": float(index),
             "case_workspace": f"/{question_type}/{index}",
         }
         for question_type in ("A", "B", "C")
@@ -45,7 +45,7 @@ def test_stratified_selection_caps_limit_at_available_cases() -> None:
         {
             "case_id": "only-case",
             "question_type": "A",
-            "target_virtual_interval": [0.0, 1.0],
+            "selection_coordinate": 0.0,
             "case_workspace": "/A/0",
         },
     )

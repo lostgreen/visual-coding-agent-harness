@@ -6,8 +6,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.investigator import InvestigationReport, ObservationAttempt, VirtualVideoInvestigator
-from vcah.mmlifelong_metrics import export_supporting_intervals
 from vcah.memory import EvidenceStore
+from vcah.runtime_metrics import export_supporting_intervals
 from vcah.types import EvidenceRecord, to_jsonable
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace, select_uniform_items
@@ -523,11 +523,7 @@ class VirtualVideoMultiRoundDriver:
             answer=answer,
             selected_option=selected_option,
             citations=citations,
-            correct=(
-                _score_answer(answer, workspace.case.gold, workspace.case.options)
-                if workspace.case.options
-                else None
-            ),
+            correct=None,
             reference_valid=reference_valid,
             reference_reason=reference_reason,
             rounds=rounds_run,
@@ -1410,12 +1406,6 @@ def _merge_intervals(intervals: Sequence[tuple[float, float]]) -> tuple[tuple[fl
     return tuple((start, end) for start, end in merged)
 
 
-def _score_answer(answer: str, gold: str, options: Mapping[str, str] | None = None) -> bool:
-    selected = _letter(answer) or _option_letter_from_answer(answer, options or {})
-    expected = _letter(gold) or str(gold or "").strip().upper()[:1]
-    return bool(selected and expected and selected == expected)
-
-
 def _option_letter_from_answer(answer: str, options: Mapping[str, str]) -> str:
     normalized_answer = _answer_match_text(answer)
     if not normalized_answer:
@@ -1479,7 +1469,7 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         "selected_option": result.selected_option,
         "citations": list(result.citations),
         "correct": result.correct,
-        "correctness_source": "mcq" if result.correct is not None else "pending_judge",
+        "correctness_source": "external_evaluator",
         "reference_valid": result.reference_valid,
         "reference_reason": result.reference_reason,
         "supporting_claim_ids": list(result.supporting_claim_ids),

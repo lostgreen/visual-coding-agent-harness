@@ -7,12 +7,12 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping, Sequence
 
-from vcah.mmlifelong_metrics import recorded_case_diagnostics
+from evaluate.mmlifelong.metrics import recorded_case_diagnostics
 from vcah.workspace import WorkingDocument
 
 
 METRIC_KEYS = (
-    "accuracy_score",
+    "official_accuracy",
     "reference_valid",
     "visual_frames_inspected",
     "clue_frame_coverage",
@@ -27,35 +27,40 @@ def collect_recorded_cases(root: Path) -> dict[str, dict[str, float | int]]:
     source = Path(root)
     candidates = (
         (source,)
-        if source.name == "mmlifelong_metrics.json"
-        else tuple(source.rglob("mmlifelong_metrics.json"))
+        if source.name == "mmlifelong_eval.json"
+        else tuple(source.rglob("mmlifelong_eval.json"))
     )
     cases: dict[str, dict[str, float | int]] = {}
-    for metrics_path in sorted(candidates):
-        if not metrics_path.is_file():
+    for evaluation_path in sorted(candidates):
+        if not evaluation_path.is_file():
             continue
-        case_root = metrics_path.parent
-        evaluation = _read_json(metrics_path)
+        case_root = (
+            evaluation_path.parent.parent
+            if evaluation_path.parent.name == "evaluation"
+            else evaluation_path.parent
+        )
+        evaluation = _read_required_json(evaluation_path)
         case_id = str(evaluation.get("case_id", case_root.name) or case_root.name)
         if case_id in cases:
             raise ValueError(f"duplicate case_id in one paired run: {case_id}")
-        case = _read_json(case_root / "case.json")
-        summary = _read_json(case_root / "run_summary.json")
-        document_payload = _read_json(case_root / "working_document.json")
+        summary = _read_required_json(case_root / "runtime_summary.json")
+        document_payload = _read_required_json(case_root / "working_document.json")
         document = WorkingDocument.from_mapping(document_payload)
         observations = _read_jsonl(case_root / "observation_log.jsonl")
+        grounding = evaluation.get("reference_grounding", {})
+        grounding_metrics = grounding if isinstance(grounding, Mapping) else {}
         cases[case_id] = recorded_case_diagnostics(
             evaluation,
             document,
             observations,
+            runtime_summary=summary,
             supporting_claim_ids=tuple(summary.get("supporting_claim_ids", ()) or ()),
-            gold_intervals=tuple(
-                evaluation.get("gold_clue_intervals", case.get("gold_clue_intervals", ()))
-                or ()
+            reference_intervals=tuple(
+                grounding_metrics.get("reference_intervals", ()) or ()
             ),
         )
     if not cases:
-        raise ValueError(f"no mmlifelong_metrics.json files found under {source}")
+        raise ValueError(f"no mmlifelong_eval.json files found under {source}")
     return cases
 
 
@@ -80,15 +85,16 @@ def evaluate_run_pair(
 
     baseline_aggregate = _aggregate(tuple(baseline[case_id] for case_id in matched_ids))
     candidate_aggregate = _aggregate(tuple(candidate[case_id] for case_id in matched_ids))
-    accuracy_delta = (
-        candidate_aggregate["accuracy_score"] - baseline_aggregate["accuracy_score"]
+    official_accuracy_delta = (
+        candidate_aggregate["official_accuracy"]
+        - baseline_aggregate["official_accuracy"]
     )
     frame_ratio = _cost_ratio(
         baseline_aggregate["visual_frames_inspected"],
         candidate_aggregate["visual_frames_inspected"],
     )
     checks = {
-        "accuracy_improved": accuracy_delta > 0.0,
+        "official_accuracy_improved": official_accuracy_delta > 0.0,
         "reference_non_regression": (
             candidate_aggregate["reference_valid"]
             >= baseline_aggregate["reference_valid"]
@@ -113,7 +119,7 @@ def evaluate_run_pair(
         "case_ids": list(matched_ids),
         "baseline": baseline_aggregate,
         "candidate": candidate_aggregate,
-        "accuracy_delta": accuracy_delta,
+        "official_accuracy_delta": official_accuracy_delta,
         "visual_frame_ratio": frame_ratio,
         "checks": checks,
         "passed": not failures,
@@ -140,7 +146,7 @@ def evaluate_net_gain(
             label = str(report.get("label", f"pair_{index}"))
             failures.append(f"paired_repeat_failed:{label}")
     return {
-        "schema_version": "MMLifelongNetGainGateV1",
+        "schema_version": "MMLifelongNetGainGateV2",
         "passed": not failures,
         "failures": failures,
         "submitted_pair_count": len(reports),
@@ -206,16 +212,18 @@ def _cost_ratio(baseline: float, candidate: float) -> float | None:
     return 1.0 if candidate <= 0.0 else None
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _read_required_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
-        return {}
+        raise FileNotFoundError(f"required run artifact is missing: {path}")
     value = json.loads(path.read_text(encoding="utf-8"))
-    return dict(value) if isinstance(value, Mapping) else {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"expected a JSON object in {path}")
+    return dict(value)
 
 
 def _read_jsonl(path: Path) -> tuple[dict[str, Any], ...]:
     if not path.is_file():
-        return ()
+        raise FileNotFoundError(f"required run artifact is missing: {path}")
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():

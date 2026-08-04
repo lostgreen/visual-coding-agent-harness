@@ -136,9 +136,10 @@ python main.py vv-index \
 ```
 
 Build the MM-Lifelong Day subset as one shared virtual timeline plus lightweight
-free-form cases. The builder probes the source clips in filename order, records
-any clue-interval normalization in `validation.json`, and never creates a merged
-video:
+free-form cases. Each prepared case contains a runtime-only `case.json` and a
+separate evaluator-only `evaluation_case.json`. The builder probes source clips
+in filename order, records clue-interval validation in `validation.json`, and
+never creates a merged video:
 
 ```bash
 python main.py vv-build-mmlifelong \
@@ -182,12 +183,13 @@ python main.py vv-index-caption \
   --index-mode hybrid
 ```
 
-Run one Day case in an isolated workspace. `benchmark_best_effort` preserves the
-last parseable answer for benchmark scoring while reporting reference failures;
-`strict` retains the fail-closed behavior.
+Run one Day case in an isolated workspace. The runtime writes `prediction.json`
+and `runtime_summary.json`; it does not load a judge or score the answer.
+`benchmark_best_effort` preserves the last parseable answer while reporting
+mechanical reference failures, and `strict` retains the fail-closed behavior.
 
 ```bash
-PYTHONPATH=src python tools/run_mmlifelong_interactive.py \
+PYTHONPATH=src:. python tools/run_mmlifelong_interactive.py \
   --case-workspace data/mmlifelong/cases/game/test/mmlifelong-game-test-0038 \
   --out-dir runs/mmlifelong/game-test-0038 \
   --config /path/to/multimodal-api.yaml \
@@ -197,7 +199,13 @@ PYTHONPATH=src python tools/run_mmlifelong_interactive.py \
   --caption-config-digest CAPTION_CONFIG_DIGEST \
   --embedding-model sentence-transformers/all-MiniLM-L6-v2
 
-PYTHONPATH=src python tools/summarize_mmlifelong_runs.py \
+PYTHONPATH=src:. python -m evaluate.mmlifelong.cli \
+  --run-dir runs/mmlifelong/game-test-0038 \
+  --evaluation-record data/mmlifelong/cases/game/test/mmlifelong-game-test-0038/evaluation_case.json \
+  --config /path/to/judge-api.yaml \
+  --judge-section judge_api
+
+PYTHONPATH=src:. python -m evaluate.mmlifelong.summarize \
   --run-root runs/mmlifelong \
   --out-json reports/mmlifelong.json \
   --out-md reports/mmlifelong.md
@@ -315,11 +323,13 @@ src/vcah/captioning.py           resumable shared caption generation
 src/vcah/caption_lexical_index.py  Unicode/BM25 caption retrieval
 src/vcah/caption_semantic_index.py exact cosine retrieval with matrix cache
 src/vcah/caption_hybrid_search.py  lexical+dense reciprocal-rank fusion
-src/vcah/mmlifelong_metrics.py   free-form judge, Ref, retrieval, and run metrics
+src/vcah/runtime_metrics.py      benchmark-neutral runtime/material metrics
 src/vcah/replay.py               immutable runs and content-free reproducibility records
+benchmarks/schema.py             separated runtime/evaluator case contracts
+benchmarks/mmlifelong/adapter.py MM-Lifelong dataset-to-runtime adapter
+evaluate/mmlifelong/             pinned official evaluator, metrics, provenance, and tests
 tools/run_virtual_videomme_interactive.py  Video-MME evaluation orchestration
-tools/run_mmlifelong_interactive.py        MM-Lifelong Day case orchestration
-tools/summarize_mmlifelong_runs.py         aggregate comparison tables
+tools/run_mmlifelong_interactive.py        MM-Lifelong runtime-only orchestration
 runs/mmlifelong_net_gain_gate.py           paired replay diagnostics and promotion gate
 tools/build_virtual_trace_viewer.py        HTML/zip trace viewer
 tools/build_exploration_trace_viewer.py    presentation-oriented exploration viewer

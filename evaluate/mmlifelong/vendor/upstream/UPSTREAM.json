@@ -1,0 +1,16 @@
+{
+  "benchmark": "MM-Lifelong/MM-Lifelong",
+  "files": {
+    "eval_acc.py": {
+      "sha256": "f6e756a9505b992d977df3d1263582870eb7d7b302f734416826665655a8a3e5"
+    },
+    "eval_ref.py": {
+      "sha256": "583d5d0b1304aedbeb498f10ea014298dcb99f162dad8c7aa8c0298511515e63"
+    }
+  },
+  "license": "cc-by-4.0",
+  "previous_source_alias": "CG-Bench/MM-Lifelong",
+  "revision": "4244a9f1981ed2d3f3e0cb7f628b60f8b8b59918",
+  "source_repo": "https://huggingface.co/datasets/MM-Lifelong/MM-Lifelong",
+  "vendored_at": "2026-08-04"
+}

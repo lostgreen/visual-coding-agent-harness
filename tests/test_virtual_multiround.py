@@ -246,7 +246,7 @@ def test_driver_keeps_semantic_authority_with_reasoner(tmp_path: Path) -> None:
     assert result.answer == "B. A cup"
     assert result.selected_option == "B"
     assert result.reference_valid
-    assert result.correct
+    assert result.correct is None
     assert result.candidate_answer == "B. A cup"
     assert result.verified_answer == "B. A cup"
     assert result.verification_status == "verified"
@@ -375,7 +375,7 @@ def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None
     assert not result.selected_option
     assert not result.answer_present
     assert not result.reference_valid
-    assert not result.correct
+    assert result.correct is None
     assert result.reference_reason == "answer_missing"
     assert result.candidate_answer == "A. A book"
     assert result.verified_answer == ""
@@ -635,7 +635,7 @@ def test_free_form_answer_keeps_reference_gate_but_allows_uncertainty(tmp_path: 
     assert result.correct is None
     summary = json.loads((workspace.root_dir / "run_summary.json").read_text(encoding="utf-8"))
     assert summary["correct"] is None
-    assert summary["correctness_source"] == "pending_judge"
+    assert summary["correctness_source"] == "external_evaluator"
 
 
 def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path) -> None:

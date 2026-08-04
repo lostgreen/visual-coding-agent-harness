@@ -15,8 +15,8 @@ from vcah.direct_baseline import (
     request_direct_answer,
     summarize_results,
 )
-from vcah.multiround import _score_answer
 from vcah.video import probe_duration
+from vcah.videomme_v2 import score_videomme_v2_answer
 from vcah.virtual_video import VirtualVideoSegment, load_srt_as_virtual_cues
 
 from run_virtual_videomme_interactive import (
@@ -111,7 +111,7 @@ def run_direct_case(
         "options": options,
         "gold": gold,
         "answer": answer,
-        "correct": _score_answer(answer, gold, options),
+        "correct": score_videomme_v2_answer(answer, gold),
         "rationale": str(parsed.get("rationale", "") or ""),
         "evidence": list(parsed.get("evidence", ()) or ()),
         "input_mode": input_mode,

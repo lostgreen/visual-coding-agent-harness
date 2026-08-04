@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Mapping, Sequence
 
+from benchmarks.mmlifelong.schema import BENCHMARK_ID, EvaluationRecord, RuntimeQuestion
 from vcah.video import probe_duration
 from vcah.virtual_video import (
     VirtualVideoCase,
@@ -18,10 +19,21 @@ from vcah.virtual_video import (
 
 
 DurationProbe = Callable[[str], float]
-_SUBSET_ALIASES = {"day": "game", "game": "game"}
-_SOURCE_SUBSETS = {"game": "day"}
+_SUBSET_ALIASES = {
+    "day": "game",
+    "game": "game",
+    "week": "week",
+    "month": "month",
+}
+_SOURCE_SUBSETS = {"game": "day", "week": "week", "month": "month"}
 _NATURAL_PART_RE = re.compile(r"(\d+)")
 _MIN_CLUE_DURATION_SEC = 0.001
+
+
+@dataclass(frozen=True)
+class MMLifelongCaseBundle:
+    runtime_question: RuntimeQuestion
+    evaluation_record: EvaluationRecord
 
 
 @dataclass(frozen=True)
@@ -31,6 +43,8 @@ class MMLifelongBuildResult:
     asset_root: Path
     case_root: Path
     workspaces: tuple[VirtualVideoWorkspace, ...]
+    runtime_questions: tuple[RuntimeQuestion, ...]
+    evaluation_records: tuple[EvaluationRecord, ...]
     validation_path: Path
 
     def summary(self) -> dict[str, Any]:
@@ -96,7 +110,7 @@ def build_mmlifelong_workspaces(
         segments=segments,
     )
     rows = _load_rows(metadata_path)
-    cases, repairs, clue_count, mapped_clue_count = _build_cases(
+    bundles, repairs, clue_count, mapped_clue_count = _build_case_bundles(
         rows,
         manifest=manifest,
         subset=internal_subset,
@@ -106,7 +120,7 @@ def build_mmlifelong_workspaces(
     )
     validation = _validation_payload(
         manifest,
-        cases=cases,
+        case_count=len(bundles),
         clue_count=clue_count,
         mapped_clue_count=mapped_clue_count,
         repairs=repairs,
@@ -116,13 +130,13 @@ def build_mmlifelong_workspaces(
     asset_root.mkdir(parents=True, exist_ok=True)
     case_root.mkdir(parents=True, exist_ok=True)
     workspaces = tuple(
-        VirtualVideoWorkspace.create(
-            case_root / case.case_id,
-            manifest=manifest,
-            case=case,
+        _create_case_workspace(
+            case_root,
             asset_root=asset_root,
+            manifest=manifest,
+            bundle=bundle,
         )
-        for case in cases
+        for bundle in bundles
     )
     timeline_payload = json.loads((asset_root / "virtual_timeline.json").read_text(encoding="utf-8"))
     _write_json(asset_root / "timeline.json", timeline_payload)
@@ -162,6 +176,8 @@ def build_mmlifelong_workspaces(
         asset_root=asset_root,
         case_root=case_root,
         workspaces=workspaces,
+        runtime_questions=tuple(bundle.runtime_question for bundle in bundles),
+        evaluation_records=tuple(bundle.evaluation_record for bundle in bundles),
         validation_path=validation_path,
     )
 
@@ -171,7 +187,7 @@ def _normalize_subset(value: str) -> str:
     try:
         return _SUBSET_ALIASES[key]
     except KeyError as exc:
-        raise ValueError("This integration supports the MM-Lifelong Day subset (game) only") from exc
+        raise ValueError("MM-Lifelong subset must be one of: day, game, week, month") from exc
 
 
 def _check_output_paths(asset_root: Path, case_root: Path, *, overwrite: bool) -> None:
@@ -236,7 +252,130 @@ def _load_rows(metadata_path: Path) -> list[dict[str, Any]]:
     return [dict(row) for row in payload]
 
 
-def _build_cases(
+def load_runtime_question(path: Path) -> RuntimeQuestion:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Runtime question must be an object: {path}")
+    return RuntimeQuestion.from_mapping(payload)
+
+
+def load_evaluation_record(path: Path) -> EvaluationRecord:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"Evaluation record must be an object: {path}")
+    return EvaluationRecord.from_mapping(payload)
+
+
+def evaluation_record_from_dataset(
+    dataset_root: Path,
+    *,
+    case_id: str,
+    subset: str | None = None,
+    split: str | None = None,
+    source_index: Any = None,
+) -> EvaluationRecord:
+    parsed_subset, parsed_split, parsed_index = _case_coordinates(case_id)
+    internal_subset = _normalize_subset(subset or parsed_subset)
+    source_subset = _SOURCE_SUBSETS[internal_subset]
+    resolved_split = str(split or parsed_split)
+    resolved_index = parsed_index if source_index is None else source_index
+    metadata_path = Path(dataset_root) / source_subset / f"{resolved_split}.json"
+    rows = _load_rows(metadata_path)
+    row = next(
+        (
+            item
+            for position, item in enumerate(rows)
+            if _source_indices_match(item.get("index", position), resolved_index)
+        ),
+        None,
+    )
+    if row is None:
+        raise KeyError(
+            f"MM-Lifelong case {case_id} (source index {resolved_index}) not found in {metadata_path}"
+        )
+    question_type = (
+        str(row["question_type"])
+        if row.get("question_type") is not None
+        else None
+    )
+    return EvaluationRecord(
+        case_id=case_id,
+        reference_answer=str(row.get("answer", "")),
+        clue_intervals=_dataset_clue_intervals(row),
+        evaluation_metadata={
+            "benchmark": BENCHMARK_ID,
+            "question": str(row.get("question", "")),
+            "options": _options_mapping(row.get("options")),
+            "question_type": question_type,
+            "subset": internal_subset,
+            "split": resolved_split,
+            "source_subset": source_subset,
+            "source_index": row.get("index", resolved_index),
+            "temporal_certificate": row.get("temporal_certificate"),
+            "total_intervals": row.get("total_intervals", ()),
+            "dataset_record_path": str(metadata_path),
+        },
+    )
+
+
+def runtime_question_from_case(value: Mapping[str, Any]) -> RuntimeQuestion:
+    metadata = value.get("runtime_metadata", value.get("metadata", {}))
+    source = dict(metadata) if isinstance(metadata, Mapping) else {}
+    safe_metadata = {
+        key: source[key]
+        for key in ("benchmark", "dataset", "source_subset", "source_index")
+        if key in source
+    }
+    return RuntimeQuestion(
+        case_id=str(value["case_id"]),
+        question=str(value["question"]),
+        options=dict(value.get("options", {})),
+        question_type=(
+            str(value["question_type"])
+            if value.get("question_type") is not None
+            else None
+        ),
+        subset=str(value["subset"]) if value.get("subset") is not None else None,
+        split=str(value["split"]) if value.get("split") is not None else None,
+        runtime_metadata=safe_metadata,
+    )
+
+
+def _case_coordinates(case_id: str) -> tuple[str, str, Any]:
+    parts = str(case_id).split("-")
+    if len(parts) < 4 or parts[0].casefold() != "mmlifelong":
+        raise ValueError(f"Unsupported MM-Lifelong case id: {case_id}")
+    raw_index = parts[-1]
+    try:
+        source_index: Any = int(raw_index)
+    except ValueError:
+        source_index = raw_index
+    return "-".join(parts[1:-2]), parts[-2], source_index
+
+
+def _source_indices_match(left: Any, right: Any) -> bool:
+    try:
+        return int(left) == int(right)
+    except (TypeError, ValueError):
+        return str(left) == str(right)
+
+
+def _dataset_clue_intervals(row: Mapping[str, Any]) -> tuple[tuple[float, float], ...]:
+    raw = row.get("clue_intervals")
+    if isinstance(raw, (list, tuple)):
+        return tuple(_coerce_clue_interval(item) for item in raw)
+    nested = row.get("clue_interval", ())
+    if not isinstance(nested, (list, tuple)):
+        return ()
+    return tuple(
+        _coerce_clue_interval(interval)
+        for group in nested
+        if isinstance(group, Mapping)
+        for interval in tuple(group.get("intervals", ()) or ())
+    )
+
+
+def _build_case_bundles(
     rows: Sequence[Mapping[str, Any]],
     *,
     manifest: VirtualVideoManifest,
@@ -244,8 +383,8 @@ def _build_cases(
     source_subset: str,
     split: str,
     verify_clues: bool,
-) -> tuple[tuple[VirtualVideoCase, ...], tuple[dict[str, Any], ...], int, int]:
-    cases: list[VirtualVideoCase] = []
+) -> tuple[tuple[MMLifelongCaseBundle, ...], tuple[dict[str, Any], ...], int, int]:
+    bundles: list[MMLifelongCaseBundle] = []
     repairs: list[dict[str, Any]] = []
     clue_count = 0
     mapped_clue_count = 0
@@ -262,11 +401,13 @@ def _build_cases(
         if not isinstance(raw_clues, (list, tuple)):
             errors.append(f"{case_id}: clue_intervals must be a list")
             raw_clues = ()
+        official_clues: list[tuple[float, float]] = []
         normalized_clues: list[tuple[float, float]] = []
         case_repairs: list[dict[str, Any]] = []
         for interval_index, raw_interval in enumerate(raw_clues):
             clue_count += 1
             try:
+                official_interval = _coerce_clue_interval(raw_interval)
                 interval, repair = _normalize_clue_interval(
                     raw_interval,
                     duration_sec=manifest.duration_sec,
@@ -274,6 +415,7 @@ def _build_cases(
             except (TypeError, ValueError) as exc:
                 errors.append(f"{case_id} clue {interval_index}: {exc}")
                 continue
+            official_clues.append(official_interval)
             if repair is not None:
                 repair = {
                     "case_id": case_id,
@@ -290,35 +432,98 @@ def _build_cases(
                 mapped_clue_count += 1
             normalized_clues.append(interval)
 
-        first_interval = normalized_clues[0] if normalized_clues else (0.0, 0.0)
-        first_windows = virtual_to_source_windows(manifest, *first_interval)
-        cases.append(
-            VirtualVideoCase(
-                case_id=case_id,
-                question=str(row.get("question", "")),
-                options=_options_mapping(row.get("options")),
-                gold=str(row.get("answer", "")),
-                target_segment_id=first_windows[0].segment_id if first_windows else "",
-                target_virtual_interval=first_interval,
-                gold_clue_intervals=tuple(normalized_clues),
-                subset=subset,
-                split=split,
-                question_type=str(row["question_type"]) if row.get("question_type") is not None else None,
-                metadata={
-                    "dataset": "MM-Lifelong",
-                    "source_subset": source_subset,
-                    "source_index": source_index,
-                    "temporal_certificate": row.get("temporal_certificate"),
-                    "total_intervals": row.get("total_intervals", ()),
-                    "clue_repairs": case_repairs,
-                },
+        question_type = (
+            str(row["question_type"])
+            if row.get("question_type") is not None
+            else None
+        )
+        options = _options_mapping(row.get("options"))
+        bundles.append(
+            MMLifelongCaseBundle(
+                runtime_question=RuntimeQuestion(
+                    case_id=case_id,
+                    question=str(row.get("question", "")),
+                    options=options,
+                    subset=subset,
+                    split=split,
+                    question_type=question_type,
+                    runtime_metadata={
+                        "benchmark": BENCHMARK_ID,
+                        "source_subset": source_subset,
+                        "source_index": source_index,
+                    },
+                ),
+                evaluation_record=EvaluationRecord(
+                    case_id=case_id,
+                    reference_answer=str(row.get("answer", "")),
+                    clue_intervals=tuple(official_clues),
+                    evaluation_metadata={
+                        "benchmark": BENCHMARK_ID,
+                        "question": str(row.get("question", "")),
+                        "options": options,
+                        "question_type": question_type,
+                        "subset": subset,
+                        "split": split,
+                        "source_subset": source_subset,
+                        "source_index": source_index,
+                        "total_seconds": manifest.duration_sec,
+                        "temporal_certificate": row.get("temporal_certificate"),
+                        "total_intervals": row.get("total_intervals", ()),
+                        "normalized_clue_intervals": [list(item) for item in normalized_clues],
+                        "clue_repairs": case_repairs,
+                    },
+                ),
             )
         )
     if verify_clues and errors:
         preview = "; ".join(errors[:5])
         suffix = f"; and {len(errors) - 5} more" if len(errors) > 5 else ""
         raise ValueError(f"MM-Lifelong clue validation failed: {preview}{suffix}")
-    return tuple(cases), tuple(repairs), clue_count, mapped_clue_count
+    return tuple(bundles), tuple(repairs), clue_count, mapped_clue_count
+
+
+def _create_case_workspace(
+    case_root: Path,
+    *,
+    asset_root: Path,
+    manifest: VirtualVideoManifest,
+    bundle: MMLifelongCaseBundle,
+) -> VirtualVideoWorkspace:
+    question = bundle.runtime_question
+    workspace = VirtualVideoWorkspace.create(
+        case_root / question.case_id,
+        manifest=manifest,
+        case=VirtualVideoCase(
+            case_id=question.case_id,
+            question=question.question,
+            options=question.options,
+            subset=question.subset,
+            split=question.split,
+            question_type=question.question_type,
+            metadata=question.runtime_metadata,
+        ),
+        asset_root=asset_root,
+    )
+    legacy_payload = json.loads((workspace.root_dir / "case.json").read_text(encoding="utf-8"))
+    runtime_payload = question.to_dict()
+    if legacy_payload.get("asset_ref"):
+        runtime_payload["asset_ref"] = legacy_payload["asset_ref"]
+    _write_json(workspace.root_dir / "case.json", runtime_payload)
+    _write_json(
+        workspace.root_dir / "evaluation_case.json",
+        bundle.evaluation_record.to_dict(),
+    )
+    return VirtualVideoWorkspace.load(workspace.root_dir)
+
+
+def _coerce_clue_interval(value: Any) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise TypeError(f"expected [start, end], got {value!r}")
+    start = float(value[0])
+    end = float(value[1])
+    if not math.isfinite(start) or not math.isfinite(end):
+        raise ValueError(f"interval must be finite, got {value!r}")
+    return start, end
 
 
 def _normalize_clue_interval(
@@ -360,7 +565,7 @@ def _normalize_clue_interval(
 def _validation_payload(
     manifest: VirtualVideoManifest,
     *,
-    cases: Sequence[VirtualVideoCase],
+    case_count: int,
     clue_count: int,
     mapped_clue_count: int,
     repairs: Sequence[Mapping[str, Any]],
@@ -390,7 +595,7 @@ def _validation_payload(
         "schema_version": 1,
         "status": status,
         "segment_count": len(segments),
-        "case_count": len(cases),
+        "case_count": int(case_count),
         "duration_sec": manifest.duration_sec,
         "source_duration_sum_sec": source_duration_sum,
         "clue_interval_count": clue_count,

@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from benchmarks.mmlifelong.adapter import build_mmlifelong_workspaces
 from vcah.agent import VideoAgent
 from vcah.captioning import (
     DEFAULT_CAPTION_PROMPT,
@@ -16,7 +17,6 @@ from vcah.caption_semantic_index import CaptionSemanticIndex
 from vcah.caption_store import activate_caption_config
 from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.evals import run_videomme_case
-from vcah.mmlifelong_virtual import build_mmlifelong_workspaces
 from vcah.model_client import OpenAICompatibleClient
 from vcah.multiround import VirtualVideoMultiRoundDriver
 from vcah.virtual_index import build_virtual_beat_index

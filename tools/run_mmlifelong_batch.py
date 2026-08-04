@@ -21,14 +21,13 @@ def discover_cases(case_root: Path) -> tuple[dict[str, Any], ...]:
     cases: list[dict[str, Any]] = []
     for path in sorted(Path(case_root).glob("*/case.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
-        interval = payload.get("target_virtual_interval") or ()
-        if len(interval) != 2:
-            raise ValueError(f"Case is missing target_virtual_interval: {path}")
+        metadata = payload.get("runtime_metadata", payload.get("metadata", {}))
+        source_index = metadata.get("source_index", 0) if isinstance(metadata, Mapping) else 0
         cases.append(
             {
                 "case_id": str(payload["case_id"]),
                 "question_type": str(payload.get("question_type") or "Unknown"),
-                "target_virtual_interval": [float(interval[0]), float(interval[1])],
+                "selection_coordinate": float(source_index),
                 "case_workspace": str(path.parent),
             }
         )
@@ -73,7 +72,7 @@ def select_stratified_cases(
         group = sorted(
             grouped[question_type],
             key=lambda item: (
-                float(item["target_virtual_interval"][0]),
+                _selection_coordinate(item),
                 str(item["case_id"]),
             ),
         )
@@ -85,7 +84,7 @@ def select_stratified_cases(
             selected,
             key=lambda item: (
                 str(item["question_type"]),
-                float(item["target_virtual_interval"][0]),
+                _selection_coordinate(item),
                 str(item["case_id"]),
             ),
         )
@@ -118,7 +117,7 @@ def main() -> None:
             {
                 "case_id": case["case_id"],
                 "question_type": case["question_type"],
-                "target_virtual_interval": case["target_virtual_interval"],
+                "selection_coordinate": _selection_coordinate(case),
             }
             for case in selected
         ],
@@ -170,9 +169,16 @@ def _run_case(
     case_id = str(case["case_id"])
     out_dir = out_root / "cases" / case_id
     log_path = out_root / "logs" / f"{case_id}.log"
-    metrics_path = out_dir / "mmlifelong_metrics.json"
-    if args.resume and metrics_path.is_file():
-        return _successful_result(case, metrics_path, out_dir, log_path, duration_sec=0.0, resumed=True)
+    prediction_path = out_dir / "prediction.json"
+    if args.resume and prediction_path.is_file():
+        return _successful_result(
+            case,
+            prediction_path,
+            out_dir,
+            log_path,
+            duration_sec=0.0,
+            resumed=True,
+        )
 
     command = _case_command(case, args, out_dir)
     started = time.monotonic()
@@ -191,52 +197,52 @@ def _run_case(
         return {
             "case_id": case_id,
             "question_type": case["question_type"],
-            "target_virtual_interval": case["target_virtual_interval"],
+            "selection_coordinate": _selection_coordinate(case),
             "status": "timeout",
             "duration_sec": round(time.monotonic() - started, 3),
             "out_dir": str(out_dir),
             "log_path": str(log_path),
         }
-    if completed.returncode != 0 or not metrics_path.is_file():
+    if completed.returncode != 0 or not prediction_path.is_file():
         return {
             "case_id": case_id,
             "question_type": case["question_type"],
-            "target_virtual_interval": case["target_virtual_interval"],
+            "selection_coordinate": _selection_coordinate(case),
             "status": "failed",
             "returncode": int(completed.returncode),
             "duration_sec": duration,
             "out_dir": str(out_dir),
             "log_path": str(log_path),
         }
-    return _successful_result(case, metrics_path, out_dir, log_path, duration_sec=duration)
+    return _successful_result(case, prediction_path, out_dir, log_path, duration_sec=duration)
 
 
 def _successful_result(
     case: Mapping[str, Any],
-    metrics_path: Path,
+    prediction_path: Path,
     out_dir: Path,
     log_path: Path,
     *,
     duration_sec: float,
     resumed: bool = False,
 ) -> dict[str, Any]:
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    prediction = json.loads(prediction_path.read_text(encoding="utf-8"))
+    runtime_path = out_dir / "runtime_summary.json"
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8")) if runtime_path.is_file() else {}
     return {
         "case_id": str(case["case_id"]),
         "question_type": case["question_type"],
-        "target_virtual_interval": case["target_virtual_interval"],
+        "selection_coordinate": _selection_coordinate(case),
         "status": "success",
         "resumed": bool(resumed),
         "duration_sec": duration_sec,
         "out_dir": str(out_dir),
         "log_path": str(log_path),
-        "metrics": {
-            "accuracy_score": metrics.get("accuracy_score"),
-            "answer_present": metrics.get("answer_present"),
-            "reference_valid": metrics.get("reference_valid"),
-            "ref": metrics.get("ref"),
-            "retrieval": metrics.get("retrieval"),
-            "agent": metrics.get("agent"),
+        "runtime": {
+            "answer_present": prediction.get("answer_present"),
+            "verification_status": prediction.get("verification_status"),
+            "reference_valid": runtime.get("reference_valid"),
+            "runtime_metrics": runtime.get("runtime_metrics"),
         },
     }
 
@@ -260,8 +266,6 @@ def _case_command(
         str(args.reasoner_section),
         "--investigator-section",
         str(args.investigator_section),
-        "--judge-section",
-        str(args.judge_section),
         "--answer-policy",
         str(args.answer_policy),
         "--max-rounds",
@@ -282,9 +286,6 @@ def _case_command(
         str(args.embedding_device),
         "--embedding-batch-size",
         str(args.embedding_batch_size),
-        "--judge-max-retries",
-        str(args.judge_max_retries),
-        "--judge" if args.judge else "--no-judge",
     ]
     if args.embedding_revision:
         command.extend(("--embedding-revision", str(args.embedding_revision)))
@@ -334,7 +335,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--case-timeout-sec", type=int, default=1800)
     parser.add_argument("--reasoner-section", default="investigator_api")
     parser.add_argument("--investigator-section", default="investigator_api")
-    parser.add_argument("--judge-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
@@ -348,10 +348,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
-    parser.add_argument("--judge", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--judge-max-retries", type=int, default=2)
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
+
+
+def _selection_coordinate(case: Mapping[str, Any]) -> float:
+    return float(case.get("selection_coordinate", 0.0) or 0.0)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from vcah.virtual_video import (
     load_srt_as_virtual_cues,
     materialize_lowfps_frame_cache,
 )
+from vcah.videomme_v2 import score_videomme_v2_answer
 
 
 DEFAULT_CASE_IDS = ("477-2", "548-1", "371-1", "311-1", "314-3", "315-1")
@@ -158,7 +159,7 @@ def main() -> None:
             "answer": result.answer,
             "selected_option": result.selected_option,
             "citations": list(result.citations),
-            "correct": result.correct,
+            "correct": score_videomme_v2_answer(result.answer, workspace.case.gold),
             "reference_valid": result.reference_valid,
             "reference_reason": result.reference_reason,
             "rounds": result.rounds,

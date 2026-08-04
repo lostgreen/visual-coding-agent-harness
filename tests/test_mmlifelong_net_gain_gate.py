@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from runs.mmlifelong_net_gain_gate import evaluate_net_gain, evaluate_run_pair
+import json
+from pathlib import Path
+
+from runs.mmlifelong_net_gain_gate import (
+    collect_recorded_cases,
+    evaluate_net_gain,
+    evaluate_run_pair,
+)
 
 
 def _case(
@@ -12,7 +19,7 @@ def _case(
     anchor: float = 1.0,
 ) -> dict[str, float]:
     return {
-        "accuracy_score": accuracy,
+        "official_accuracy": accuracy,
         "reference_valid": reference_valid,
         "visual_frames_inspected": frames,
         "clue_frame_coverage": coverage,
@@ -40,7 +47,7 @@ def test_net_gain_requires_two_passing_independent_repeats() -> None:
     )
 
     assert pair["passed"] is True
-    assert pair["accuracy_delta"] == 0.5
+    assert pair["official_accuracy_delta"] == 0.5
     assert pair["visual_frame_ratio"] == 1.2
     single = evaluate_net_gain((pair,))
     assert single["passed"] is False
@@ -86,3 +93,52 @@ def test_pair_gate_rejects_case_set_drift() -> None:
 
     assert pair["passed"] is False
     assert "missing_candidate_cases:case-b" in pair["failures"]
+
+
+def test_collect_recorded_cases_keeps_evaluation_and_runtime_inputs_separate(
+    tmp_path: Path,
+) -> None:
+    case_root = tmp_path / "case-a"
+    evaluation_root = case_root / "evaluation"
+    evaluation_root.mkdir(parents=True)
+    _write_json(
+        evaluation_root / "mmlifelong_eval.json",
+        {
+            "case_id": "case-a",
+            "answer": {"score": 1.0},
+            "reference_grounding": {"reference_intervals": [[9.5, 10.5]]},
+        },
+    )
+    _write_json(
+        case_root / "runtime_summary.json",
+        {
+            "reference_valid": True,
+            "supporting_claim_ids": [],
+            "runtime_metrics": {"visual_frames_inspected": 1},
+        },
+    )
+    _write_json(case_root / "working_document.json", {})
+    (case_root / "observation_log.jsonl").write_text(
+        json.dumps(
+            {
+                "attempt_id": "visual-1",
+                "modality": "visual",
+                "requested_range": [9.0, 11.0],
+                "frame_times": [10.0],
+                "sampling_fps": 1.0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cases = collect_recorded_cases(tmp_path)
+
+    assert cases["case-a"]["official_accuracy"] == 1.0
+    assert cases["case-a"]["reference_valid"] == 1
+    assert cases["case-a"]["visual_frames_inspected"] == 1
+    assert cases["case-a"]["clue_frame_coverage"] == 1.0
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")

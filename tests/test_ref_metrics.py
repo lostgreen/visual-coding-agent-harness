@@ -3,25 +3,29 @@ from __future__ import annotations
 import pytest
 
 from vcah.caption_schema import CaptionHitV1
-from vcah.mmlifelong_metrics import (
-    anchor_consistency,
-    answer_judge_prompt,
-    agent_run_metrics,
-    bins_for_interval,
-    caption_hits_from_observation_rows,
-    clue_frame_coverage,
-    export_supporting_intervals,
-    interval_iou,
+from evaluate.mmlifelong.evaluator import (
+    build_user_prompt as answer_judge_prompt,
     judge_free_form_answer,
-    parse_answer_judge_response,
+    parse_official_judge_response as parse_answer_judge_response,
+    score_mapping as smooth_score,
+)
+from evaluate.mmlifelong.metrics import (
+    bins_for_interval,
+    clue_frame_coverage,
+    interval_iou,
     recorded_case_diagnostics,
     ref_score,
     ref_scores,
-    retrieval_dedup_rate,
     retrieval_metrics,
-    sampling_fidelity,
-    smooth_score,
 )
+from vcah.runtime_metrics import (
+    anchor_consistency,
+    agent_run_metrics,
+    caption_hits_from_observation_rows,
+    export_supporting_intervals,
+    retrieval_dedup_rate,
+)
+from vcah.virtual_video import sampling_fidelity
 from vcah.workspace import Claim, WorkingDocument
 
 
@@ -44,22 +48,22 @@ def _hit(passage_id: str, rank: int, start: float, end: float) -> CaptionHitV1:
 
 
 def test_ref_bins_use_half_open_end_boundary() -> None:
-    assert bins_for_interval(0.0, 60.0, 60) == {0}
-    assert bins_for_interval(60.0, 120.0, 60) == {1}
-    assert bins_for_interval(59.0, 61.0, 60) == {0, 1}
-    assert bins_for_interval(10.0, 10.0, 60) == set()
+    assert bins_for_interval(0.0, 60.0, 60, total_seconds=120.0) == {0}
+    assert bins_for_interval(60.0, 120.0, 60, total_seconds=120.0) == {1}
+    assert bins_for_interval(59.0, 61.0, 60, total_seconds=120.0) == {0, 1}
+    assert bins_for_interval(10.0, 10.0, 60, total_seconds=120.0) == set()
     with pytest.raises(ValueError, match="positive"):
-        bins_for_interval(0.0, 1.0, 0)
+        bins_for_interval(0.0, 1.0, 0, total_seconds=120.0)
 
 
 def test_ref_score_reports_quantized_iou() -> None:
-    assert ref_score(((0.0, 60.0),), ((0.0, 60.0),), bucket_size=60) == 100.0
-    assert ref_score(((0.0, 60.0),), ((60.0, 120.0),), bucket_size=60) == 0.0
-    assert ref_score(((0.0, 120.0),), ((60.0, 120.0),), bucket_size=60) == 50.0
-    assert set(ref_scores(((0.0, 1.0),), ((0.0, 1.0),))) == {
-        "Ref@60",
-        "Ref@300",
-        "Ref@600",
+    assert ref_score(((0.0, 60.0),), ((0.0, 60.0),), bucket_size=60, total_seconds=120.0) == 1.0
+    assert ref_score(((0.0, 60.0),), ((60.0, 120.0),), bucket_size=60, total_seconds=120.0) == 0.0
+    assert ref_score(((0.0, 120.0),), ((60.0, 120.0),), bucket_size=60, total_seconds=120.0) == 0.5
+    assert set(ref_scores(((0.0, 1.0),), ((0.0, 1.0),), total_seconds=120.0)) == {
+        "ref_60",
+        "ref_300",
+        "ref_600",
     }
 
 
@@ -283,16 +287,20 @@ def test_recorded_case_diagnostics_recomputes_gate_inputs() -> None:
 
     diagnostics = recorded_case_diagnostics(
         {
-            "accuracy_score": 1.0,
-            "reference_valid": True,
-            "agent": {"visual_frames_inspected": 4},
+            "answer": {"score": 1.0},
         },
         document,
         rows,
+        runtime_summary={
+            "reference_valid": True,
+            "runtime_metrics": {"visual_frames_inspected": 4},
+        },
         supporting_claim_ids=("support",),
-        gold_intervals=((9.5, 10.5),),
+        reference_intervals=((9.5, 10.5),),
     )
 
+    assert diagnostics["official_accuracy"] == 1.0
+    assert diagnostics["reference_valid"] == 1
     assert diagnostics["clue_frame_coverage"] == 1.0
     assert diagnostics["retrieval_dedup_rate"] == 0.5
     assert diagnostics["sampling_fidelity_min"] == 1.0
@@ -300,34 +308,32 @@ def test_recorded_case_diagnostics_recomputes_gate_inputs() -> None:
 
 
 def test_answer_judge_result_preserves_raw_and_smoothed_scores() -> None:
-    prompt = answer_judge_prompt(
+    assert answer_judge_prompt(
         question="What was raised?",
         reference_answer="A cup",
         predicted_answer="The person raised a cup.",
-    )
+    ).startswith("Question: What was raised?")
     result = parse_answer_judge_response(
-        '```json\n{"score": 4, "rationale": "Semantically correct."}\n```',
+        "Analysis:\nSemantically correct.\n\nFinal Score:\n4",
         judge_model="judge-v1",
-        prompt=prompt,
         retry_count=1,
     )
 
     assert result.raw_score == 4
-    assert result.smoothed_score == 1.0
+    assert result.score == 1.0
     assert result.parse_status == "parsed"
     assert result.retry_count == 1
     assert smooth_score(3) == 0.5
     assert smooth_score(2) == 0.0
-    with pytest.raises(ValueError, match="between 0 and 5"):
-        smooth_score(6)
+    assert smooth_score(6) == 0.0
 
 
 def test_answer_judge_retries_parse_failure_and_preserves_metadata() -> None:
-    responses = iter(("not-json", '{"score": 3, "rationale": "Partly correct."}'))
+    responses = iter(("not-json", "Analysis: Partly correct.\nFinal Score: 3"))
     metadata = {"finish_reason": "stop", "completion_tokens": 20}
 
     result = judge_free_form_answer(
-        lambda prompt: next(responses),
+        lambda system_prompt, user_prompt, max_tokens: next(responses),
         question="What happened?",
         reference_answer="The player opened a chest.",
         predicted_answer="A chest was opened.",
@@ -337,7 +343,7 @@ def test_answer_judge_retries_parse_failure_and_preserves_metadata() -> None:
     )
 
     assert result.raw_score == 3
-    assert result.smoothed_score == 0.5
+    assert result.score == 0.5
     assert result.retry_count == 1
     assert result.response_metadata["completion_tokens"] == 20
 
