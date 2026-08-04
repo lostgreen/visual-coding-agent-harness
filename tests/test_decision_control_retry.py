@@ -10,6 +10,7 @@ from vcah.multiround import (
     InvestigationTask,
     ReasonerDecision,
     VirtualVideoMultiRoundDriver,
+    _control_retry_feedback,
 )
 from vcah.runtime_metrics import agent_run_metrics
 from vcah.virtual_video import (
@@ -168,6 +169,32 @@ def test_arbitration_task_has_deliberate_interpretation_purpose() -> None:
     )
 
     assert task.interpretation_purpose == "deliberate_arbitration"
+
+
+def test_workspace_retry_feedback_names_mechanical_repairs() -> None:
+    feedback = _control_retry_feedback(
+        (
+            {
+                "code": "workspace_transaction_rejected",
+                "detail": "op[1]: obligation_already_exists:req_1",
+            },
+            {
+                "code": "workspace_transaction_rejected",
+                "detail": "satisfied_obligation_requires_attempt:req_2",
+            },
+            {
+                "code": "workspace_transaction_rejected",
+                "detail": "obligation_dependency_lineage_missing:req_2:req_1",
+            },
+        ),
+        revision=3,
+        previous_feedback={},
+    )
+
+    instruction = feedback["instruction"]
+    assert "Omit add operations for IDs that already exist" in instruction
+    assert "supporting_attempt_ids" in instruction
+    assert "supporting claim derives from the dependency" in instruction
 
 
 def test_json_repair_uses_control_budget_without_advancing_semantic_round(

@@ -1706,8 +1706,10 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     if control_retry:
         control_retry_rule = (
             "This is a control-plane retry of the same semantic round. Correct the schema or mechanical references described "
-            "in the Working view while preserving the prior semantic intent. Return one Decision JSON object only; do not "
-            "add a new investigation merely because this is a retry.\n"
+            "in the Working view while preserving the prior semantic intent. Follow the feedback instruction exactly. "
+            "Workspace mutations are transactional: omit add operations for IDs already present in the current revision, "
+            "and never mark an obligation satisfied without its existing supporting claim and observation attempt IDs. "
+            "Return one Decision JSON object only; do not add a new investigation merely because this is a retry.\n"
         )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"

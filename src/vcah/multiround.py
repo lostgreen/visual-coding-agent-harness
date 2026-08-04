@@ -1003,6 +1003,41 @@ def _control_retry_feedback(
     previous_feedback: Mapping[str, Any],
 ) -> dict[str, Any]:
     codes = [str(error.get("code", "decision_schema_invalid")) for error in errors]
+    details = tuple(str(error.get("detail", "") or "") for error in errors)
+    repair_rules: list[str] = []
+    if any("_already_exists:" in detail for detail in details):
+        repair_rules.append(
+            "Omit add operations for IDs that already exist at this revision; use the corresponding set/update operation instead."
+        )
+    if any("satisfied_obligation_requires_attempt:" in detail for detail in details):
+        repair_rules.append(
+            "A satisfied obligation must list existing supporting_attempt_ids from the observation claims that support it; otherwise keep it observed, contested, or open."
+        )
+    if any(
+        marker in detail
+        for detail in details
+        for marker in (
+            "satisfied_obligation_requires_claim:",
+            "obligation_supporting_claim_missing:",
+        )
+    ):
+        repair_rules.append(
+            "Use only claim IDs already present after this transaction, adding a missing claim before referencing it."
+        )
+    if any(
+        marker in detail
+        for detail in details
+        for marker in (
+            "obligation_dependency_lineage_missing:",
+            "obligation_dependency_unsatisfied:",
+        )
+    ):
+        repair_rules.append(
+            "Do not satisfy a dependent obligation until its dependency is satisfied and its supporting claim derives from the dependency's supporting claim lineage."
+        )
+    instruction = "Preserve the semantic intent and return one corrected Decision JSON object."
+    if repair_rules:
+        instruction += " Mechanical repair rules: " + " ".join(repair_rules)
     return {
         "type": "decision_control_retry",
         "cause": (
@@ -1013,7 +1048,7 @@ def _control_retry_feedback(
         "errors": [dict(error) for error in errors],
         "revision": revision,
         "previous_feedback_type": str(previous_feedback.get("type", "") or ""),
-        "instruction": "Preserve the semantic intent and return one corrected Decision JSON object.",
+        "instruction": instruction,
     }
 
 
