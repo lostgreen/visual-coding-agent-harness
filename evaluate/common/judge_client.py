@@ -41,7 +41,7 @@ class OpenAICompatibleJudgeClient:
             0.0,
             min(1.0, float(config.get("retry_jitter", 0.2))),
         )
-        self.temperature = _optional_float(config.get("temperature"), 0.0)
+        self.temperature = _optional_float(config.get("temperature"))
         self.top_p = _optional_float(config.get("top_p"))
         self._thread_state = threading.local()
         for key, value in (config.get("proxy_env") or {}).items():
@@ -93,12 +93,14 @@ class OpenAICompatibleJudgeClient:
                 {"role": "system", "content": str(system_prompt)},
                 {"role": "user", "content": str(user_prompt)},
             ],
-            "temperature": self.temperature,
         }
         if "gpt-5" in self.model.casefold():
             body["max_completion_tokens"] = token_budget
+            if self.temperature is not None:
+                body["temperature"] = self.temperature
         else:
             body["max_tokens"] = token_budget
+            body["temperature"] = 0.0 if self.temperature is None else self.temperature
         if self.top_p is not None:
             body["top_p"] = self.top_p
 
