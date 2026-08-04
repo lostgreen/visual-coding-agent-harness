@@ -401,7 +401,7 @@ class RuntimeEvidenceCatalog:
         *,
         feedback: Mapping[str, Any] | None = None,
         max_items: int = 36,
-        max_occurrences: int = 12,
+        max_occurrences: int = 24,
     ) -> str:
         lines = ["REQUIREMENTS"]
         for handle, requirement_id in self.requirements:

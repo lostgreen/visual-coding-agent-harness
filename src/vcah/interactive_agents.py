@@ -1809,12 +1809,16 @@ def _runtime_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "canonical IDs, or dependency transactions. Claims are optional reasoning memory for genuine multi-hop conflicts; "
         "direct observation answers do not need claims or workspace operations.\n"
         f"{action_rule}\n"
-        "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"goal\":\"observable target\","
-        '"requirement":"R1","inspection_mode":"search_caption|search_asr|window",'
-        '"caption_queries":["short target query"],"search_terms":[],"top_k":12,'
-        '"time_range":null,"segment_id":"","occurrence_id":"O1","temporal_scope_id":"S1",'
-        '"refine_item":"E1","window_radius_sec":5.0,"expected_evidence":"direct observation"}]}. '
-        "Provide only fields needed by the chosen mode. Runtime fills the requirement evidence kind and all canonical "
+        "Investigate with one minimal task shape. Search: "
+        '{"action":"investigate","tasks":[{"goal":"locate observable target","requirement":"R1",'
+        '"inspection_mode":"search_caption","caption_queries":["short target query"],"top_k":12}]}. '
+        "Inspect a candidate: "
+        '{"action":"investigate","tasks":[{"goal":"inspect decisive content","requirement":"R1",'
+        '"inspection_mode":"window","occurrence_id":"O1"}]}. '
+        "Refine an item: "
+        '{"action":"investigate","tasks":[{"goal":"inspect the exact transition","requirement":"R1",'
+        '"inspection_mode":"window","refine_item":"E1","window_radius_sec":5.0}]}. '
+        "Do not combine fields from different task shapes. Runtime fills the requirement evidence kind and all canonical "
         "foreign keys. Caption/ASR results are locator candidates, never answer support; inspect decisive content visually. "
         "Use occurrence handles when the catalog exposes competing candidates. Use refine_item on a refinable E handle for "
         "a narrow child observation. Do not repeat a text_exact material read; Runtime schedules its same-material reread.\n"

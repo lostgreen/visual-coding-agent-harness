@@ -463,3 +463,39 @@ def test_occurrence_handle_derives_window_target_before_task_resolution() -> Non
     assert task.time_range == (8.0, 12.0)
     assert task.segment_id == "seg_0001"
     assert task.source_video_ids == ("video-a",)
+
+
+def test_runtime_ignores_window_only_handles_on_search_tasks() -> None:
+    document = WorkingDocument.with_question_premise("question")
+    compile_evidence_plan(document, EvidencePlan.fallback("question"), question="question")
+    catalog = RuntimeEvidenceCatalog(
+        requirements=(("R1", next(iter(document.obligations))),),
+        materials=(),
+        items=(),
+        occurrences=(),
+        scopes=(),
+    )
+
+    decision, errors, _ = _resolve_runtime_decision(
+        ReasonerDecision(
+            action="investigate",
+            tasks=(
+                InvestigationTask(
+                    query_id="search",
+                    goal="Locate the event.",
+                    inspection_mode="search_caption",
+                    caption_queries=("event",),
+                    requirement_id="R1",
+                    occurrence_id="O999",
+                    temporal_scope_id="S999",
+                ),
+            ),
+        ),
+        catalog,
+        document,
+    )
+
+    assert errors == []
+    task = decision.tasks[0]
+    assert task.occurrence_id == ""
+    assert task.temporal_scope_id == ""

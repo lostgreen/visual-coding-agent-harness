@@ -1171,6 +1171,17 @@ def _resolve_runtime_decision(
     fallback_requirement_id = catalog.single_open_answer_requirement(document)
     resolved_tasks = []
     for task in decision.tasks:
+        if task.inspection_mode in {"search_caption", "search_asr"}:
+            task = replace(
+                task,
+                occurrence_id="",
+                locator_attempt_id="",
+                temporal_scope_id="",
+                refine_item_id="",
+                refine_interpretation_id="",
+                parent_attempt_id="",
+                cue_id="",
+            )
         requirement_id = ""
         if task.requirement_id:
             requirement_id = catalog.resolve_requirement(task.requirement_id)
