@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from runs.mger_phase5_gate import TIER2_EXCLUDED_FROM_CROSS_ARM_GATE, gate0
+import json
+
+from runs.mger_phase5_gate import (
+    TIER2_EXCLUDED_FROM_CROSS_ARM_GATE,
+    collect_runtime_root,
+    frozen_reproduction_check,
+    gate0,
+)
 
 
 def _arm(name: str, *, mean_score: float, observed: float) -> dict[str, object]:
@@ -54,3 +61,48 @@ def test_tier2_metrics_are_excluded_from_cross_arm_gate() -> None:
     assert result["decision"] == "GO"
     assert "reference_valid_rate" in TIER2_EXCLUDED_FROM_CROSS_ARM_GATE
     assert "task_resolution_error_count" in TIER2_EXCLUDED_FROM_CROSS_ARM_GATE
+
+
+def test_runtime_reproduction_check_stops_on_frame_drift(tmp_path) -> None:
+    root = tmp_path / "frozen"
+    for index in range(10):
+        case_dir = root / "cases" / f"case-{index}"
+        case_dir.mkdir(parents=True)
+        (case_dir / "run_config.json").write_text(
+            json.dumps(
+                {
+                    "phase5_arm": "frozen_baseline",
+                    "controller_mode": "frozen_baseline",
+                    "controller_evidence_visibility": "none",
+                    "measurement_control": "none",
+                    "answer_policy": "benchmark_best_effort",
+                    "models": {"reasoner": "test"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (case_dir / "runtime_summary.json").write_text(
+            json.dumps(
+                {
+                    "case_id": f"case-{index}",
+                    "answer_present": True,
+                    "runtime_metrics": {
+                        "answer_rate": 1.0,
+                        "observed_case_rate": 1.0,
+                        "visual_frames_inspected": 85.2,
+                        "silently_dropped_acquisition_count": 0,
+                        "malformed_decision_count": 0,
+                        "reasoner_decision_attempt_count": 5,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    result = frozen_reproduction_check(collect_runtime_root(root))
+
+    assert result["decision"] == "STOP"
+    assert result["official_judge_config_status"] == "not_evaluated"
+    assert result["measurements"]["mean_frames"] == 85.2
+    assert result["thresholds"]["maximum_mean_frames"] == 68.875
+    assert result["failed_checks"] == ["frame_reproduction"]

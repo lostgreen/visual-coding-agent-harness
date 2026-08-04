@@ -83,6 +83,101 @@ def collect_root(root: Path) -> dict[str, Any]:
     return _aggregate(Path(root), cases)
 
 
+def collect_runtime_root(root: Path) -> dict[str, Any]:
+    """Collect a Phase 5 root before any judge evaluation is available."""
+    cases: list[dict[str, Any]] = []
+    for case_dir in sorted((Path(root) / "cases").glob("*")):
+        if not case_dir.is_dir():
+            continue
+        config_path = case_dir / "run_config.json"
+        runtime_path = case_dir / "runtime_summary.json"
+        if not (config_path.is_file() and runtime_path.is_file()):
+            continue
+        config = _read_json(config_path)
+        runtime = _read_json(runtime_path)
+        metrics = _mapping(runtime.get("runtime_metrics"))
+        cases.append(
+            {
+                "case_id": str(runtime.get("case_id", case_dir.name)),
+                "score": None,
+                "parse_status": "",
+                "judge_model": "",
+                "official_judge_config_match": False,
+                "answer_rate": _number(
+                    metrics.get("answer_rate", float(bool(runtime.get("answer_present"))))
+                ),
+                "observed_case_rate": _number(
+                    metrics.get(
+                        "observed_case_rate",
+                        float(_number(metrics.get("visual_interpretation_count")) > 0),
+                    )
+                ),
+                "visual_frames": _number(metrics.get("visual_frames_inspected")),
+                "caption_searches": _number(metrics.get("caption_searches")),
+                "requested_acquisitions": _number(
+                    metrics.get("requested_acquisition_count")
+                ),
+                "silent_drops": _number(
+                    metrics.get("silently_dropped_acquisition_count")
+                ),
+                "malformed_count": _number(metrics.get("malformed_decision_count")),
+                "decision_attempt_count": _number(
+                    metrics.get("reasoner_decision_attempt_count")
+                ),
+                "ref_60": 0.0,
+                "ref_300": 0.0,
+                "ref_600": 0.0,
+                "config": config,
+            }
+        )
+    return _aggregate(Path(root), cases)
+
+
+def frozen_reproduction_check(
+    frozen: Mapping[str, Any],
+    *,
+    expected_case_count: int = 10,
+    reference_frames: float = 55.1,
+    frame_tolerance_ratio: float = 0.25,
+) -> dict[str, Any]:
+    frame_delta = abs(_number(frozen.get("mean_frames")) - float(reference_frames))
+    checks = {
+        "frozen_arm_config": frozen.get("phase5_arm") == "frozen_baseline",
+        "case_count": int(frozen.get("case_count", 0)) == expected_case_count,
+        "root_config_consistency": bool(frozen.get("root_config_consistent")),
+        "observed_case_rate": _number(frozen.get("observed_case_rate")) == 1.0,
+        "silent_drops": _number(frozen.get("total_silent_drops")) == 0.0,
+        "frame_reproduction": frame_delta
+        <= float(reference_frames) * float(frame_tolerance_ratio),
+    }
+    return {
+        "schema_version": "MGERPhase5FrozenReproductionV1",
+        "stage": "frozen_runtime_reproduction_precheck",
+        "decision": "PASS" if all(checks.values()) else "STOP",
+        "official_judge_config_status": "not_evaluated",
+        "screening_only": True,
+        "statistical_significance_claim": False,
+        "thresholds": {
+            "expected_case_count": expected_case_count,
+            "reference_frames": reference_frames,
+            "frame_tolerance_ratio": frame_tolerance_ratio,
+            "maximum_mean_frames": reference_frames * (1.0 + frame_tolerance_ratio),
+        },
+        "measurements": {
+            "answer_rate": frozen.get("answer_rate"),
+            "observed_case_rate": frozen.get("observed_case_rate"),
+            "mean_frames": frozen.get("mean_frames"),
+            "conditional_mean_frames": frozen.get("conditional_mean_frames"),
+            "total_silent_drops": frozen.get("total_silent_drops"),
+            "malformed_decision_rate": frozen.get("malformed_decision_rate"),
+            "frame_absolute_delta": frame_delta,
+        },
+        "checks": checks,
+        "failed_checks": [key for key, passed in checks.items() if not passed],
+        "frozen_baseline": dict(frozen),
+    }
+
+
 def gate0(
     blind: Mapping[str, Any],
     frozen: Mapping[str, Any],
@@ -199,28 +294,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Apply the MM-Lifelong Phase 5 measurement-validity gate."
     )
-    parser.add_argument("--blind-root", type=Path, required=True)
-    parser.add_argument("--frozen-root", type=Path, required=True)
+    parser.add_argument("--blind-root", type=Path)
+    parser.add_argument("--frozen-root", type=Path)
+    parser.add_argument("--frozen-reproduction-root", type=Path)
     parser.add_argument("--expected-case-count", type=int, default=10)
     parser.add_argument("--minimum-score-delta", type=float, default=0.15)
     parser.add_argument("--frozen-reference-frames", type=float, default=55.1)
     parser.add_argument("--frozen-frame-tolerance-ratio", type=float, default=0.25)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
-    result = gate0(
-        collect_root(args.blind_root),
-        collect_root(args.frozen_root),
-        expected_case_count=args.expected_case_count,
-        minimum_score_delta=args.minimum_score_delta,
-        frozen_reference_frames=args.frozen_reference_frames,
-        frozen_frame_tolerance_ratio=args.frozen_frame_tolerance_ratio,
-    )
+    if args.frozen_reproduction_root:
+        if args.blind_root or args.frozen_root:
+            parser.error(
+                "--frozen-reproduction-root cannot be combined with evaluated roots"
+            )
+        result = frozen_reproduction_check(
+            collect_runtime_root(args.frozen_reproduction_root),
+            expected_case_count=args.expected_case_count,
+            reference_frames=args.frozen_reference_frames,
+            frame_tolerance_ratio=args.frozen_frame_tolerance_ratio,
+        )
+    else:
+        if not (args.blind_root and args.frozen_root):
+            parser.error(
+                "--blind-root and --frozen-root are required for the official gate"
+            )
+        result = gate0(
+            collect_root(args.blind_root),
+            collect_root(args.frozen_root),
+            expected_case_count=args.expected_case_count,
+            minimum_score_delta=args.minimum_score_delta,
+            frozen_reference_frames=args.frozen_reference_frames,
+            frozen_frame_tolerance_ratio=args.frozen_frame_tolerance_ratio,
+        )
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(rendered, encoding="utf-8")
     print(rendered, end="")
-    return 0 if result["decision"] == "GO" else 1
+    return 0 if result["decision"] in {"GO", "PASS"} else 1
 
 
 def _read_json(path: Path) -> dict[str, Any]:
