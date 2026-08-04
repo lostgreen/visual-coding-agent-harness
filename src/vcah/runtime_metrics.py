@@ -211,8 +211,11 @@ def agent_run_metrics(
     answer_present: bool,
     reference_valid: bool,
     supporting_intervals: Sequence[Sequence[float]] = (),
-) -> dict[str, float | int]:
+) -> dict[str, float | int | None]:
     decisions = tuple(row for row in trace if row.get("type") == "reasoner_decision")
+    decision_attempts = tuple(
+        row for row in trace if row.get("type") == "reasoner_decision_attempt"
+    )
     committed_decisions = tuple(
         row for row in decisions if row.get("semantic_committed", True)
     )
@@ -387,9 +390,27 @@ def agent_run_metrics(
         for outcome in tuple(batch.get("outcomes", ()) or ())
         if isinstance(outcome, Mapping)
     )
+    visual_frame_count = sum(
+        len(tuple(row.get("frame_times", ()) or ()))
+        for row in source_rows.values()
+        if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+    )
+    observed_case = bool(visual_interpretation_rows)
+    malformed_decision_count = sum(
+        not bool(row.get("schema_valid", False)) for row in decision_attempts
+    )
     return {
         "answer_rate": float(bool(answer_present)),
         "reference_valid_rate": float(bool(reference_valid)),
+        "observed_case_rate": float(observed_case),
+        "conditional_visual_frames": visual_frame_count if observed_case else None,
+        "reasoner_decision_attempt_count": len(decision_attempts),
+        "malformed_decision_count": malformed_decision_count,
+        "malformed_decision_rate": (
+            malformed_decision_count / len(decision_attempts)
+            if decision_attempts
+            else 0.0
+        ),
         "rounds": len(
             {
                 int(row.get("semantic_round", row.get("round", index)) or index)
@@ -550,11 +571,7 @@ def agent_run_metrics(
             str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
             for row in source_rows.values()
         ),
-        "visual_frames_inspected": sum(
-            len(tuple(row.get("frame_times", ()) or ()))
-            for row in source_rows.values()
-            if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
-        ),
+        "visual_frames_inspected": visual_frame_count,
         "candidate_to_support_conversion": converted / len(candidates) if candidates else 0.0,
     }
 

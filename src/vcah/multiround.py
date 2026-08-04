@@ -19,6 +19,7 @@ from vcah.investigator import (
     VirtualVideoInvestigator,
 )
 from vcah.memory import EvidenceStore
+from vcah.phase5 import inspection_mode_policy_errors
 from vcah.runtime_metrics import (
     export_item_supporting_intervals,
     export_supporting_intervals,
@@ -279,6 +280,7 @@ class VirtualVideoMultiRoundDriver:
         answer_policy: str = "strict",
         evidence_control_mode: str = "strict",
         evidence_state_mode: str = "llm_authored",
+        allowed_inspection_modes: frozenset[str] | None = None,
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -310,6 +312,15 @@ class VirtualVideoMultiRoundDriver:
         if state_mode not in {"llm_authored", "runtime_derived"}:
             raise ValueError(f"unsupported evidence_state_mode: {state_mode}")
         self.evidence_state_mode = state_mode
+        self.allowed_inspection_modes = (
+            None
+            if allowed_inspection_modes is None
+            else frozenset(
+                str(item).strip().casefold()
+                for item in allowed_inspection_modes
+                if str(item).strip()
+            )
+        )
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         existing = tuple(name for name in RUN_ARTIFACT_NAMES if (workspace.root_dir / name).exists())
@@ -517,8 +528,28 @@ class VirtualVideoMultiRoundDriver:
                             == "runtime_derived",
                         )
                     )
+                    schema_errors.extend(
+                        inspection_mode_policy_errors(
+                            parsed_decision.tasks,
+                            allowed_modes=self.allowed_inspection_modes,
+                        )
+                    )
                     if parsed_decision.action == "answer" and parsed_decision.answer:
                         latest_answer_candidate = parsed_decision
+                trace.append(
+                    {
+                        "type": "reasoner_decision_attempt",
+                        "round": round_id,
+                        "control_attempt": control_attempt,
+                        "action": (
+                            parsed_decision.action
+                            if parsed_decision is not None
+                            else ""
+                        ),
+                        "schema_valid": not schema_errors,
+                        "errors": list(schema_errors),
+                    }
+                )
                 if schema_errors:
                     _append_preflight_task_outcomes(
                         trace,

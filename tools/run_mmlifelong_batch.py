@@ -13,6 +13,8 @@ import threading
 import time
 from typing import Any, Mapping, Sequence
 
+from vcah.phase5 import Phase5Protocol
+
 
 SELECTION_STRATEGY = "question_type_temporal_quantiles"
 
@@ -93,6 +95,11 @@ def select_stratified_cases(
 
 def main() -> None:
     args = _parse_args()
+    protocol = Phase5Protocol(
+        controller_mode=args.controller_mode,
+        controller_evidence_visibility=args.controller_evidence_visibility,
+        measurement_control=args.measurement_control,
+    )
     out_root = Path(args.out_root)
     if out_root.exists() and any(out_root.iterdir()) and not args.resume:
         raise FileExistsError(f"batch output is not empty: {out_root}")
@@ -104,6 +111,7 @@ def main() -> None:
     selected = select_stratified_cases(candidates, args.limit)
     selection = {
         "schema_version": 1,
+        **protocol.to_dict(),
         "strategy": SELECTION_STRATEGY,
         "candidate_count": len(candidates),
         "selected_count": len(selected),
@@ -270,6 +278,12 @@ def _case_command(
         str(args.investigator_section),
         "--answer-policy",
         str(args.answer_policy),
+        "--controller-mode",
+        str(args.controller_mode),
+        "--controller-evidence-visibility",
+        str(args.controller_evidence_visibility),
+        "--measurement-control",
+        str(args.measurement_control),
         "--evidence-control-mode",
         str(args.evidence_control_mode),
         "--evidence-state-mode",
@@ -316,6 +330,12 @@ def _write_batch_summary(
             "completed_count": len(results),
             "status_counts": dict(status_counts),
             "caption_config_digest": selection.get("caption_config_digest"),
+            "phase5_arm": selection.get("phase5_arm"),
+            "controller_mode": selection.get("controller_mode"),
+            "controller_evidence_visibility": selection.get(
+                "controller_evidence_visibility"
+            ),
+            "measurement_control": selection.get("measurement_control"),
             "results": [results[case_id] for case_id in sorted(results)],
         },
     )
@@ -344,6 +364,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--reasoner-section", default="investigator_api")
     parser.add_argument("--investigator-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
+    parser.add_argument(
+        "--controller-mode",
+        choices=("frozen_baseline", "minimal_tool", "mger"),
+        default="mger",
+    )
+    parser.add_argument(
+        "--controller-evidence-visibility",
+        choices=("none", "candidates_only", "full"),
+        default="full",
+    )
+    parser.add_argument(
+        "--measurement-control",
+        choices=("none", "blind_prior", "caption_only"),
+        default="none",
+    )
     parser.add_argument("--evidence-control-mode", choices=("shadow", "strict"), default="shadow")
     parser.add_argument(
         "--evidence-state-mode",

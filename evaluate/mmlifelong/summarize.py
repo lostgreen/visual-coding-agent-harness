@@ -90,14 +90,57 @@ def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
             for row in group
         ]
         config = dict(group[0].get("config", {}) or {})
+        answer_scores = [_answer_score(row) for row in evaluations]
+        observed_runtimes = [
+            row
+            for row in runtimes
+            if float(row.get("observed_case_rate", 0.0) or 0.0) > 0.0
+        ]
+        malformed_count = sum(
+            int(row.get("malformed_decision_count", 0) or 0) for row in runtimes
+        )
+        decision_attempt_count = sum(
+            int(row.get("reasoner_decision_attempt_count", 0) or 0)
+            for row in runtimes
+        )
         aggregates.append(
             {
                 "config_digest": digest,
+                "phase5_arm": config.get("phase5_arm", "unknown"),
+                "controller_mode": config.get("controller_mode", "unknown"),
+                "controller_evidence_visibility": config.get(
+                    "controller_evidence_visibility",
+                    "unknown",
+                ),
                 "caption_index_mode": config.get("caption_index_mode", "unknown"),
                 "answer_policy": config.get("answer_policy", "unknown"),
                 "case_count": len(group),
-                "Acc": _optional_mean(_answer_score(row) for row in evaluations),
+                "mean_score": _optional_mean(answer_scores),
+                "exact_correct_rate": _optional_mean(
+                    float(score == 1.0)
+                    for score in answer_scores
+                    if isinstance(score, (int, float))
+                ),
+                "Acc": _optional_mean(answer_scores),
                 "answer_rate": _optional_mean(row.get("answer_rate") for row in runtimes),
+                "observed_case_rate": _optional_mean(
+                    row.get("observed_case_rate") for row in runtimes
+                ),
+                "mean_frames": _optional_mean(
+                    row.get("visual_frames_inspected") for row in runtimes
+                ),
+                "conditional_mean_frames": _optional_mean(
+                    row.get("visual_frames_inspected") for row in observed_runtimes
+                ),
+                "malformed_decision_rate": (
+                    malformed_count / decision_attempt_count
+                    if decision_attempt_count
+                    else 0.0
+                ),
+                "silently_dropped_acquisition_count": sum(
+                    int(row.get("silently_dropped_acquisition_count", 0) or 0)
+                    for row in runtimes
+                ),
                 "reference_valid_rate": _optional_mean(
                     row.get("reference_valid_rate") for row in runtimes
                 ),
@@ -160,10 +203,17 @@ def _comparison_config_digest(config: Any, provenance: Any) -> str:
 
 def render_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
     columns = (
+        "phase5_arm",
+        "controller_mode",
         "caption_index_mode",
         "case_count",
+        "mean_score",
+        "exact_correct_rate",
         "Acc",
         "answer_rate",
+        "observed_case_rate",
+        "conditional_mean_frames",
+        "malformed_decision_rate",
         "reference_valid_rate",
         "Ref@60",
         "Ref@300",

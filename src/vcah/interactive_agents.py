@@ -349,9 +349,19 @@ class WorkspaceReasoner:
         api: OpenAICompatibleClient,
         *,
         trace_path: Path,
+        controller_mode: str = "mger",
+        controller_evidence_visibility: str = "full",
+        measurement_control: str = "none",
     ) -> None:
         self.api = api
         self.trace_path = trace_path
+        self.controller_mode = str(controller_mode or "mger").strip().casefold()
+        self.controller_evidence_visibility = str(
+            controller_evidence_visibility or "full"
+        ).strip().casefold()
+        self.measurement_control = str(
+            measurement_control or "none"
+        ).strip().casefold()
         self.calls = 0
         self._last_decision_metadata: dict[str, Any] = {}
         self._last_plan_metadata: dict[str, Any] = {}
@@ -394,6 +404,12 @@ class WorkspaceReasoner:
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
         self._last_decision_metadata = {}
+        kwargs.setdefault("controller_mode", self.controller_mode)
+        kwargs.setdefault(
+            "controller_evidence_visibility",
+            self.controller_evidence_visibility,
+        )
+        kwargs.setdefault("measurement_control", self.measurement_control)
         semantic_round = int(kwargs.get("semantic_round", self.calls) or self.calls)
         control_attempt = int(kwargs.get("control_attempt", 0) or 0)
         prompt = _reasoner_prompt(kwargs)
@@ -1841,7 +1857,151 @@ def _prompt_schema_token_estimate(prompt: str) -> int:
     return (len(schema) + 3) // 4
 
 
+def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
+    """Phase-5 Arm A prompt frozen from the pre-MGER controller surface."""
+    final = bool(kwargs.get("force_finalize"))
+    final_attempt = int(kwargs.get("final_attempt", 0) or 0)
+    options = dict(kwargs.get("options") or {})
+    mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    caption_query_strategy = str(
+        mechanical_status.get("caption_query_strategy", "joint") or "joint"
+    ).casefold()
+    if caption_query_strategy == "rema":
+        caption_search_rule = (
+            "When available, search_caption is a locator using ReMA-style independent multi-query retrieval. Provide "
+            "a self-contained observable event or relation as the task goal, then caption_queries as short complementary "
+            "entity names or aliases; do not repeat the full question. Preserve entity spellings from the question and do "
+            "not invent translations. For temporal questions, put each anchor in a separate subject-verb-object phrase. "
+            "Include all scope anchors and the decisive target event in the first caption search instead of spending separate "
+            "rounds on them. A chapter, location, or earlier event is usually a scope constraint; prioritize inspecting the "
+            "candidate for the event or state that directly yields the requested answer. Each query receives balanced "
+            "retrieval coverage within the shared top_k result budget. You may also set optional time_range, "
+            "segment_id/source_video_ids, and index_mode=hybrid. Treat returned ranges as candidates and inspect decisive "
+            "claims visually. "
+        )
+    else:
+        caption_search_rule = (
+            "When available, search_caption is a locator: the framework always includes the original question, and you may "
+            "add caption_queries (1-4 complementary formulations), top_k, optional time_range, segment_id/source_video_ids, "
+            "and index_mode=lexical, dense, or hybrid when configured. Treat returned ranges as candidates and inspect "
+            "decisive claims visually. "
+        )
+    if options:
+        task_description = "long-video multiple-choice QA"
+        answer_schema = (
+            'Answer schema: {"action":"answer","answer":"A. exact option text","workspace_ops":[],'
+            '"supporting_claim_ids":["c1"],"residual_uncertainty":""}. '
+        )
+        answer_rule = (
+            "Never answer by closest match or add facts absent from the supporting observation lineage. If any selected-option "
+            "detail is mismatched or unconfirmed, record it in residual_uncertainty instead of answering.\n"
+        )
+    else:
+        task_description = "long-video free-form QA"
+        answer_schema = (
+            'Answer schema: {"action":"answer","answer":"concise factual answer","workspace_ops":[],'
+            '"supporting_claim_ids":["c1"],"residual_uncertainty":"optional concise caveat"}. '
+        )
+        answer_rule = (
+            "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
+            "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
+        )
+    if not final:
+        action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
+    elif final_attempt <= 1:
+        action_rule = (
+            "Choose exactly one action: read_observations, update_workspace, or answer; investigate is closed. "
+            "Use this call to read any needed existing observations and consolidate them with workspace_ops. "
+            "Answer only with direct support; one non-investigation final call remains if validation fails."
+        )
+    else:
+        action_rule = (
+            "Return action=answer only. Tool use, observation reads, and workspace-only updates are closed. "
+            "Provide the best evidence-grounded answer available and list supporting_claim_ids when valid."
+        )
+    return (
+        f"You are the sole semantic decision maker for {task_description}. The framework only stores observations, "
+        "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
+        "or changes your answer.\n"
+        f"{action_rule}\n"
+        "Return one JSON object. Every action may include workspace_ops. Operation forms:\n"
+        '{"op":"add_claim","claim":{"claim_id":"c1","text":"...",'
+        '"source":"observation|derived|hypothesis","cites":[],"derived_from":[],'
+        '"time_anchor":[0,1],"status":"active|contested","confidence":"high|medium|low",'
+        '"entity_ids":[],"metadata":{}}}; '
+        '{"op":"supersede","claim_id":"c1","superseded_by":"c2"}; '
+        '{"op":"set_status","claim_id":"c1","status":"active|contested|retracted"}; '
+        '{"op":"link_conflict","claim_id":"c1","other_claim_id":"c2"}; '
+        '{"op":"note_interval","time_range":[0,1],"label":"...","claim_ids":["c1"],'
+        '"role":"candidate|supporting|negative","metadata":{}}; '
+        '{"op":"update_entity","entity_id":"person_1","description":"...","aliases":[]}.\n'
+        "An observation claim must cite an attempt_id; a derived claim must name derived_from claim_ids. Keep uncertain "
+        "interpretations as contested/hypothesis claims instead of deleting them.\n"
+        "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or "
+        "time_range. To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and "
+        "arbitration_attempt_id.\n"
+        f"{caption_search_rule}"
+        "When mechanical_status marks caption_occurrence_ambiguous, compare the separate source/time clusters in "
+        "caption_occurrence_sets. A coherent caption chain from one cluster does not establish that it is the requested "
+        "occurrence; inspect identity cues for competing clusters before promotion.\n"
+        "When mechanical_status lists pending_caption_candidates, select the candidate whose query_matches and "
+        "caption_excerpt best cover the unresolved condition, then inspect its time_range with inspection_mode=window; "
+        "rank is retrieval priority, not proof. Caption_search and search_asr attempts cannot directly support an answer.\n"
+        "When recommended_temporal_candidate is present, it is a locator-only join for an explicit after/before/first "
+        "condition. Inspect its full inspection_range before unrelated Caption candidates; do not replace it with only the "
+        "last seconds adjacent to the target event. Then visually verify the target identity, ordering, and requested state; "
+        "the recommendation itself is not answer evidence.\n"
+        "Final supporting_claim_ids must contain only active observation or derived claims that directly support the answer. "
+        "Never include hypothesis claims or locator-only claims as final support.\n"
+        'Investigate schema: {"action":"investigate","tasks":[{"query_id":"r1_t1",'
+        '"goal":"observable question","segment_id":"seg_0001","time_range":null,'
+        '"coordinate_space":"virtual|segment_local","source_video_ids":[],'
+        '"inspection_mode":"window|search_asr|search_caption|arbitrate_observation",'
+        '"search_terms":[],"caption_queries":[],"top_k":12,"index_mode":"lexical|dense|hybrid",'
+        '"expand_neighbors":0,"arbitration_attempt_id":"","force_reinspect":false,'
+        '"expected_evidence":"direct observation","sampling_floor_fps":0.5}],"workspace_ops":[]}. '
+        "time_range defaults to virtual workspace seconds. segment_local requires a known segment_id and is converted with "
+        "an explicit trace; a virtual range outside its named segment is rejected rather than remapped. Use 0.5 fps for "
+        "persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text. When identity, "
+        "ordering, color, text, or a brief transition remains uncertain or mismatches an option, inspect a narrow 2 fps "
+        "visual window before answering; ASR cannot resolve visual attributes.\n"
+        f"{answer_schema}{answer_rule}"
+        f"Question: {kwargs.get('question', '')}\n"
+        f"Options: {json.dumps(options, ensure_ascii=False)}\n"
+        f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
+        f"Mechanical status: {json.dumps(mechanical_status, ensure_ascii=False)}\n"
+        f"Working view:\n{kwargs.get('working_document_view', '')}\n"
+        f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
+    )
+
+
+def _caption_only_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
+    final = bool(kwargs.get("force_finalize"))
+    action_rule = (
+        "Return action=answer with the best caption-grounded answer available."
+        if final
+        else "Choose exactly one action: search or answer."
+    )
+    return (
+        "You are a caption-only control for long-video QA. Visual frames, OCR, ASR, audio, and video inspection are "
+        "forbidden. Use only the question and Caption search results exposed in the Working view.\n"
+        f"{action_rule}\n"
+        'Search schema: {"action":"investigate","tasks":[{"query_id":"caption_1",'
+        '"goal":"locate relevant caption text","inspection_mode":"search_caption",'
+        '"caption_queries":["short query"],"top_k":12,"index_mode":"hybrid"}]}. '
+        'Answer schema: {"action":"answer","answer":"concise factual answer"}. '
+        "Do not request window, search_asr, arbitrate_observation, or any visual task. Return JSON only.\n"
+        f"Question: {kwargs.get('question', '')}\n"
+        f"Remaining search budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
+        f"Working view:\n{kwargs.get('working_document_view', '')}"
+    )
+
+
 def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
+    if str(kwargs.get("measurement_control", "none") or "none") == "caption_only":
+        return _caption_only_reasoner_prompt(kwargs)
+    if str(kwargs.get("controller_mode", "mger") or "mger") == "frozen_baseline":
+        return _frozen_reasoner_prompt(kwargs)
     if str(kwargs.get("evidence_state_mode", "llm_authored") or "llm_authored") == "runtime_derived":
         return _runtime_reasoner_prompt(kwargs)
     final = bool(kwargs.get("force_finalize"))

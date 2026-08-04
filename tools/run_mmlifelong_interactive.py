@@ -14,12 +14,18 @@ from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
 from vcah.model_client import OpenAICompatibleClient
 from vcah.multiround import VirtualVideoMultiRoundDriver
+from vcah.phase5 import Phase5Protocol, blind_prior_prompt
 from vcah.runtime_metrics import agent_run_metrics
 from vcah.virtual_video import VirtualVideoWorkspace
 
 
 def main() -> None:
     args = _parse_args()
+    protocol = Phase5Protocol(
+        controller_mode=args.controller_mode,
+        controller_evidence_visibility=args.controller_evidence_visibility,
+        measurement_control=args.measurement_control,
+    )
     source = VirtualVideoWorkspace.load(Path(args.case_workspace))
     run_root = Path(args.out_dir)
     if run_root.exists() and any(run_root.iterdir()):
@@ -42,6 +48,19 @@ def main() -> None:
     workspace = VirtualVideoWorkspace.load(run_root)
 
     reasoner_api = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.reasoner_section)
+    if protocol.measurement_control == "blind_prior":
+        _run_blind_prior(
+            workspace,
+            source=source,
+            runtime_question=runtime_question,
+            reasoner_api=reasoner_api,
+            protocol=protocol,
+        )
+        return
+    if protocol.controller_mode == "minimal_tool":
+        raise RuntimeError(
+            "minimal_tool is gated by Phase 5 Gate-0 and is not enabled in the measurement-control revision"
+        )
     investigator_api = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.investigator_section)
     embedding_adapter = None
     if args.caption_index_mode in {"dense", "hybrid"}:
@@ -66,20 +85,38 @@ def main() -> None:
         caption_config_digest=args.caption_config_digest,
         caption_query_strategy=args.caption_query_strategy,
     )
+    effective_control_retry_budget = (
+        0 if protocol.controller_mode == "frozen_baseline" else args.control_retry_budget
+    )
+    effective_evidence_control_mode = (
+        args.evidence_control_mode if protocol.controller_mode == "mger" else "shadow"
+    )
+    effective_evidence_state_mode = (
+        args.evidence_state_mode
+        if protocol.controller_mode == "mger"
+        else "llm_authored"
+    )
     driver = VirtualVideoMultiRoundDriver(
-        reasoner=WorkspaceReasoner(reasoner_api, trace_path=trace_path),
+        reasoner=WorkspaceReasoner(
+            reasoner_api,
+            trace_path=trace_path,
+            controller_mode=protocol.controller_mode,
+            controller_evidence_visibility=protocol.controller_evidence_visibility,
+            measurement_control=protocol.measurement_control,
+        ),
         investigator=investigator,
         max_rounds=args.max_rounds,
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
-        control_retry_budget=args.control_retry_budget,
-        require_obligation_coverage=True,
-        require_item_provenance=True,
-        require_evidence_kind_requirements=True,
-        closure_repair_budget=1,
+        control_retry_budget=effective_control_retry_budget,
+        require_obligation_coverage=protocol.controller_mode == "mger",
+        require_item_provenance=protocol.controller_mode == "mger",
+        require_evidence_kind_requirements=protocol.controller_mode == "mger",
+        closure_repair_budget=1 if protocol.controller_mode == "mger" else 0,
         answer_policy=args.answer_policy,
-        evidence_control_mode=args.evidence_control_mode,
-        evidence_state_mode=args.evidence_state_mode,
+        evidence_control_mode=effective_evidence_control_mode,
+        evidence_state_mode=effective_evidence_state_mode,
+        allowed_inspection_modes=protocol.allowed_inspection_modes,
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
@@ -94,16 +131,17 @@ def main() -> None:
     config = {
         "schema_version": "MMLifelongRunConfigV1",
         "case_id": workspace.case.case_id,
+        **protocol.to_dict(),
         "answer_policy": args.answer_policy,
-        "evidence_control_mode": args.evidence_control_mode,
-        "evidence_state_mode": args.evidence_state_mode,
+        "evidence_control_mode": effective_evidence_control_mode,
+        "evidence_state_mode": effective_evidence_state_mode,
         "max_rounds": args.max_rounds,
         "semantic_round_budget": args.max_rounds,
-        "control_retry_budget": args.control_retry_budget,
-        "require_obligation_coverage": True,
-        "require_item_provenance": True,
-        "require_evidence_kind_requirements": True,
-        "closure_repair_budget": 1,
+        "control_retry_budget": effective_control_retry_budget,
+        "require_obligation_coverage": protocol.controller_mode == "mger",
+        "require_item_provenance": protocol.controller_mode == "mger",
+        "require_evidence_kind_requirements": protocol.controller_mode == "mger",
+        "closure_repair_budget": 1 if protocol.controller_mode == "mger" else 0,
         "max_investigations": args.max_investigations,
         "max_tasks_per_round": args.max_tasks_per_round,
         "caption_index_mode": args.caption_index_mode,
@@ -127,6 +165,7 @@ def main() -> None:
             "investigator": investigator_api.model,
         },
         "web_enabled": False,
+        "supporting_interval_source": "explicit_support",
     }
     config["config_digest"] = stable_digest(config)
     _write_json(workspace.root_dir / "run_config.json", config)
@@ -177,6 +216,129 @@ def main() -> None:
     )
 
 
+def _run_blind_prior(
+    workspace: VirtualVideoWorkspace,
+    *,
+    source: VirtualVideoWorkspace,
+    runtime_question: Any,
+    reasoner_api: OpenAICompatibleClient,
+    protocol: Phase5Protocol,
+) -> None:
+    prompt = blind_prior_prompt(workspace.case.question)
+    raw_answer = reasoner_api.chat(prompt, max_tokens=4096)
+    answer = str(raw_answer or "").strip()
+    answer_present = bool(answer)
+    trace_path = workspace.root_dir / "interactions.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "type": "blind_prior_answer",
+                "model": reasoner_api.model,
+                "input_fields": ["question"],
+                "prompt": prompt,
+                "raw": raw_answer,
+                "api_response": reasoner_api.last_response_metadata,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    for name in ("observation_log.jsonl", "workspace_ops.jsonl"):
+        (workspace.root_dir / name).write_text("", encoding="utf-8")
+
+    runtime_metrics: dict[str, float | int | None] = {
+        "answer_rate": float(answer_present),
+        "reference_valid_rate": 0.0,
+        "observed_case_rate": 0.0,
+        "conditional_visual_frames": None,
+        "reasoner_decision_attempt_count": 1,
+        "malformed_decision_count": 0,
+        "malformed_decision_rate": 0.0,
+        "caption_searches": 0,
+        "unique_visual_material_attempts": 0,
+        "visual_interpretation_count": 0,
+        "visual_reinterpretation_count": 0,
+        "visual_frames_inspected": 0,
+        "requested_acquisition_count": 0,
+        "executed_acquisition_count": 0,
+        "silently_dropped_acquisition_count": 0,
+    }
+    config = {
+        "schema_version": "MMLifelongRunConfigV1",
+        "case_id": workspace.case.case_id,
+        **protocol.to_dict(),
+        "answer_policy": "benchmark_best_effort",
+        "evidence_control_mode": "shadow",
+        "evidence_state_mode": "llm_authored",
+        "measurement_input_fields": ["question"],
+        "available_tools": [],
+        "max_rounds": 1,
+        "semantic_round_budget": 1,
+        "control_retry_budget": 0,
+        "require_obligation_coverage": False,
+        "require_item_provenance": False,
+        "require_evidence_kind_requirements": False,
+        "closure_repair_budget": 0,
+        "caption_index_mode": "disabled",
+        "caption_query_strategy": "disabled",
+        "caption_config_digest": None,
+        "embedding": None,
+        "caption_index_digests": [],
+        "implementation_digest": _implementation_digest(),
+        "input_digest": _input_digest(source, runtime_question.to_dict()),
+        "models": {"reasoner": reasoner_api.model, "investigator": None},
+        "web_enabled": False,
+        "supporting_interval_source": "none",
+    }
+    config["config_digest"] = stable_digest(config)
+    _write_json(workspace.root_dir / "run_config.json", config)
+    prediction = prediction_artifact(
+        runtime_question,
+        answer=answer if answer_present else "No answer was returned.",
+        selected_option="",
+        supporting_intervals=(),
+        supporting_attempt_ids=(),
+        answer_present=answer_present,
+        candidate_answer=answer,
+        verified_answer="",
+        verification_status="candidate_only" if answer_present else "missing",
+        grounding_passed=False,
+        grounding_errors=("blind_prior_has_no_observations",),
+        duration_sec=workspace.manifest.duration_sec,
+    )
+    _write_json(workspace.root_dir / "prediction.json", prediction)
+    summary = {
+        "schema_version": "RuntimeSummaryV1",
+        "case_id": workspace.case.case_id,
+        "answer": prediction["answer"],
+        "answer_present": answer_present,
+        "reference_valid": False,
+        "runtime_metrics": runtime_metrics,
+        "config_digest": config["config_digest"],
+    }
+    _write_json(workspace.root_dir / "run_summary.json", summary)
+    _write_json(workspace.root_dir / "runtime_summary.json", summary)
+    print(
+        json.dumps(
+            {
+                "case_id": workspace.case.case_id,
+                "phase5_arm": protocol.arm,
+                "answer_present": answer_present,
+                "prediction": str(workspace.root_dir / "prediction.json"),
+                "runtime_summary": str(workspace.root_dir / "runtime_summary.json"),
+                "runtime_metrics": runtime_metrics,
+                "config_digest": config["config_digest"],
+                "workspace": str(workspace.root_dir),
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def _read_jsonl(path: Path) -> tuple[Mapping[str, Any], ...]:
     return tuple(
         dict(value)
@@ -208,6 +370,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/caption_occurrence.py"),
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
+        Path("src/vcah/phase5.py"),
         Path("src/vcah/evidence_state.py"),
         Path("src/vcah/evidence_runtime.py"),
         Path("src/vcah/sampling.py"),
@@ -253,6 +416,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--reasoner-section", default="investigator_api")
     parser.add_argument("--investigator-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
+    parser.add_argument(
+        "--controller-mode",
+        choices=("frozen_baseline", "minimal_tool", "mger"),
+        default="mger",
+    )
+    parser.add_argument(
+        "--controller-evidence-visibility",
+        choices=("none", "candidates_only", "full"),
+        default="full",
+    )
+    parser.add_argument(
+        "--measurement-control",
+        choices=("none", "blind_prior", "caption_only"),
+        default="none",
+    )
     parser.add_argument("--evidence-control-mode", choices=("shadow", "strict"), default="shadow")
     parser.add_argument(
         "--evidence-state-mode",

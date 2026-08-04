@@ -105,6 +105,8 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
     assert len(aggregates) == 1
     assert aggregates[0]["case_count"] == 2
     assert aggregates[0]["Acc"] == 0.75
+    assert aggregates[0]["mean_score"] == 0.75
+    assert aggregates[0]["exact_correct_rate"] == 0.5
     assert aggregates[0]["Ref@60"] == 50.0
     assert aggregates[0]["reference_valid_rate"] == 0.5
     assert aggregates[0]["caption_result_novelty_rate"] == 0.75
