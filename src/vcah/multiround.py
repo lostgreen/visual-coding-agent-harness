@@ -1191,6 +1191,9 @@ def _resolve_runtime_decision(
         )
         occurrence_id = task.occurrence_id
         locator_attempt_id = task.locator_attempt_id
+        time_range = task.time_range
+        segment_id = task.segment_id
+        source_video_ids = task.source_video_ids
         if occurrence_id:
             occurrence = catalog.resolve_occurrence(occurrence_id)
             if occurrence is None:
@@ -1206,6 +1209,26 @@ def _resolve_runtime_decision(
                 locator_attempt_id = str(
                     occurrence.get("attempt_id", locator_attempt_id) or locator_attempt_id
                 )
+                raw_range = tuple(occurrence.get("time_range", ()) or ())
+                if time_range is None and len(raw_range) == 2:
+                    time_range = tuple(
+                        sorted((float(raw_range[0]), float(raw_range[1])))
+                    )
+                occurrence_segments = tuple(
+                    str(value)
+                    for value in tuple(occurrence.get("segment_ids", ()) or ())
+                    if str(value)
+                )
+                if not segment_id and len(occurrence_segments) == 1:
+                    segment_id = occurrence_segments[0]
+                if not source_video_ids:
+                    source_video_ids = tuple(
+                        str(value)
+                        for value in tuple(
+                            occurrence.get("source_video_ids", ()) or ()
+                        )
+                        if str(value)
+                    )
         temporal_scope_id = task.temporal_scope_id
         if temporal_scope_id:
             resolved_scope = catalog.resolve_scope(temporal_scope_id)
@@ -1242,6 +1265,9 @@ def _resolve_runtime_decision(
                 evidence_kind=evidence_kind,
                 occurrence_id=occurrence_id,
                 locator_attempt_id=locator_attempt_id,
+                time_range=time_range,
+                segment_id=segment_id,
+                source_video_ids=source_video_ids,
                 temporal_scope_id=temporal_scope_id,
                 refine_item_id=refinement.item_id if refinement else task.refine_item_id,
                 refine_interpretation_id=(

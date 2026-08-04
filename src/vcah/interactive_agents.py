@@ -239,6 +239,7 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
     if mode == "window" and not (
         task.segment_id
         or task.time_range
+        or task.occurrence_id
         or task.refine_item_id
         or (task.parent_attempt_id and task.cue_id)
     ):

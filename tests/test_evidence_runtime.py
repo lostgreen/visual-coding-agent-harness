@@ -388,3 +388,50 @@ def test_refine_item_resolves_directly_to_child_refinement(tmp_path: Path) -> No
     assert resolved[0].cue_stage == "child_refinement"
     assert resolved[0].interpretation_purpose == "manual_reread"
     assert resolved[0].time_range == (0.0, 10.0)
+
+
+def test_occurrence_handle_derives_window_target_before_task_resolution() -> None:
+    document = WorkingDocument.with_question_premise("question")
+    compile_evidence_plan(document, EvidencePlan.fallback("question"), question="question")
+    catalog = RuntimeEvidenceCatalog(
+        requirements=(("R1", next(iter(document.obligations))),),
+        materials=(("M1", "attempt_locator"),),
+        items=(),
+        occurrences=(
+            (
+                "O1",
+                {
+                    "occurrence_id": "occurrence_canonical",
+                    "attempt_id": "attempt_locator",
+                    "time_range": [8.0, 12.0],
+                    "segment_ids": ["seg_0001"],
+                    "source_video_ids": ["video-a"],
+                },
+            ),
+        ),
+        scopes=(),
+    )
+
+    decision, errors, _ = _resolve_runtime_decision(
+        ReasonerDecision(
+            action="investigate",
+            tasks=(
+                InvestigationTask(
+                    query_id="inspect_occurrence",
+                    goal="Inspect the occurrence.",
+                    occurrence_id="O1",
+                    requirement_id="R1",
+                ),
+            ),
+        ),
+        catalog,
+        document,
+    )
+
+    assert errors == []
+    task = decision.tasks[0]
+    assert task.occurrence_id == "occurrence_canonical"
+    assert task.locator_attempt_id == "attempt_locator"
+    assert task.time_range == (8.0, 12.0)
+    assert task.segment_id == "seg_0001"
+    assert task.source_video_ids == ("video-a",)

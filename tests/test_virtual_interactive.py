@@ -216,6 +216,42 @@ def test_runtime_derived_prompt_uses_semantic_handles_without_state_transactions
     assert 0 < metadata["prompt_schema_token_cost"] < 1000
 
 
+def test_runtime_reasoner_accepts_occurrence_only_window_task(tmp_path: Path) -> None:
+    api = FakeAPI(
+        (
+            json.dumps(
+                {
+                    "action": "investigate",
+                    "tasks": [
+                        {
+                            "goal": "Inspect the selected occurrence.",
+                            "inspection_mode": "window",
+                            "requirement": "R1",
+                            "occurrence_id": "O2",
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="What happens next?",
+        options={},
+        remaining_budget=4,
+        force_finalize=False,
+        evidence_state_mode="runtime_derived",
+        mechanical_status={},
+        working_document_view="CANDIDATES\nO2 [8,12]",
+        workspace_overview={},
+    )
+
+    assert len(decision.tasks) == 1
+    assert decision.tasks[0].occurrence_id == "O2"
+    assert reasoner.consume_decision_metadata()["task_resolution_errors"] == []
+
+
 @pytest.mark.parametrize("wrapper", ("response", "responses", "items"))
 def test_reasoner_unwraps_valid_decision_wrappers(tmp_path: Path, wrapper: str) -> None:
     payload = {
