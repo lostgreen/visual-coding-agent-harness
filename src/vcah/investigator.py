@@ -22,6 +22,15 @@ from vcah.virtual_video import (
 from vcah.workspace import evidence_attempt_id
 
 
+INTERPRETATION_PURPOSES = {
+    "primary",
+    "deliberate_arbitration",
+    "cue_verification",
+    "control_retry",
+    "manual_reread",
+}
+
+
 @dataclass(frozen=True)
 class ObservationAttempt:
     """One immutable inspection interpretation of identifiable source material."""
@@ -44,6 +53,7 @@ class ObservationAttempt:
     raw_output: str = ""
     round_id: str = ""
     source_video_ids: tuple[str, ...] = ()
+    interpretation_purpose: str = "primary"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "attempt_id", str(self.attempt_id or "").strip())
@@ -85,6 +95,10 @@ class ObservationAttempt:
         object.__setattr__(self, "prompt_digest", str(self.prompt_digest or "").strip())
         object.__setattr__(self, "raw_output", str(self.raw_output or ""))
         object.__setattr__(self, "round_id", str(self.round_id or "").strip())
+        purpose = str(self.interpretation_purpose or "primary").strip().casefold()
+        if purpose not in INTERPRETATION_PURPOSES:
+            raise ValueError(f"invalid interpretation_purpose: {purpose}")
+        object.__setattr__(self, "interpretation_purpose", purpose)
         object.__setattr__(
             self,
             "source_video_ids",
@@ -157,7 +171,18 @@ class VirtualVideoInvestigator:
         self._visit_count = 0
 
     def run_batch(self, tasks: Sequence[Any]) -> tuple[InvestigationReport, ...]:
-        return tuple(self._investigate_task(task) for task in tasks)
+        reports = []
+        for task in tasks:
+            report = self._investigate_task(task)
+            purpose = str(getattr(task, "interpretation_purpose", "primary") or "primary")
+            attempts = tuple(
+                replace(attempt, interpretation_purpose=purpose)
+                if attempt.interpretation_purpose == "primary" and purpose != "primary"
+                else attempt
+                for attempt in report.attempts
+            )
+            reports.append(replace(report, attempts=attempts))
+        return tuple(reports)
 
     def reset_run_state(self) -> None:
         self._visit_count = 0

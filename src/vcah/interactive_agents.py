@@ -213,6 +213,7 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
+        interpretation_purpose=str(value.get("interpretation_purpose", "primary") or "primary"),
     )
     if mode == "search_asr" and not task.search_terms:
         return None
@@ -225,16 +226,70 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
     return task
 
 
-def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str, Any]:
+def _normalize_decision(
+    value: Mapping[str, Any],
+    *,
+    round_id: int,
+    task_errors: list[dict[str, Any]] | None = None,
+    decision_errors: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     payload = dict(value)
-    raw_tasks = payload.get("tasks", ()) or ()
+    raw_tasks = payload.get("tasks", ())
+    if raw_tasks is None:
+        raw_tasks = ()
     tasks = []
+    normalized_task_errors = task_errors if task_errors is not None else []
+    normalized_decision_errors = decision_errors if decision_errors is not None else []
     if isinstance(raw_tasks, Sequence) and not isinstance(raw_tasks, (str, bytes)):
         for index, row in enumerate(raw_tasks, start=1):
+            requested_task_id = (
+                str(row.get("query_id", row.get("id", "")) or "").strip()
+                if isinstance(row, Mapping)
+                else ""
+            ) or f"r{round_id}_t{index}"
             if isinstance(row, Mapping):
-                normalized = _task(row, round_id=round_id, index=index)
+                try:
+                    normalized = _task(row, round_id=round_id, index=index)
+                except (TypeError, ValueError) as exc:
+                    normalized = None
+                    error_detail = str(exc)
+                else:
+                    error_detail = "task is missing required or executable fields"
                 if normalized is not None:
                     tasks.append(normalized)
+                    continue
+            else:
+                error_detail = "task must be a JSON object"
+            normalized_task_errors.append(
+                {
+                    "requested_task_id": requested_task_id,
+                    "code": "task_schema_invalid",
+                    "detail": error_detail,
+                    "task_index": index,
+                }
+            )
+    else:
+        normalized_decision_errors.append(
+            {"code": "tasks_must_be_array", "field": "tasks"}
+        )
+    raw_workspace_ops = payload.get("workspace_ops", payload.get("ops", ()))
+    if raw_workspace_ops is None:
+        raw_workspace_ops = ()
+    if not isinstance(raw_workspace_ops, Sequence) or isinstance(raw_workspace_ops, (str, bytes)):
+        normalized_decision_errors.append(
+            {"code": "workspace_ops_must_be_array", "field": "workspace_ops"}
+        )
+        raw_workspace_ops = ()
+    else:
+        for index, operation in enumerate(raw_workspace_ops):
+            if not isinstance(operation, Mapping):
+                normalized_decision_errors.append(
+                    {
+                        "code": "workspace_op_must_be_object",
+                        "field": "workspace_ops",
+                        "workspace_op_index": index,
+                    }
+                )
     action = str(payload.get("action", "") or "").strip().casefold()
     if action not in _DECISION_ACTIONS:
         action = "update_workspace"
@@ -243,7 +298,7 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
         "tasks": tuple(tasks),
         "answer": payload.get("answer", ""),
         "citations": tuple(str(item) for item in payload.get("citations", ()) or () if str(item).strip()),
-        "workspace_ops": tuple(dict(item) for item in payload.get("workspace_ops", payload.get("ops", ())) or () if isinstance(item, Mapping)),
+        "workspace_ops": tuple(dict(item) for item in raw_workspace_ops if isinstance(item, Mapping)),
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
         "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
         "observation_requests": tuple(dict(item) for item in payload.get("observation_requests", ()) or () if isinstance(item, Mapping)),
@@ -262,15 +317,24 @@ class WorkspaceReasoner:
         self.api = api
         self.trace_path = trace_path
         self.calls = 0
+        self._last_decision_metadata: dict[str, Any] = {}
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
+        self._last_decision_metadata = {}
+        semantic_round = int(kwargs.get("semantic_round", self.calls) or self.calls)
+        control_attempt = int(kwargs.get("control_attempt", 0) or 0)
         prompt = _reasoner_prompt(kwargs)
         raw = self.api.chat(prompt, max_tokens=_completion_budget(2200))
         api_response = dict(self.api.last_response_metadata)
         parsed = _parse_json(raw)
         payload = _decision_payload(parsed)
-        repair_attempted = not payload
+        repair_needed = not payload
+        control_retries_remaining = max(
+            0,
+            int(kwargs.get("control_retries_remaining", 1) or 0),
+        )
+        repair_attempted = repair_needed and control_retries_remaining > 0
         repaired = False
         if repair_attempted:
             repair_prompt = (
@@ -288,6 +352,8 @@ class WorkspaceReasoner:
                 {
                     "type": "reasoner_json_repair",
                     "round": self.calls,
+                    "semantic_round": semantic_round,
+                    "control_attempt": control_attempt,
                     "prompt": repair_prompt,
                     "raw": repaired_raw,
                     "parsed": repaired_parsed,
@@ -296,14 +362,33 @@ class WorkspaceReasoner:
                     "time": time.time(),
                 },
             )
-        value = _normalize_decision(payload or {"action": "update_workspace"}, round_id=self.calls)
+        task_errors: list[dict[str, Any]] = []
+        decision_errors: list[dict[str, Any]] = []
+        value = _normalize_decision(
+            payload or {"action": "update_workspace"},
+            round_id=semantic_round,
+            task_errors=task_errors,
+            decision_errors=decision_errors,
+        )
         value["answer"] = _answer(value["answer"], dict(kwargs.get("options") or {}))
         decision = ReasonerDecision(**value)
+        if not payload:
+            decision_errors.append({"code": "invalid_json_or_missing_action"})
+        self._last_decision_metadata = {
+            "decision_payload_valid": bool(payload),
+            "decision_schema_errors": decision_errors,
+            "task_resolution_errors": task_errors,
+            "internal_control_retry_count": int(repair_attempted),
+            "format_repaired": repaired,
+            "repair_failed": not bool(payload),
+        }
         _append_jsonl(
             self.trace_path,
             {
                 "type": "reasoner_workspace",
                 "round": self.calls,
+                "semantic_round": semantic_round,
+                "control_attempt": control_attempt,
                 "model": self.api.model,
                 "prompt": prompt,
                 "raw": raw,
@@ -311,12 +396,17 @@ class WorkspaceReasoner:
                 "decision_payload": payload,
                 "schema_unwrapped": bool(payload and payload != parsed),
                 "format_repaired": repaired,
-                "repair_failed": repair_attempted and not payload,
+                "repair_failed": not bool(payload),
                 "api_response": api_response,
                 "time": time.time(),
             },
         )
         return decision
+
+    def consume_decision_metadata(self) -> Mapping[str, Any]:
+        metadata = dict(self._last_decision_metadata)
+        self._last_decision_metadata = {}
+        return metadata
 
 class VisionInvestigator(VirtualVideoInvestigator):
     """Observation-only visual agent; it never evaluates options or claims."""
@@ -1391,6 +1481,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             prompt_digest=prompt_digest(prompt),
             raw_output=raw,
             source_video_ids=source_video_ids,
+            interpretation_purpose="deliberate_arbitration",
         )
         _append_jsonl(
             self.trace_path,
@@ -1461,6 +1552,14 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    control_retry = bool(kwargs.get("control_retry"))
+    control_retry_rule = ""
+    if control_retry:
+        control_retry_rule = (
+            "This is a control-plane retry of the same semantic round. Correct the schema or mechanical references described "
+            "in the Working view while preserving the prior semantic intent. Return one Decision JSON object only; do not "
+            "add a new investigation merely because this is a retry.\n"
+        )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()
@@ -1522,6 +1621,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
         "or changes your answer.\n"
         f"{action_rule}\n"
+        f"{control_retry_rule}"
         "Return one JSON object. Every action may include workspace_ops. Operation forms:\n"
         "{\"op\":\"add_claim\",\"claim\":{\"claim_id\":\"c1\",\"text\":\"...\","
         "\"source\":\"observation|derived|hypothesis\",\"cites\":[],\"derived_from\":[],"
@@ -1533,6 +1633,8 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "{\"op\":\"note_interval\",\"time_range\":[0,1],\"label\":\"...\",\"claim_ids\":[\"c1\"],"
         "\"role\":\"candidate|supporting|negative\",\"metadata\":{}}; "
         "{\"op\":\"update_entity\",\"entity_id\":\"person_1\",\"description\":\"...\",\"aliases\":[]}.\n"
+        "Never put investigate, read_observations, update_workspace, answer, or tasks inside workspace_ops; these belong at "
+        "the top level of the Decision object.\n"
         "An observation claim must cite an attempt_id; a derived claim must name "
         "derived_from claim_ids. Keep uncertain interpretations as contested/hypothesis claims instead of deleting them.\n"
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "

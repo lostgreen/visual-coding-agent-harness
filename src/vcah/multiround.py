@@ -5,7 +5,12 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from vcah.investigator import InvestigationReport, ObservationAttempt, VirtualVideoInvestigator
+from vcah.investigator import (
+    INTERPRETATION_PURPOSES,
+    InvestigationReport,
+    ObservationAttempt,
+    VirtualVideoInvestigator,
+)
 from vcah.memory import EvidenceStore
 from vcah.runtime_metrics import export_supporting_intervals
 from vcah.types import EvidenceRecord, to_jsonable
@@ -52,6 +57,7 @@ class InvestigationTask:
     sampling_floor_fps: float | None = None
     arbitration_attempt_id: str = ""
     force_reinspect: bool = False
+    interpretation_purpose: str = "primary"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query_id", str(self.query_id or "").strip())
@@ -106,6 +112,12 @@ class InvestigationTask:
         )
         object.__setattr__(self, "arbitration_attempt_id", str(self.arbitration_attempt_id or "").strip())
         object.__setattr__(self, "force_reinspect", bool(self.force_reinspect))
+        purpose = str(self.interpretation_purpose or "primary").strip().casefold()
+        if mode == "arbitrate_observation":
+            purpose = "deliberate_arbitration"
+        if purpose not in INTERPRETATION_PURPOSES:
+            raise ValueError(f"unsupported interpretation_purpose: {purpose}")
+        object.__setattr__(self, "interpretation_purpose", purpose)
 
 
 @dataclass(frozen=True)
@@ -183,6 +195,8 @@ class VirtualVideoMultiRoundDriver:
         max_rounds: int = 4,
         max_investigations: int = 20,
         max_tasks_per_round: int = 4,
+        semantic_round_budget: int | None = None,
+        control_retry_budget: int = 2,
         answer_policy: str = "strict",
     ) -> None:
         if reasoner is None:
@@ -191,7 +205,10 @@ class VirtualVideoMultiRoundDriver:
             raise ValueError("VirtualVideoMultiRoundDriver requires an Investigator")
         self.reasoner = reasoner
         self.investigator = investigator
-        self.max_rounds = max(1, int(max_rounds))
+        semantic_budget = max_rounds if semantic_round_budget is None else semantic_round_budget
+        self.semantic_round_budget = max(1, int(semantic_budget))
+        self.max_rounds = self.semantic_round_budget
+        self.control_retry_budget = max(0, int(control_retry_budget))
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
         policy = str(answer_policy or "strict").strip().casefold()
@@ -223,9 +240,9 @@ class VirtualVideoMultiRoundDriver:
         final_answer: ReasonerDecision | None = None
         latest_answer_candidate: ReasonerDecision | None = None
         forced_decision_calls = 0
+        protocol_exhausted = False
 
-        for round_id in range(1, self.max_rounds + 3):
-            rounds_run = round_id
+        for round_id in range(1, self.semantic_round_budget + 3):
             remaining = max(0, self.max_investigations - completed_investigations)
             runtime_status = (
                 dict(investigator.mechanical_status())
@@ -238,78 +255,224 @@ class VirtualVideoMultiRoundDriver:
                 observation_log,
                 runtime_status=runtime_status,
             )
-            force_finalize = round_id > self.max_rounds or remaining <= 0
+            force_finalize = round_id > self.semantic_round_budget or remaining <= 0
             if force_finalize:
                 forced_decision_calls += 1
             final_retry_available = force_finalize and forced_decision_calls < 2
-            raw_decision = _decision(self.reasoner.decide(
-                question=workspace.case.question,
-                options=dict(workspace.case.options),
-                workspace_overview=overview,
-                working_document_view=render_working_view(
-                    document,
-                    observation_log,
-                    requested_observations=requested_observations,
-                    feedback=feedback,
-                ),
-                mechanical_status=status,
-                remaining_budget=remaining,
-                force_finalize=force_finalize,
-                final_attempt=forced_decision_calls if force_finalize else 0,
-                answer_policy=self.answer_policy,
-            ))
-
-            decision = raw_decision
-            if decision.action == "answer" and decision.answer:
-                latest_answer_candidate = decision
-            answer_workspace_commit = bool(
-                force_finalize
-                and decision.action == "answer"
-                and decision.answer
-                and decision.workspace_ops
-            )
-
-            apply_result = document.apply_ops(
-                decision.workspace_ops,
-                observation_ids=observation_log.attempt_ids,
-            )
-            if decision.workspace_ops:
-                append_workspace_history(
-                    history_path,
+            control_attempt = 0
+            control_retries_used = 0
+            decision_had_control_retry = False
+            decision: ReasonerDecision | None = None
+            requested_rows: tuple[Mapping[str, Any], ...] = ()
+            while True:
+                raw_decision = self.reasoner.decide(
+                    question=workspace.case.question,
+                    options=dict(workspace.case.options),
+                    workspace_overview=overview,
+                    working_document_view=render_working_view(
+                        document,
+                        observation_log,
+                        requested_observations=requested_observations,
+                        feedback=feedback,
+                    ),
+                    mechanical_status=status,
+                    remaining_budget=remaining,
+                    force_finalize=force_finalize,
+                    final_attempt=forced_decision_calls if force_finalize else 0,
+                    answer_policy=self.answer_policy,
+                    semantic_round=round_id,
+                    control_attempt=control_attempt,
+                    control_retry=control_attempt > 0,
+                    control_retries_remaining=max(
+                        0,
+                        self.control_retry_budget - control_retries_used,
+                    ),
+                )
+                decision_metadata = _consume_decision_metadata(self.reasoner)
+                internal_retries = max(
+                    0,
+                    int(decision_metadata.get("internal_control_retry_count", 0) or 0),
+                )
+                if internal_retries:
+                    control_retries_used += internal_retries
+                    decision_had_control_retry = True
+                    trace.append(
+                        {
+                            "type": "control_retry",
+                            "round": round_id,
+                            "control_attempt": control_attempt,
+                            "source": "reasoner_json_repair",
+                            "count": internal_retries,
+                            "succeeded": bool(decision_metadata.get("format_repaired")),
+                        }
+                    )
+                _append_normalization_task_outcomes(
+                    trace,
                     round_id=round_id,
-                    operations=decision.workspace_ops,
-                    result=apply_result,
+                    control_attempt=control_attempt,
+                    errors=tuple(decision_metadata.get("task_resolution_errors", ()) or ()),
+                )
+                schema_errors = _schema_error_rows(
+                    decision_metadata.get("decision_schema_errors", ())
+                )
+                try:
+                    parsed_decision = _decision(raw_decision)
+                except (TypeError, ValueError) as exc:
+                    parsed_decision = None
+                    schema_errors.append(
+                        {"code": "invalid_decision_payload", "detail": str(exc)}
+                    )
+                if parsed_decision is not None:
+                    schema_errors.extend(_decision_preflight(parsed_decision))
+                    if parsed_decision.action == "answer" and parsed_decision.answer:
+                        latest_answer_candidate = parsed_decision
+                if schema_errors:
+                    _append_preflight_task_outcomes(
+                        trace,
+                        schema_errors,
+                        round_id=round_id,
+                        control_attempt=control_attempt,
+                    )
+                    trace.append(
+                        {
+                            "type": "decision_schema_error",
+                            "round": round_id,
+                            "control_attempt": control_attempt,
+                            "code": schema_errors[0]["code"],
+                            "errors": schema_errors,
+                        }
+                    )
+                    if control_retries_used >= self.control_retry_budget:
+                        trace.append(
+                            {
+                                "type": "decision_control_exhausted",
+                                "round": round_id,
+                                "control_retry_budget": self.control_retry_budget,
+                                "errors": schema_errors,
+                            }
+                        )
+                        protocol_exhausted = True
+                        break
+                    control_retries_used += 1
+                    control_attempt += 1
+                    decision_had_control_retry = True
+                    trace.append(
+                        {
+                            "type": "control_retry",
+                            "round": round_id,
+                            "control_attempt": control_attempt,
+                            "source": "decision_preflight",
+                            "count": 1,
+                            "succeeded": None,
+                        }
+                    )
+                    feedback = _control_retry_feedback(
+                        schema_errors,
+                        revision=document.revision,
+                        previous_feedback=feedback,
+                    )
+                    continue
+
+                decision = parsed_decision
+                assert decision is not None
+                requested_rows = _read_observations(
+                    observation_log,
+                    decision.observation_requests,
+                )
+                answer_workspace_commit = bool(
+                    force_finalize
+                    and decision.action == "answer"
+                    and decision.answer
+                    and decision.workspace_ops
+                )
+                apply_result = document.apply_ops(
+                    decision.workspace_ops,
+                    observation_ids=observation_log.attempt_ids,
+                )
+                if decision.workspace_ops:
+                    append_workspace_history(
+                        history_path,
+                        round_id=f"{round_id}.{control_attempt}",
+                        operations=decision.workspace_ops,
+                        result=apply_result,
+                    )
+                    if apply_result.accepted:
+                        document.save(document_path)
+                trace.append(
+                    {
+                        "type": "reasoner_decision",
+                        "round": round_id,
+                        "semantic_round": round_id,
+                        "control_attempt": control_attempt,
+                        "control_retry_count": control_retries_used,
+                        "semantic_committed": apply_result.accepted,
+                        "action": decision.action,
+                        "tasks": [_task_descriptor(task) for task in decision.tasks],
+                        "workspace_revision": document.revision,
+                        "workspace_ops_accepted": apply_result.accepted,
+                        "workspace_errors": list(apply_result.errors),
+                        "supporting_claim_ids": list(decision.supporting_claim_ids),
+                        "remaining_budget": remaining,
+                        "force_finalize": force_finalize,
+                        "final_attempt": forced_decision_calls if force_finalize else 0,
+                        "answer_workspace_commit": answer_workspace_commit,
+                    }
                 )
                 if apply_result.accepted:
-                    document.save(document_path)
-            requested_rows = _read_observations(observation_log, decision.observation_requests)
-            trace.append(
-                {
-                    "type": "reasoner_decision",
-                    "round": round_id,
-                    "action": decision.action,
-                    "tasks": [_task_descriptor(task) for task in decision.tasks],
-                    "workspace_revision": document.revision,
-                    "workspace_ops_accepted": apply_result.accepted,
-                    "workspace_errors": list(apply_result.errors),
-                    "supporting_claim_ids": list(decision.supporting_claim_ids),
-                    "remaining_budget": remaining,
-                    "force_finalize": force_finalize,
-                    "final_attempt": forced_decision_calls if force_finalize else 0,
-                    "answer_workspace_commit": answer_workspace_commit,
-                }
-            )
-
-            if not apply_result.accepted:
-                feedback = {
-                    "type": "workspace_ops_rejected",
-                    "errors": list(apply_result.errors),
-                    "revision": document.revision,
-                }
-                requested_observations = requested_rows
-                if force_finalize and not final_retry_available:
+                    rounds_run = round_id
                     break
-                continue
+
+                workspace_errors = [
+                    {
+                        "code": "workspace_transaction_rejected",
+                        "detail": error,
+                    }
+                    for error in apply_result.errors
+                ] or [{"code": "workspace_transaction_rejected"}]
+                trace.append(
+                    {
+                        "type": "decision_schema_error",
+                        "round": round_id,
+                        "control_attempt": control_attempt,
+                        "code": "workspace_transaction_rejected",
+                        "errors": workspace_errors,
+                    }
+                )
+                requested_observations = requested_rows
+                if control_retries_used >= self.control_retry_budget:
+                    trace.append(
+                        {
+                            "type": "decision_control_exhausted",
+                            "round": round_id,
+                            "control_retry_budget": self.control_retry_budget,
+                            "errors": workspace_errors,
+                        }
+                    )
+                    protocol_exhausted = True
+                    break
+                control_retries_used += 1
+                control_attempt += 1
+                decision_had_control_retry = True
+                trace.append(
+                    {
+                        "type": "control_retry",
+                        "round": round_id,
+                        "control_attempt": control_attempt,
+                        "source": "workspace_transaction_repair",
+                        "count": 1,
+                        "succeeded": None,
+                    }
+                )
+                feedback = _control_retry_feedback(
+                    workspace_errors,
+                    revision=document.revision,
+                    previous_feedback=feedback,
+                )
+
+            if protocol_exhausted:
+                break
+            if decision is None:
+                break
 
             if decision.action == "answer":
                 candidate = replace(
@@ -353,6 +516,18 @@ class VirtualVideoMultiRoundDriver:
                 continue
 
             if force_finalize:
+                task_requests = _append_task_requests(
+                    trace,
+                    decision.tasks,
+                    round_id=round_id,
+                    control_attempt=control_attempt,
+                )
+                _append_closed_task_outcomes(
+                    trace,
+                    task_requests,
+                    round_id=round_id,
+                    code="investigation_closed",
+                )
                 feedback = {
                     "type": "finalization_repair_required",
                     "reason": "investigation_closed",
@@ -364,13 +539,20 @@ class VirtualVideoMultiRoundDriver:
                     continue
                 break
 
-            requested_tasks = tuple(task for task in decision.tasks if _task_is_executable(task))
+            task_requests = _append_task_requests(
+                trace,
+                decision.tasks,
+                round_id=round_id,
+                control_attempt=control_attempt,
+            )
             resolution_errors: list[dict[str, Any]] = []
+            task_resolutions: list[dict[str, Any]] = []
             tasks = _resolve_tasks(
                 workspace,
-                requested_tasks,
+                decision.tasks,
                 limit=min(self.max_tasks_per_round, remaining),
                 errors=resolution_errors,
+                resolutions=task_resolutions,
             )
             if resolution_errors:
                 trace.append(
@@ -378,10 +560,18 @@ class VirtualVideoMultiRoundDriver:
                         "type": "task_resolution",
                         "round": round_id,
                         "resolved_task_count": len(tasks),
+                        "resolutions": task_resolutions,
                         "errors": resolution_errors,
                     }
                 )
-            if decision.action != "investigate" or not tasks:
+            if not tasks:
+                _append_task_outcomes(
+                    trace,
+                    task_requests,
+                    task_resolutions,
+                    (),
+                    round_id=round_id,
+                )
                 feedback = {
                     "type": "task_validation",
                     "reason": "reasoner_tasks_not_executable",
@@ -391,7 +581,22 @@ class VirtualVideoMultiRoundDriver:
                 requested_observations = requested_rows
                 continue
 
+            if decision_had_control_retry:
+                tasks = tuple(
+                    replace(task, interpretation_purpose="control_retry")
+                    if task.interpretation_purpose == "primary"
+                    else task
+                    for task in tasks
+                )
             batch = investigator.run_batch(tasks)
+            batch = _stamp_interpretation_purposes(batch, tasks)
+            _append_task_outcomes(
+                trace,
+                task_requests,
+                task_resolutions,
+                batch,
+                round_id=round_id,
+            )
             completed = sum(_report_completed(report) for report in batch)
             completed_investigations += completed
             reports.extend(batch)
@@ -518,6 +723,13 @@ class VirtualVideoMultiRoundDriver:
                 "workspace_history_path": str(history_path),
             }
         )
+        task_ledger = _task_ledger_validation(trace)
+        trace.append({"type": "task_ledger_validation", **task_ledger})
+        if task_ledger["silently_dropped_acquisition_count"]:
+            raise RuntimeError(
+                "task request ledger contains acquisitions without terminal outcomes: "
+                + ", ".join(task_ledger["missing_ledger_ids"])
+            )
         result = MultiRoundResult(
             case_id=workspace.case.case_id,
             answer=answer,
@@ -543,6 +755,349 @@ class VirtualVideoMultiRoundDriver:
         )
         _write_run_summary(workspace, result)
         return result
+
+
+def _consume_decision_metadata(reasoner: Any) -> dict[str, Any]:
+    consume = getattr(reasoner, "consume_decision_metadata", None)
+    if not callable(consume):
+        return {}
+    value = consume()
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _schema_error_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, Mapping):
+        values: Sequence[Any] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        values = value
+    elif value:
+        values = (value,)
+    else:
+        values = ()
+    rows = []
+    for item in values:
+        row = dict(item) if isinstance(item, Mapping) else {"detail": str(item)}
+        row["code"] = str(row.get("code", "decision_schema_invalid") or "decision_schema_invalid")
+        rows.append(row)
+    return rows
+
+
+def _decision_preflight(decision: ReasonerDecision) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    action_names = {"investigate", "read_observations", "update_workspace", "answer"}
+    for index, operation in enumerate(decision.workspace_ops):
+        op_type = str(operation.get("op", operation.get("type", "")) or "").strip().casefold()
+        nested_action = str(operation.get("action", "") or "").strip().casefold()
+        if op_type in action_names or nested_action in action_names:
+            nested_tasks = operation.get("tasks", ())
+            if not isinstance(nested_tasks, Sequence) or isinstance(
+                nested_tasks,
+                (str, bytes),
+            ):
+                nested_tasks = ()
+            errors.append(
+                {
+                    "code": "action_like_op_inside_workspace_ops",
+                    "workspace_op_index": index,
+                    "op": op_type or nested_action,
+                    "requested_task_ids": [
+                        str(task.get("query_id", task.get("id", "")) or "").strip()
+                        or f"workspace_op_{index}_task_{task_index}"
+                        for task_index, task in enumerate(nested_tasks, start=1)
+                        if isinstance(task, Mapping)
+                    ],
+                }
+            )
+    if decision.tasks and decision.action != "investigate":
+        errors.append(
+            {
+                "code": "tasks_outside_investigate_action",
+                "action": decision.action,
+                "requested_task_ids": [task.query_id for task in decision.tasks],
+            }
+        )
+    if decision.action == "investigate" and not decision.tasks:
+        errors.append({"code": "investigate_action_requires_tasks"})
+    return errors
+
+
+def _control_retry_feedback(
+    errors: Sequence[Mapping[str, Any]],
+    *,
+    revision: int,
+    previous_feedback: Mapping[str, Any],
+) -> dict[str, Any]:
+    codes = [str(error.get("code", "decision_schema_invalid")) for error in errors]
+    return {
+        "type": "decision_control_retry",
+        "cause": (
+            "workspace_ops_rejected"
+            if "workspace_transaction_rejected" in codes
+            else "decision_schema_error"
+        ),
+        "errors": [dict(error) for error in errors],
+        "revision": revision,
+        "previous_feedback_type": str(previous_feedback.get("type", "") or ""),
+        "instruction": "Preserve the semantic intent and return one corrected Decision JSON object.",
+    }
+
+
+def _append_normalization_task_outcomes(
+    trace: list[Mapping[str, Any]],
+    *,
+    round_id: int,
+    control_attempt: int,
+    errors: Sequence[Any],
+) -> None:
+    for index, raw_error in enumerate(errors, start=1):
+        error = (
+            dict(raw_error)
+            if isinstance(raw_error, Mapping)
+            else {"code": "task_schema_invalid", "detail": str(raw_error)}
+        )
+        requested_task_id = str(
+            error.get("requested_task_id", f"normalized_task_{index}")
+            or f"normalized_task_{index}"
+        )
+        ledger_id = (
+            f"semantic_{round_id}:control_{control_attempt}:"
+            f"normalized_{index}:{requested_task_id}"
+        )
+        trace.append(
+            {
+                "type": "task_request",
+                "round": round_id,
+                "control_attempt": control_attempt,
+                "ledger_id": ledger_id,
+                "requested_task_id": requested_task_id,
+                "origin": "reasoner_normalization",
+            }
+        )
+        trace.append(
+            {
+                "type": "task_outcome",
+                "round": round_id,
+                "ledger_id": ledger_id,
+                "requested_task_id": requested_task_id,
+                "status": "explicit_resolution_error",
+                "errors": [error],
+            }
+        )
+
+
+def _append_preflight_task_outcomes(
+    trace: list[Mapping[str, Any]],
+    errors: Sequence[Mapping[str, Any]],
+    *,
+    round_id: int,
+    control_attempt: int,
+) -> None:
+    outcome_index = 0
+    for error in errors:
+        for requested_task_id in tuple(error.get("requested_task_ids", ()) or ()):
+            outcome_index += 1
+            task_id = str(requested_task_id or f"preflight_task_{outcome_index}")
+            ledger_id = (
+                f"semantic_{round_id}:control_{control_attempt}:"
+                f"preflight_{outcome_index}:{task_id}"
+            )
+            trace.append(
+                {
+                    "type": "task_request",
+                    "round": round_id,
+                    "control_attempt": control_attempt,
+                    "ledger_id": ledger_id,
+                    "requested_task_id": task_id,
+                    "origin": "decision_preflight",
+                }
+            )
+            trace.append(
+                {
+                    "type": "task_outcome",
+                    "round": round_id,
+                    "ledger_id": ledger_id,
+                    "requested_task_id": task_id,
+                    "status": "explicit_resolution_error",
+                    "errors": [
+                        {
+                            "requested_task_id": task_id,
+                            "code": str(error.get("code", "decision_schema_invalid")),
+                        }
+                    ],
+                }
+            )
+
+
+def _append_task_requests(
+    trace: list[Mapping[str, Any]],
+    tasks: Sequence[InvestigationTask],
+    *,
+    round_id: int,
+    control_attempt: int,
+) -> tuple[dict[str, Any], ...]:
+    rows = []
+    for index, task in enumerate(tasks, start=1):
+        requested_task_id = task.query_id or f"task_{index}"
+        row = {
+            "round": round_id,
+            "control_attempt": control_attempt,
+            "ledger_id": (
+                f"semantic_{round_id}:control_{control_attempt}:"
+                f"task_{index}:{requested_task_id}"
+            ),
+            "requested_task_id": requested_task_id,
+            "task": _task_descriptor(task),
+            "origin": "reasoner_decision",
+        }
+        rows.append(row)
+        trace.append({"type": "task_request", **row})
+    return tuple(rows)
+
+
+def _append_closed_task_outcomes(
+    trace: list[Mapping[str, Any]],
+    requests: Sequence[Mapping[str, Any]],
+    *,
+    round_id: int,
+    code: str,
+) -> None:
+    for request in requests:
+        trace.append(
+            {
+                "type": "task_outcome",
+                "round": round_id,
+                "ledger_id": request["ledger_id"],
+                "requested_task_id": request["requested_task_id"],
+                "status": "explicit_resolution_error",
+                "errors": [
+                    {
+                        "requested_task_id": request["requested_task_id"],
+                        "code": code,
+                    }
+                ],
+            }
+        )
+
+
+def _append_task_outcomes(
+    trace: list[Mapping[str, Any]],
+    requests: Sequence[Mapping[str, Any]],
+    resolutions: Sequence[Mapping[str, Any]],
+    reports: Sequence[InvestigationReport],
+    *,
+    round_id: int,
+) -> None:
+    reports_by_query: dict[str, list[InvestigationReport]] = {}
+    for report in reports:
+        reports_by_query.setdefault(report.query_id, []).append(report)
+    for index, request in enumerate(requests):
+        resolution = (
+            dict(resolutions[index])
+            if index < len(resolutions)
+            else {
+                "requested_task_id": request["requested_task_id"],
+                "status": "explicit_resolution_error",
+                "resolved_task_ids": [],
+                "errors": [
+                    {
+                        "requested_task_id": request["requested_task_id"],
+                        "code": "internal_resolution_outcome_missing",
+                    }
+                ],
+            }
+        )
+        resolved_task_ids = [
+            str(item) for item in tuple(resolution.get("resolved_task_ids", ()) or ())
+        ]
+        missing_reports = [
+            task_id for task_id in resolved_task_ids if task_id not in reports_by_query
+        ]
+        resolution_errors = [
+            dict(error)
+            for error in tuple(resolution.get("errors", ()) or ())
+            if isinstance(error, Mapping)
+        ]
+        if resolution.get("status") != "resolved" or missing_reports:
+            if missing_reports:
+                resolution_errors.append(
+                    {
+                        "requested_task_id": request["requested_task_id"],
+                        "code": "investigator_outcome_missing",
+                        "resolved_task_ids": missing_reports,
+                    }
+                )
+            trace.append(
+                {
+                    "type": "task_outcome",
+                    "round": round_id,
+                    "ledger_id": request["ledger_id"],
+                    "requested_task_id": request["requested_task_id"],
+                    "status": "explicit_resolution_error",
+                    "resolved_task_ids": resolved_task_ids,
+                    "errors": resolution_errors,
+                }
+            )
+            continue
+        matched_reports = [
+            report
+            for task_id in resolved_task_ids
+            for report in reports_by_query.get(task_id, ())
+        ]
+        trace.append(
+            {
+                "type": "task_outcome",
+                "round": round_id,
+                "ledger_id": request["ledger_id"],
+                "requested_task_id": request["requested_task_id"],
+                "status": "executed",
+                "resolved_task_ids": resolved_task_ids,
+                "report_outcomes": list(_outcome_digest(matched_reports)),
+            }
+        )
+
+
+def _stamp_interpretation_purposes(
+    reports: Sequence[InvestigationReport],
+    tasks: Sequence[InvestigationTask],
+) -> tuple[InvestigationReport, ...]:
+    purpose_by_query = {task.query_id: task.interpretation_purpose for task in tasks}
+    stamped = []
+    for report in reports:
+        purpose = purpose_by_query.get(report.query_id, "primary")
+        attempts = tuple(
+            replace(attempt, interpretation_purpose=purpose)
+            if attempt.interpretation_purpose == "primary" and purpose != "primary"
+            else attempt
+            for attempt in report.attempts
+        )
+        stamped.append(replace(report, attempts=attempts))
+    return tuple(stamped)
+
+
+def _task_ledger_validation(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    requests = tuple(row for row in trace if row.get("type") == "task_request")
+    outcomes = tuple(row for row in trace if row.get("type") == "task_outcome")
+    terminal_ids = {
+        str(row.get("ledger_id", "") or "")
+        for row in outcomes
+        if row.get("status") in {"executed", "explicit_resolution_error"}
+    }
+    missing = tuple(
+        str(row.get("ledger_id", "") or "")
+        for row in requests
+        if str(row.get("ledger_id", "") or "") not in terminal_ids
+    )
+    return {
+        "requested_acquisition_count": len(requests),
+        "executed_acquisition_count": sum(
+            row.get("status") == "executed" for row in outcomes
+        ),
+        "task_resolution_error_count": sum(
+            row.get("status") == "explicit_resolution_error" for row in outcomes
+        ),
+        "silently_dropped_acquisition_count": len(missing),
+        "missing_ledger_ids": list(missing),
+    }
 
 
 def _mechanical_status(
@@ -962,16 +1517,28 @@ def _resolve_tasks(
     *,
     limit: int,
     errors: list[dict[str, Any]] | None = None,
+    resolutions: list[dict[str, Any]] | None = None,
 ) -> tuple[InvestigationTask, ...]:
     limit = max(0, int(limit))
-    if not limit:
-        return ()
     segments = tuple(workspace.manifest.segments)
     by_id = {segment.segment_id: segment for segment in segments}
     global_aliases = {"all", "full", "full_video", "global", "workspace"}
     resolution_errors = errors if errors is not None else []
-    groups: list[tuple[InvestigationTask, ...]] = []
+    resolution_rows = resolutions if resolutions is not None else []
+    groups: list[dict[str, Any]] = []
     for requested_task in tasks:
+        error_start = len(resolution_errors)
+        task_error = _task_executability_error(requested_task)
+        if task_error:
+            resolution_errors.append(_task_resolution_error(requested_task, task_error))
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
+            continue
         task = _resolve_task_coordinates(
             requested_task,
             by_id,
@@ -979,19 +1546,32 @@ def _resolve_tasks(
             errors=resolution_errors,
         )
         if task is None:
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
             continue
         if task.inspection_mode == "arbitrate_observation":
-            groups.append((task,))
+            groups.append(
+                {"requested_task": requested_task, "tasks": (task,), "error_start": error_start}
+            )
             continue
         if task.inspection_mode in {"search_asr", "search_caption"}:
             if task.segment_id.casefold() in global_aliases:
                 task = replace(task, segment_id="")
-            groups.append((task,))
+            groups.append(
+                {"requested_task": requested_task, "tasks": (task,), "error_start": error_start}
+            )
             continue
         if task.time_range is not None:
             start, end = task.time_range
             if task.segment_id in by_id:
-                groups.append((task,))
+                groups.append(
+                    {"requested_task": requested_task, "tasks": (task,), "error_start": error_start}
+                )
                 continue
             overlaps = tuple(
                 (segment, max(start, segment.virtual_start_sec), min(end, segment.virtual_end_sec))
@@ -1000,15 +1580,26 @@ def _resolve_tasks(
             )
             if overlaps:
                 groups.append(
-                    tuple(
-                        replace(
-                            task,
-                            query_id=task.query_id if len(overlaps) == 1 else f"{task.query_id}_{index:02d}",
-                            segment_id=segment.segment_id,
-                            time_range=(overlap_start, overlap_end),
-                        )
-                        for index, (segment, overlap_start, overlap_end) in enumerate(overlaps, start=1)
-                    )
+                    {
+                        "requested_task": requested_task,
+                        "error_start": error_start,
+                        "tasks": tuple(
+                            replace(
+                                task,
+                                query_id=(
+                                    task.query_id
+                                    if len(overlaps) == 1
+                                    else f"{task.query_id}_{index:02d}"
+                                ),
+                                segment_id=segment.segment_id,
+                                time_range=(overlap_start, overlap_end),
+                            )
+                            for index, (segment, overlap_start, overlap_end) in enumerate(
+                                overlaps,
+                                start=1,
+                            )
+                        ),
+                    }
                 )
                 continue
             resolution_errors.append(
@@ -1019,28 +1610,77 @@ def _resolve_tasks(
                     workspace_range=[0.0, workspace.manifest.duration_sec],
                 )
             )
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
             continue
         if task.segment_id in by_id:
-            groups.append((task,))
+            groups.append(
+                {"requested_task": requested_task, "tasks": (task,), "error_start": error_start}
+            )
             continue
         if task.segment_id.casefold() not in global_aliases:
+            resolution_errors.append(_task_resolution_error(task, "target_missing"))
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
             continue
         selected = select_uniform_items(segments, min(limit, len(segments)))
         groups.append(
-            tuple(
-                replace(task, query_id=f"{task.query_id}_{segment.segment_id}", segment_id=segment.segment_id)
-                for segment in selected
-            )
+            {
+                "requested_task": requested_task,
+                "error_start": error_start,
+                "tasks": tuple(
+                    replace(task, query_id=f"{task.query_id}_{segment.segment_id}", segment_id=segment.segment_id)
+                    for segment in selected
+                ),
+            }
         )
     resolved: list[InvestigationTask] = []
+    resolved_by_group: dict[int, list[InvestigationTask]] = {}
     depth = 0
-    while len(resolved) < limit and any(depth < len(group) for group in groups):
-        for group in groups:
+    while len(resolved) < limit and any(depth < len(group["tasks"]) for group in groups):
+        for group_index, group in enumerate(groups):
             if len(resolved) >= limit:
                 break
-            if depth < len(group):
-                resolved.append(group[depth])
+            if depth < len(group["tasks"]):
+                selected_task = group["tasks"][depth]
+                resolved.append(selected_task)
+                resolved_by_group.setdefault(group_index, []).append(selected_task)
         depth += 1
+    resolution_error_count = len(resolution_errors)
+    for group_index, group in enumerate(groups):
+        selected_tasks = tuple(resolved_by_group.get(group_index, ()))
+        error_end = (
+            int(groups[group_index + 1]["error_start"])
+            if group_index + 1 < len(groups)
+            else resolution_error_count
+        )
+        group_errors = list(
+            resolution_errors[int(group["error_start"]):error_end]
+        )
+        if not selected_tasks and not group_errors:
+            requested_task = group["requested_task"]
+            code = "investigation_budget_exhausted" if limit == 0 else "per_round_task_limit_exceeded"
+            error = _task_resolution_error(requested_task, code, limit=limit)
+            resolution_errors.append(error)
+            group_errors = [error]
+        resolution_rows.append(
+            {
+                "requested_task_id": group["requested_task"].query_id,
+                "status": "resolved" if selected_tasks else "explicit_resolution_error",
+                "resolved_task_ids": [task.query_id for task in selected_tasks],
+                "errors": [dict(error) for error in group_errors],
+            }
+        )
     return tuple(resolved)
 
 
@@ -1161,6 +1801,7 @@ def _task_resolution_error(
     **details: Any,
 ) -> dict[str, Any]:
     return {
+        "requested_task_id": task.query_id,
         "query_id": task.query_id,
         "code": str(code),
         "segment_id": task.segment_id,
@@ -1169,20 +1810,28 @@ def _task_resolution_error(
     }
 
 
+def _task_executability_error(task: InvestigationTask) -> str:
+    if not task.query_id:
+        return "query_id_missing"
+    if not task.goal:
+        return "goal_missing"
+    if task.inspection_mode == "search_asr" and not task.search_terms:
+        return "search_terms_missing"
+    if task.inspection_mode == "search_caption" and not task.caption_queries:
+        return "caption_queries_missing"
+    if task.inspection_mode == "arbitrate_observation" and not task.arbitration_attempt_id:
+        return "arbitration_attempt_id_missing"
+    if task.inspection_mode == "window" and not (task.segment_id or task.time_range):
+        return "target_missing"
+    return ""
+
+
 def _ranges_overlap(left: tuple[float, float], right: tuple[float, float]) -> bool:
     return min(left[1], right[1]) > max(left[0], right[0])
 
 
 def _task_is_executable(task: InvestigationTask) -> bool:
-    if not task.query_id or not task.goal:
-        return False
-    if task.inspection_mode == "search_asr":
-        return bool(task.search_terms)
-    if task.inspection_mode == "search_caption":
-        return bool(task.caption_queries)
-    if task.inspection_mode == "arbitrate_observation":
-        return bool(task.arbitration_attempt_id)
-    return bool(task.segment_id or task.time_range)
+    return not _task_executability_error(task)
 
 
 def _validate_answer(
@@ -1345,6 +1994,7 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "sampling_floor_fps": task.sampling_floor_fps,
         "arbitration_attempt_id": task.arbitration_attempt_id,
         "force_reinspect": task.force_reinspect,
+        "interpretation_purpose": task.interpretation_purpose,
     }
 
 
@@ -1384,6 +2034,7 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
+        interpretation_purpose=str(value.get("interpretation_purpose", "primary") or "primary"),
     )
 
 

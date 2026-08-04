@@ -73,6 +73,7 @@ def main() -> None:
         max_rounds=args.max_rounds,
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
+        control_retry_budget=args.control_retry_budget,
         answer_policy=args.answer_policy,
     )
     result = driver.run(workspace)
@@ -90,6 +91,8 @@ def main() -> None:
         "case_id": workspace.case.case_id,
         "answer_policy": args.answer_policy,
         "max_rounds": args.max_rounds,
+        "semantic_round_budget": args.max_rounds,
+        "control_retry_budget": args.control_retry_budget,
         "max_investigations": args.max_investigations,
         "max_tasks_per_round": args.max_tasks_per_round,
         "caption_index_mode": args.caption_index_mode,
@@ -241,6 +244,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
+    parser.add_argument("--control-retry-budget", type=int, default=2)
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
     parser.add_argument(
         "--caption-query-strategy",

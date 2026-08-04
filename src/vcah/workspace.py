@@ -629,6 +629,9 @@ class ObservationLog:
             "sampling_config": dict(getattr(attempt, "sampling_config", {}) or {}),
             "modality": modality.strip().casefold(),
             "evidence_role": str(getattr(attempt, "evidence_role", "unclassified") or "unclassified"),
+            "interpretation_purpose": str(
+                getattr(attempt, "interpretation_purpose", "primary") or "primary"
+            ),
             "prompt_digest": digest,
             "raw_output": raw_output,
             "parse_status": str(getattr(attempt, "parse_status", "unknown") or "unknown"),
@@ -658,6 +661,10 @@ class ObservationLog:
                     "sampling_fps": first.get("sampling_fps", 0.0),
                     "modality": first.get("modality", ""),
                     "evidence_role": first.get("evidence_role", "unclassified"),
+                    "interpretation_purposes": [
+                        str(row.get("interpretation_purpose", "primary") or "primary")
+                        for row in rows
+                    ],
                     "frame_count": len(tuple(first.get("frame_refs", ()) or ())),
                     "interpretation_count": len(rows),
                     "interpretation_previews": [_compact_text(text, 320) for text in raw_outputs if text][:3],

@@ -111,6 +111,15 @@ def test_reasoner_uses_only_workspace_protocol(tmp_path: Path) -> None:
 
     assert decision.action == "investigate"
     assert not decision.tasks
+    metadata = reasoner.consume_decision_metadata()
+    assert metadata["task_resolution_errors"] == [
+        {
+            "requested_task_id": "observe_1",
+            "code": "task_schema_invalid",
+            "detail": "task is missing required or executable fields",
+            "task_index": 1,
+        }
+    ]
     prompt = api.calls[0]["prompt"]
     assert "sole semantic decision maker" in prompt
     assert "Working view" in prompt

@@ -177,7 +177,18 @@ def agent_run_metrics(
     supporting_intervals: Sequence[Sequence[float]] = (),
 ) -> dict[str, float | int]:
     decisions = tuple(row for row in trace if row.get("type") == "reasoner_decision")
+    committed_decisions = tuple(
+        row for row in decisions if row.get("semantic_committed", True)
+    )
     batches = tuple(row for row in trace if row.get("type") == "investigator_batch")
+    task_requests = tuple(row for row in trace if row.get("type") == "task_request")
+    task_outcomes = tuple(row for row in trace if row.get("type") == "task_outcome")
+    task_outcome_ids = {
+        str(row.get("ledger_id", "") or "")
+        for row in task_outcomes
+        if row.get("status") in {"executed", "explicit_resolution_error"}
+    }
+    control_retries = tuple(row for row in trace if row.get("type") == "control_retry")
     source_rows: dict[str, Mapping[str, Any]] = {}
     for row in observation_rows:
         source_rows.setdefault(str(row.get("attempt_id", "")), row)
@@ -223,6 +234,34 @@ def agent_run_metrics(
         for row in visual_interpretation_rows
         if str(row.get("attempt_id", "") or "")
     }
+    seen_visual_attempts: set[str] = set()
+    deliberate_reinterpretations = 0
+    accidental_reinterpretations = 0
+    for row in visual_interpretation_rows:
+        attempt_id = str(row.get("attempt_id", "") or "")
+        if not attempt_id or attempt_id not in seen_visual_attempts:
+            if attempt_id:
+                seen_visual_attempts.add(attempt_id)
+            continue
+        purpose = str(row.get("interpretation_purpose", "primary") or "primary").casefold()
+        if purpose in {"deliberate_arbitration", "cue_verification", "manual_reread"}:
+            deliberate_reinterpretations += 1
+        else:
+            accidental_reinterpretations += 1
+    purpose_counts = {
+        purpose: sum(
+            str(row.get("interpretation_purpose", "primary") or "primary").casefold()
+            == purpose
+            for row in visual_interpretation_rows
+        )
+        for purpose in (
+            "primary",
+            "deliberate_arbitration",
+            "cue_verification",
+            "control_retry",
+            "manual_reread",
+        )
+    }
     converted = sum(
         any(_overlap(_hit_interval(hit), interval) for interval in supporting_intervals)
         for hit in candidates
@@ -236,8 +275,32 @@ def agent_run_metrics(
     return {
         "answer_rate": float(bool(answer_present)),
         "reference_valid_rate": float(bool(reference_valid)),
-        "rounds": len(decisions),
-        "dedicated_read_rounds": sum(row.get("action") == "read_observations" for row in decisions),
+        "rounds": len(
+            {
+                int(row.get("semantic_round", row.get("round", index)) or index)
+                for index, row in enumerate(committed_decisions, start=1)
+            }
+        ),
+        "control_retry_count": sum(
+            max(0, int(row.get("count", 1) or 0)) for row in control_retries
+        ),
+        "decision_repair_count": sum(
+            max(0, int(row.get("count", 1) or 0)) for row in control_retries
+        ),
+        "requested_acquisition_count": len(task_requests),
+        "executed_acquisition_count": sum(
+            row.get("status") == "executed" for row in task_outcomes
+        ),
+        "task_resolution_error_count": sum(
+            row.get("status") == "explicit_resolution_error" for row in task_outcomes
+        ),
+        "silently_dropped_acquisition_count": sum(
+            str(row.get("ledger_id", "") or "") not in task_outcome_ids
+            for row in task_requests
+        ),
+        "dedicated_read_rounds": sum(
+            row.get("action") == "read_observations" for row in committed_decisions
+        ),
         "caption_searches": len(caption_rows),
         "caption_material_attempts": caption_material_attempt_count,
         "empty_search_count": sum(
@@ -259,6 +322,15 @@ def agent_run_metrics(
             0,
             len(visual_interpretation_rows) - len(visual_material_attempt_ids),
         ),
+        "deliberate_reinterpretation_count": deliberate_reinterpretations,
+        "accidental_reinterpretation_count": accidental_reinterpretations,
+        "primary_interpretation_count": purpose_counts["primary"],
+        "deliberate_arbitration_interpretation_count": purpose_counts[
+            "deliberate_arbitration"
+        ],
+        "cue_verification_interpretation_count": purpose_counts["cue_verification"],
+        "control_retry_interpretation_count": purpose_counts["control_retry"],
+        "manual_reread_interpretation_count": purpose_counts["manual_reread"],
         "visual_confirmations": sum(
             str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
             for row in source_rows.values()

@@ -428,4 +428,39 @@ def test_caption_and_agent_metrics_are_derived_from_logged_candidates() -> None:
     assert metrics["unique_visual_material_attempts"] == 1
     assert metrics["visual_interpretation_count"] == 2
     assert metrics["visual_reinterpretation_count"] == 1
+    assert metrics["deliberate_reinterpretation_count"] == 0
+    assert metrics["accidental_reinterpretation_count"] == 1
     assert metrics["candidate_to_support_conversion"] == 0.5
+
+
+def test_reinterpretation_metrics_separate_deliberate_and_control_retries() -> None:
+    rows = (
+        {
+            "attempt_id": "same-material",
+            "modality": "visual",
+            "interpretation_purpose": "primary",
+        },
+        {
+            "attempt_id": "same-material",
+            "modality": "visual",
+            "interpretation_purpose": "deliberate_arbitration",
+        },
+        {
+            "attempt_id": "same-material",
+            "modality": "visual",
+            "interpretation_purpose": "control_retry",
+        },
+    )
+
+    metrics = agent_run_metrics(
+        (),
+        rows,
+        answer_present=False,
+        reference_valid=False,
+    )
+
+    assert metrics["visual_reinterpretation_count"] == 2
+    assert metrics["deliberate_reinterpretation_count"] == 1
+    assert metrics["accidental_reinterpretation_count"] == 1
+    assert metrics["deliberate_arbitration_interpretation_count"] == 1
+    assert metrics["control_retry_interpretation_count"] == 1

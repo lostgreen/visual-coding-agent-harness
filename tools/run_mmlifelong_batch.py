@@ -274,6 +274,8 @@ def _case_command(
         str(args.max_investigations),
         "--max-tasks-per-round",
         str(args.max_tasks_per_round),
+        "--control-retry-budget",
+        str(args.control_retry_budget),
         "--caption-index-mode",
         str(args.caption_index_mode),
         "--caption-query-strategy",
@@ -339,6 +341,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
+    parser.add_argument("--control-retry-budget", type=int, default=2)
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
     parser.add_argument(
         "--caption-query-strategy",
