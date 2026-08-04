@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
+from vcah.evidence_state import EvidenceObligation, EvidenceObligationState
+
 
 ClaimSource = Literal["premise", "observation", "derived", "hypothesis"]
 ClaimStatus = Literal["active", "superseded", "contested", "retracted"]
@@ -21,6 +23,8 @@ _OP_TYPES = {
     "link_conflict",
     "note_interval",
     "update_entity",
+    "add_obligation",
+    "set_obligation_status",
 }
 
 
@@ -228,6 +232,8 @@ class WorkingDocument:
     claims: dict[str, Claim] = field(default_factory=dict)
     entities: dict[str, Entity] = field(default_factory=dict)
     timeline: list[IntervalNote] = field(default_factory=list)
+    obligations: dict[str, EvidenceObligation] = field(default_factory=dict)
+    obligation_states: dict[str, EvidenceObligationState] = field(default_factory=dict)
     revision: int = 0
     active_claim_limit: int = 60
 
@@ -270,18 +276,38 @@ class WorkingDocument:
                 for item in tuple(value.get("timeline", ()) or ())
                 if isinstance(item, Mapping)
             ],
+            obligations={
+                obligation.requirement_id: obligation
+                for item in _mapping_values(value.get("obligations"))
+                if isinstance(item, Mapping)
+                and (obligation := EvidenceObligation.from_mapping(item)).requirement_id
+            },
+            obligation_states={
+                state.requirement_id: state
+                for item in _mapping_values(value.get("obligation_states"))
+                if isinstance(item, Mapping)
+                and (state := EvidenceObligationState.from_mapping(item)).requirement_id
+            },
             revision=max(0, int(value.get("revision", 0) or 0)),
             active_claim_limit=max(1, int(value.get("active_claim_limit", 60) or 60)),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "WorkingDocumentV2",
+            "schema_version": "WorkingDocumentV3",
             "revision": self.revision,
             "active_claim_limit": self.active_claim_limit,
             "claims": {claim_id: asdict(claim) for claim_id, claim in sorted(self.claims.items())},
             "entities": {entity_id: asdict(entity) for entity_id, entity in sorted(self.entities.items())},
             "timeline": [asdict(item) for item in self.timeline],
+            "obligations": {
+                requirement_id: obligation.to_dict()
+                for requirement_id, obligation in sorted(self.obligations.items())
+            },
+            "obligation_states": {
+                requirement_id: state.to_dict()
+                for requirement_id, state in sorted(self.obligation_states.items())
+            },
         }
 
     def save(self, path: str | Path) -> None:
@@ -318,6 +344,8 @@ class WorkingDocument:
         self.claims = staged.claims
         self.entities = staged.entities
         self.timeline = staged.timeline
+        self.obligations = staged.obligations
+        self.obligation_states = staged.obligation_states
         self.revision += 1
         return WorkspaceApplyResult(True, self.revision, len(ops), ())
 
@@ -361,7 +389,109 @@ class WorkingDocument:
             missing = tuple(claim_id for claim_id in note.claim_ids if claim_id not in self.claims)
             if missing:
                 errors.append(f"timeline_claim_missing:{index}:{','.join(missing)}")
+        for requirement_id, obligation in self.obligations.items():
+            missing_dependencies = tuple(
+                dependency
+                for dependency in obligation.depends_on
+                if dependency not in self.obligations
+            )
+            if missing_dependencies:
+                errors.append(
+                    f"obligation_dependency_missing:{requirement_id}:{','.join(missing_dependencies)}"
+                )
+            state = self.obligation_states.get(requirement_id)
+            if state is None:
+                errors.append(f"obligation_state_missing:{requirement_id}")
+                continue
+            missing_claims = tuple(
+                claim_id
+                for claim_id in state.supporting_claim_ids
+                if claim_id not in self.claims
+            )
+            if missing_claims:
+                errors.append(
+                    f"obligation_supporting_claim_missing:{requirement_id}:{','.join(missing_claims)}"
+                )
+            missing_attempts = tuple(
+                attempt_id
+                for attempt_id in state.supporting_attempt_ids
+                if attempt_id not in known_observations
+            )
+            if missing_attempts:
+                errors.append(
+                    f"obligation_supporting_attempt_missing:{requirement_id}:{','.join(missing_attempts)}"
+                )
+            if state.status == "satisfied" and not state.supporting_claim_ids:
+                errors.append(f"satisfied_obligation_requires_claim:{requirement_id}")
+            if state.status == "satisfied" and not state.supporting_attempt_ids:
+                errors.append(f"satisfied_obligation_requires_attempt:{requirement_id}")
+            if state.status == "satisfied":
+                for dependency in obligation.depends_on:
+                    dependency_state = self.obligation_states.get(dependency)
+                    if dependency_state is None or dependency_state.status != "satisfied":
+                        errors.append(
+                            f"obligation_dependency_unsatisfied:{requirement_id}:{dependency}"
+                        )
+                        continue
+                    dependency_claims = set(dependency_state.supporting_claim_ids)
+                    if dependency_claims and not any(
+                        dependency_claims.intersection(
+                            self._claim_lineage_ids(claim_id)
+                        )
+                        for claim_id in state.supporting_claim_ids
+                    ):
+                        errors.append(
+                            f"obligation_dependency_lineage_missing:{requirement_id}:{dependency}"
+                        )
+            if state.status == "unresolved" and not state.residual_uncertainty:
+                errors.append(f"unresolved_obligation_requires_uncertainty:{requirement_id}")
+        orphan_states = tuple(
+            requirement_id
+            for requirement_id in self.obligation_states
+            if requirement_id not in self.obligations
+        )
+        if orphan_states:
+            errors.append(f"obligation_definition_missing:{','.join(orphan_states)}")
+        errors.extend(self._obligation_cycle_errors())
         return tuple(dict.fromkeys(errors))
+
+    def obligation_summary(self) -> dict[str, Any]:
+        answer_bearing_ids = tuple(
+            requirement_id
+            for requirement_id, obligation in self.obligations.items()
+            if obligation.answer_bearing
+        )
+        satisfied = tuple(
+            requirement_id
+            for requirement_id in answer_bearing_ids
+            if self.obligation_states.get(requirement_id)
+            and self.obligation_states[requirement_id].status == "satisfied"
+        )
+        unresolved = tuple(
+            requirement_id
+            for requirement_id in answer_bearing_ids
+            if self.obligation_states.get(requirement_id)
+            and self.obligation_states[requirement_id].status == "unresolved"
+        )
+        closed = set((*satisfied, *unresolved))
+        open_ids = tuple(
+            requirement_id
+            for requirement_id in answer_bearing_ids
+            if requirement_id not in closed
+        )
+        return {
+            "answer_bearing_obligation_count": len(answer_bearing_ids),
+            "satisfied_obligation_count": len(satisfied),
+            "open_obligation_count_at_answer": len(open_ids),
+            "unresolved_obligation_count_at_answer": len(unresolved),
+            "obligation_coverage_rate": (
+                len(satisfied) / len(answer_bearing_ids) if answer_bearing_ids else 0.0
+            ),
+            "answer_bearing_requirement_ids": list(answer_bearing_ids),
+            "satisfied_requirement_ids": list(satisfied),
+            "open_requirement_ids": list(open_ids),
+            "unresolved_requirement_ids": list(unresolved),
+        }
 
     def validate_answer(
         self,
@@ -369,6 +499,7 @@ class WorkingDocument:
         *,
         observation_ids: Sequence[str],
         supporting_observation_ids: Sequence[str] | None = None,
+        require_obligation_coverage: bool = False,
     ) -> AnswerValidation:
         support = _ids(supporting_claim_ids)
         if not support:
@@ -437,6 +568,40 @@ class WorkingDocument:
             errors.append(
                 f"supporting_claims_cite_candidate_or_negative:{','.join(ineligible_attempts)}"
             )
+        if require_obligation_coverage:
+            answer_bearing = tuple(
+                obligation
+                for obligation in self.obligations.values()
+                if obligation.answer_bearing
+            )
+            if not answer_bearing:
+                errors.append("answer_bearing_obligations_missing")
+            for obligation in answer_bearing:
+                state = self.obligation_states.get(obligation.requirement_id)
+                if state is None:
+                    errors.append(
+                        f"answer_bearing_obligation_state_missing:{obligation.requirement_id}"
+                    )
+                    continue
+                if state.status == "satisfied":
+                    obligation_claims = set(state.supporting_claim_ids)
+                    closed_by_answer = bool(obligation_claims.intersection(support)) or any(
+                        obligation_claims.intersection(self._claim_lineage_ids(claim_id))
+                        for claim_id in support
+                    )
+                    if not closed_by_answer:
+                        errors.append(
+                            f"answer_support_does_not_close_obligation:{obligation.requirement_id}"
+                        )
+                elif state.status == "unresolved":
+                    if not state.residual_uncertainty:
+                        errors.append(
+                            f"unresolved_obligation_requires_uncertainty:{obligation.requirement_id}"
+                        )
+                else:
+                    errors.append(
+                        f"open_answer_bearing_obligation:{obligation.requirement_id}:{state.status}"
+                    )
         if errors:
             return AnswerValidation(False, errors[0].split(":", 1)[0], support, cited_attempts, tuple(errors))
         return AnswerValidation(True, "reference_integrity_verified", support, cited_attempts, ())
@@ -495,6 +660,34 @@ class WorkingDocument:
             note_payload = operation.get("note") if isinstance(operation.get("note"), Mapping) else operation
             self.timeline.append(IntervalNote.from_mapping(note_payload))
             return
+        if op_type == "add_obligation":
+            payload = (
+                operation.get("obligation")
+                if isinstance(operation.get("obligation"), Mapping)
+                else operation
+            )
+            obligation = EvidenceObligation.from_mapping(payload)
+            if obligation.requirement_id in self.obligations:
+                raise ValueError(
+                    f"obligation_already_exists:{obligation.requirement_id}"
+                )
+            self.obligations[obligation.requirement_id] = obligation
+            self.obligation_states[obligation.requirement_id] = EvidenceObligationState(
+                requirement_id=obligation.requirement_id
+            )
+            return
+        if op_type == "set_obligation_status":
+            requirement_id = _required_id(operation, "requirement_id", "obligation_id")
+            if requirement_id not in self.obligations:
+                raise ValueError(f"obligation_missing:{requirement_id}")
+            self.obligation_states[requirement_id] = EvidenceObligationState(
+                requirement_id=requirement_id,
+                status=str(operation.get("status", "open") or "open"),  # type: ignore[arg-type]
+                supporting_claim_ids=tuple(operation.get("supporting_claim_ids", ()) or ()),
+                supporting_attempt_ids=tuple(operation.get("supporting_attempt_ids", ()) or ()),
+                residual_uncertainty=str(operation.get("residual_uncertainty", "") or ""),
+            )
+            return
         entity_payload = operation.get("entity") if isinstance(operation.get("entity"), Mapping) else operation
         entity = Entity.from_mapping(entity_payload)
         if not entity.entity_id:
@@ -536,6 +729,27 @@ class WorkingDocument:
             visit(claim_id)
         return tuple(errors)
 
+    def _obligation_cycle_errors(self) -> tuple[str, ...]:
+        errors: list[str] = []
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(requirement_id: str) -> None:
+            if requirement_id in visiting:
+                errors.append(f"obligation_dependency_cycle:{requirement_id}")
+                return
+            if requirement_id in visited or requirement_id not in self.obligations:
+                return
+            visiting.add(requirement_id)
+            for dependency in self.obligations[requirement_id].depends_on:
+                visit(dependency)
+            visiting.remove(requirement_id)
+            visited.add(requirement_id)
+
+        for requirement_id in self.obligations:
+            visit(requirement_id)
+        return tuple(errors)
+
     def _claim_attempts(self, claim_id: str, seen: set[str] | None = None) -> tuple[str, ...]:
         visited = set(seen or ())
         if claim_id in visited or claim_id not in self.claims:
@@ -550,6 +764,25 @@ class WorkingDocument:
                         cite
                         for parent in claim.derived_from
                         for cite in self._claim_attempts(parent, visited)
+                    ),
+                )
+            )
+        )
+
+    def _claim_lineage_ids(self, claim_id: str, seen: set[str] | None = None) -> tuple[str, ...]:
+        visited = set(seen or ())
+        if claim_id in visited or claim_id not in self.claims:
+            return ()
+        visited.add(claim_id)
+        claim = self.claims[claim_id]
+        return tuple(
+            dict.fromkeys(
+                (
+                    *claim.derived_from,
+                    *(
+                        ancestor
+                        for parent in claim.derived_from
+                        for ancestor in self._claim_lineage_ids(parent, visited)
                     ),
                 )
             )
@@ -745,6 +978,23 @@ def render_working_view(
                 f"- {note.time_range[0]:.3f}-{note.time_range[1]:.3f}s role={note.role} "
                 f"{note.label} claims={list(note.claim_ids)}"
             )
+    lines.append("EVIDENCE OBLIGATIONS")
+    if not document.obligations:
+        lines.append("[]")
+    else:
+        lines.append(
+            json.dumps(
+                [
+                    {
+                        **obligation.to_dict(),
+                        "state": document.obligation_states[requirement_id].to_dict(),
+                    }
+                    for requirement_id, obligation in document.obligations.items()
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
     lines.append("COVERAGE LEDGER")
     coverage = observations.coverage_ledger()
     lines.append(json.dumps(coverage, ensure_ascii=False, separators=(",", ":")))
@@ -787,6 +1037,14 @@ def append_workspace_history(
 
 def _ids(values: Sequence[Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _mapping_values(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, Mapping):
+        return tuple(value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(value)
+    return ()
 
 
 def _time_range(value: Sequence[float] | None) -> tuple[float, float] | None:

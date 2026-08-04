@@ -189,6 +189,13 @@ def agent_run_metrics(
         if row.get("status") in {"executed", "explicit_resolution_error"}
     }
     control_retries = tuple(row for row in trace if row.get("type") == "control_retry")
+    answer_outcomes = tuple(row for row in trace if row.get("type") == "answer_outcome")
+    obligation_summary = dict(
+        answer_outcomes[-1].get("obligation_summary", {})
+        if answer_outcomes
+        and isinstance(answer_outcomes[-1].get("obligation_summary"), Mapping)
+        else {}
+    )
     source_rows: dict[str, Mapping[str, Any]] = {}
     for row in observation_rows:
         source_rows.setdefault(str(row.get("attempt_id", "")), row)
@@ -297,6 +304,21 @@ def agent_run_metrics(
         "silently_dropped_acquisition_count": sum(
             str(row.get("ledger_id", "") or "") not in task_outcome_ids
             for row in task_requests
+        ),
+        "answer_bearing_obligation_count": int(
+            obligation_summary.get("answer_bearing_obligation_count", 0) or 0
+        ),
+        "satisfied_obligation_count": int(
+            obligation_summary.get("satisfied_obligation_count", 0) or 0
+        ),
+        "open_obligation_count_at_answer": int(
+            obligation_summary.get("open_obligation_count_at_answer", 0) or 0
+        ),
+        "unresolved_obligation_count_at_answer": int(
+            obligation_summary.get("unresolved_obligation_count_at_answer", 0) or 0
+        ),
+        "obligation_coverage_rate": float(
+            obligation_summary.get("obligation_coverage_rate", 0.0) or 0.0
         ),
         "dedicated_read_rounds": sum(
             row.get("action") == "read_observations" for row in committed_decisions

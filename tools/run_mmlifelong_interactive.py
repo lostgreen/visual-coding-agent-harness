@@ -74,6 +74,7 @@ def main() -> None:
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
         control_retry_budget=args.control_retry_budget,
+        require_obligation_coverage=True,
         answer_policy=args.answer_policy,
     )
     result = driver.run(workspace)
@@ -93,6 +94,7 @@ def main() -> None:
         "max_rounds": args.max_rounds,
         "semantic_round_budget": args.max_rounds,
         "control_retry_budget": args.control_retry_budget,
+        "require_obligation_coverage": True,
         "max_investigations": args.max_investigations,
         "max_tasks_per_round": args.max_tasks_per_round,
         "caption_index_mode": args.caption_index_mode,
@@ -200,6 +202,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/caption_occurrence.py"),
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
+        Path("src/vcah/evidence_state.py"),
         Path("benchmarks/schema.py"),
         Path("benchmarks/mmlifelong/runner.py"),
     )

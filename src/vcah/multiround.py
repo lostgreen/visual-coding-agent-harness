@@ -197,6 +197,7 @@ class VirtualVideoMultiRoundDriver:
         max_tasks_per_round: int = 4,
         semantic_round_budget: int | None = None,
         control_retry_budget: int = 2,
+        require_obligation_coverage: bool = False,
         answer_policy: str = "strict",
     ) -> None:
         if reasoner is None:
@@ -209,6 +210,7 @@ class VirtualVideoMultiRoundDriver:
         self.semantic_round_budget = max(1, int(semantic_budget))
         self.max_rounds = self.semantic_round_budget
         self.control_retry_budget = max(0, int(control_retry_budget))
+        self.require_obligation_coverage = bool(require_obligation_coverage)
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
         policy = str(answer_policy or "strict").strip().casefold()
@@ -485,6 +487,7 @@ class VirtualVideoMultiRoundDriver:
                     observation_log.attempt_ids,
                     workspace.case.options,
                     supporting_observation_ids=_supporting_observation_ids(observation_log),
+                    require_obligation_coverage=self.require_obligation_coverage,
                 )
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
@@ -654,6 +657,7 @@ class VirtualVideoMultiRoundDriver:
             observation_log.attempt_ids,
             workspace.case.options,
             supporting_observation_ids=_supporting_observation_ids(observation_log),
+            require_obligation_coverage=self.require_obligation_coverage,
         )
         candidate_validation = (
             validation
@@ -664,6 +668,7 @@ class VirtualVideoMultiRoundDriver:
                 observation_log.attempt_ids,
                 workspace.case.options,
                 supporting_observation_ids=_supporting_observation_ids(observation_log),
+                require_obligation_coverage=self.require_obligation_coverage,
             )
         )
         if schema_answer_present or preserve_candidate:
@@ -718,6 +723,7 @@ class VirtualVideoMultiRoundDriver:
                 "answer_policy": self.answer_policy,
                 "answer_present": returned_answer_present,
                 "supporting_intervals": [list(item) for item in supporting_intervals],
+                "obligation_summary": document.obligation_summary(),
                 "working_document_path": str(document_path),
                 "observation_log_path": str(observation_log.path),
                 "workspace_history_path": str(history_path),
@@ -1363,6 +1369,16 @@ def _mechanical_status(
             "Observed sampling density fell below 80% of the requested fps. Do not assume the requested temporal "
             "resolution; narrow the relevant time_range before judging a brief transition or exact moment."
         )
+    obligation_summary = document.obligation_summary()
+    if not obligation_summary["answer_bearing_obligation_count"]:
+        hints.append(
+            "No answer-bearing evidence obligations exist. Decompose the observable requirements before finalizing."
+        )
+    elif obligation_summary["open_obligation_count_at_answer"]:
+        hints.append(
+            "Answer-bearing obligations remain open. Satisfy them with claim/material lineage or mark them unresolved "
+            "with explicit residual uncertainty before finalizing."
+        )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
@@ -1420,6 +1436,14 @@ def _mechanical_status(
             for segment_id in source["missing_segment_ids"]
         ],
         "answer_owner": "reasoner",
+        "obligations": [
+            {
+                **obligation.to_dict(),
+                "state": document.obligation_states[requirement_id].to_dict(),
+            }
+            for requirement_id, obligation in document.obligations.items()
+        ],
+        **obligation_summary,
         **runtime,
     }
 
@@ -1841,11 +1865,13 @@ def _validate_answer(
     options: Mapping[str, str],
     *,
     supporting_observation_ids: Sequence[str] | None = None,
+    require_obligation_coverage: bool = False,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
         observation_ids=observation_ids,
         supporting_observation_ids=supporting_observation_ids,
+        require_obligation_coverage=require_obligation_coverage,
     )
     if not decision.answer:
         return AnswerValidation(
