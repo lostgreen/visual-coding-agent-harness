@@ -128,3 +128,11 @@ def test_implementation_digest_includes_caption_occurrence_logic(monkeypatch: An
 def test_runtime_runner_has_no_correctness_or_judge_helper() -> None:
     assert not hasattr(RUNNER, "_correctness_outcome")
     assert not hasattr(RUNNER, "judge_free_form_answer")
+
+
+def test_summary_output_creates_parent_directories(tmp_path: Path) -> None:
+    output = tmp_path / "nested" / "reports" / "summary.json"
+
+    SUMMARY._write_text(output, "{}\n")
+
+    assert output.read_text(encoding="utf-8") == "{}\n"

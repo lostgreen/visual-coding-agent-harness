@@ -162,10 +162,18 @@ def main() -> None:
     payload = {"schema_version": "MMLifelongAggregateV2", "run_count": len(raw), "rows": aggregates}
     markdown = render_markdown(aggregates)
     if args.out_json:
-        Path(args.out_json).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_text(
+            Path(args.out_json),
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        )
     if args.out_md:
-        Path(args.out_md).write_text(markdown, encoding="utf-8")
+        _write_text(Path(args.out_md), markdown)
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 def _mean_path(rows: Sequence[Mapping[str, Any]], section: str, key: str) -> float | None:
