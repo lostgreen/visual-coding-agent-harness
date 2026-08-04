@@ -513,6 +513,8 @@ class VirtualVideoMultiRoundDriver:
                         _decision_preflight(
                             parsed_decision,
                             closure_repair=closure_repair_active,
+                            runtime_derived=self.evidence_state_mode
+                            == "runtime_derived",
                         )
                     )
                     if parsed_decision.action == "answer" and parsed_decision.answer:
@@ -1435,8 +1437,17 @@ def _decision_preflight(
     decision: ReasonerDecision,
     *,
     closure_repair: bool = False,
+    runtime_derived: bool = False,
 ) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
+    if runtime_derived and decision.action not in {"investigate", "answer"}:
+        errors.append(
+            {
+                "code": "runtime_action_not_allowed",
+                "action": decision.action,
+                "allowed_actions": ["investigate", "answer"],
+            }
+        )
     action_names = {"investigate", "read_observations", "update_workspace", "answer"}
     for index, operation in enumerate(decision.workspace_ops):
         op_type = str(operation.get("op", operation.get("type", "")) or "").strip().casefold()

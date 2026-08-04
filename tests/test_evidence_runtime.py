@@ -15,6 +15,7 @@ from vcah.multiround import (
     InvestigationTask,
     ReasonerDecision,
     VirtualVideoMultiRoundDriver,
+    _decision_preflight,
     _resolve_runtime_decision,
     _resolve_tasks,
 )
@@ -499,3 +500,16 @@ def test_runtime_ignores_window_only_handles_on_search_tasks() -> None:
     task = decision.tasks[0]
     assert task.occurrence_id == ""
     assert task.temporal_scope_id == ""
+
+
+def test_runtime_preflight_rejects_legacy_workspace_actions() -> None:
+    errors = _decision_preflight(
+        ReasonerDecision(action="update_workspace"),
+        runtime_derived=True,
+    )
+
+    assert errors[0] == {
+        "code": "runtime_action_not_allowed",
+        "action": "update_workspace",
+        "allowed_actions": ["investigate", "answer"],
+    }

@@ -1784,13 +1784,13 @@ def _runtime_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         answer_rule = (
             'Answer with one exact option as "A. option text". '
             'Schema: {"action":"answer","answer":"A. exact option text",'
-            '"support_items":["E1"],"supports_requirements":["R1"],'
+            '"support_items":[],"supports_requirements":["R1"],'
             '"unresolved_requirements":[],"residual_uncertainty":""}.'
         )
     else:
         answer_rule = (
             "Answer concisely. Schema: {\"action\":\"answer\",\"answer\":\"fact\","
-            '"support_items":["E1"],"supports_requirements":["R1"],'
+            '"support_items":[],"supports_requirements":["R1"],'
             '"unresolved_requirements":[],"residual_uncertainty":""}.'
         )
     compact_status = {
@@ -1822,7 +1822,8 @@ def _runtime_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "foreign keys. Caption/ASR results are locator candidates, never answer support; inspect decisive content visually. "
         "Use occurrence handles when the catalog exposes competing candidates. Use refine_item on a refinable E handle for "
         "a narrow child observation. Do not repeat a text_exact material read; Runtime schedules its same-material reread.\n"
-        "Final support may cite observation E handles directly. Cite only items that visibly support the answer. Mark a "
+        "Final support may cite observation E handles directly. Replace the empty support_items example only with visible "
+        "E handles that support the answer; never invent a handle. Mark a "
         "requirement unresolved only when evidence is genuinely insufficient; still provide the best semantic prediction "
         "in shadow mode. Search miss does not prove absence.\n"
         f"{answer_rule}\n"
