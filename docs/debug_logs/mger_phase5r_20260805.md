@@ -33,8 +33,14 @@ historical/current controller runs are allowed.
   `/home/xuboshen/zgw/mger_runs/phase5r-gate-r1-all10-8b757e4-r1-20260805.json`.
 - The real historical worktree is clean at full revision
   `74f012dfc1f3a3e29541ab6d21cb261c937c702a`.
-- Interleaved live Track B/C has started with historical root 1 at
-  `/home/xuboshen/zgw/mger_runs/cases10-phase5r-old74f012d-live-r1-20260805`.
+- The formal interleaved sequence completed all six 10-case roots with no
+  failed cases: `old1, new1, old2, new2, old3, new3`.
+- Historical root mean frames: `118.7, 80.6, 92.3`; median `92.3`.
+- Current Frozen root mean frames: `73.2, 117.8, 60.1`; median `73.2`.
+- The root-level frame IQRs overlap. Final R2 still requires the machine
+  reference, per-case distributions, and decision-trace divergence.
+- Current Frozen live roots all used runner
+  `b9ebd2ac5b8caf3c98f2bcc3397e9e55ffa1d385`.
 
 ## Stale Or Excluded Runs
 
@@ -46,10 +52,13 @@ historical/current controller runs are allowed.
   raised the configured round budget.
 - `cases10-phase5r-replay-0aeb8d7-r2-cfg4124-20260805`: replay driver silently
   raised the configured round budget.
+- `cases10-phase5r-newe33a74c-frozen-live-r1-20260805`: excluded; Phase5R
+  reporting attempted to read an unmaterialized visual-frame manifest and
+  failed 0038/0072. Commit `b9ebd2a` made the valid frame-free path explicit,
+  and the formal current roots were regenerated from empty directories.
 
 ## Next Actions
 
-1. Complete the interleaved historical/current three-root live sequence.
-2. Build `FrozenBehaviorReferenceV2` and conclude descriptive Gate R2.
-3. Complete the audit report, rerun the full
+1. Build `FrozenBehaviorReferenceV2` and conclude descriptive Gate R2.
+2. Complete the audit report, rerun the full
    test suite, push the exact commit, and package the clean ZIP.

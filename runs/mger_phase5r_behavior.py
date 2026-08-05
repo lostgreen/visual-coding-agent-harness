@@ -13,6 +13,7 @@ from vcah.phase5r import frame_cost_breakdown, runtime_decision_trace
 
 METRIC_KEYS = (
     "visual_frames_inspected",
+    "requested_visual_window_count",
     "visual_window_count",
     "sum_requested_window_duration",
     "mean_requested_fps",
@@ -34,6 +35,7 @@ def collect_root(root: Path) -> dict[str, Any]:
     configs: list[dict[str, Any]] = []
     interactions: list[dict[str, Any]] = []
     frame_manifest_digests: list[str] = []
+    frame_manifest_materialized: list[bool] = []
     for case_dir in sorted((root / "cases").glob("*")):
         runtime_path = case_dir / "runtime_summary.json"
         config_path = case_dir / "run_config.json"
@@ -51,6 +53,7 @@ def collect_root(root: Path) -> dict[str, Any]:
         frame_manifest_path = case_dir / "observations" / "window_frame_manifest.jsonl"
         frame_rows = _read_jsonl(frame_manifest_path)
         frame_manifest_digests.append(_file_sha256(frame_manifest_path))
+        frame_manifest_materialized.append(frame_manifest_path.is_file())
         cost = frame_cost_breakdown(trace, observations, frame_rows)
         decision_trace = runtime_decision_trace(trace)
         runtime_metrics = _mapping(runtime.get("runtime_metrics"))
@@ -98,6 +101,7 @@ def collect_root(root: Path) -> dict[str, Any]:
             configs,
             interactions,
             frame_manifest_digests,
+            frame_manifest_materialized,
         ),
     }
 
@@ -113,6 +117,8 @@ def build_behavior_reference(
     current = [dict(root) for root in current_roots]
     expected_ids = list(historical[0].get("case_ids", ())) if historical else []
     all_roots = [*historical, *current]
+    historical_configs = {_stable_hash(root.get("audit_config")) for root in historical}
+    current_configs = {_stable_hash(root.get("audit_config")) for root in current}
     checks = {
         "minimum_roots_per_arm": (
             len(historical) >= minimum_roots_per_arm
@@ -126,6 +132,11 @@ def build_behavior_reference(
         and all(list(root.get("case_ids", ())) == expected_ids for root in all_roots),
         "within_root_config_consistency": bool(all_roots)
         and all(bool(root.get("audit_config_consistent")) for root in all_roots),
+        "within_arm_config_consistency": bool(historical and current)
+        and len(historical_configs) == 1
+        and len(current_configs) == 1,
+        "cross_arm_audit_config_match": bool(historical and current)
+        and historical_configs == current_configs,
     }
     historical_summary = _arm_summary(historical, expected_ids)
     current_summary = _arm_summary(current, expected_ids)
@@ -405,6 +416,7 @@ def _provenance_summary(
     configs: Sequence[Mapping[str, Any]],
     interactions: Sequence[Mapping[str, Any]],
     frame_manifest_digests: Sequence[str],
+    frame_manifest_materialized: Sequence[bool] = (),
 ) -> dict[str, Any]:
     embedded = [
         _mapping(config.get("phase5r_provenance"))
@@ -510,6 +522,9 @@ def _provenance_summary(
         "output_frame_manifest_root_digest": _stable_hash(
             sorted(frame_manifest_digests)
         ),
+        "materialized_frame_manifest_case_count": sum(frame_manifest_materialized),
+        "unmaterialized_frame_manifest_case_count": len(frame_manifest_materialized)
+        - sum(frame_manifest_materialized),
         "source_video_manifest_digests": sorted(
             {
                 str(row.get("source_video_manifest_digest", "") or "")

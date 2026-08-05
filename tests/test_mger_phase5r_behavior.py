@@ -131,6 +131,8 @@ def test_collect_root_recomputes_cost_and_decision_trace(tmp_path: Path) -> None
     assert result["metrics"]["visual_window_count"] == 1.0
     assert result["metrics"]["answer_rate"] == 1.0
     assert result["provenance"]["provider_request_id_count"] == 2
+    assert result["provenance"]["materialized_frame_manifest_case_count"] == 2
+    assert result["provenance"]["unmaterialized_frame_manifest_case_count"] == 0
     assert all(case["decision_trace_digest"] for case in result["cases"])
 
 
@@ -189,6 +191,8 @@ def test_reference_reports_root_case_and_trace_distributions(tmp_path: Path) -> 
     )
 
     assert result["decision"] == "READY"
+    assert result["checks"]["within_arm_config_consistency"] is True
+    assert result["checks"]["cross_arm_audit_config_match"] is True
     frame_comparison = result["cross_arm"]["root_metric_comparison"][
         "visual_frames_inspected"
     ]
