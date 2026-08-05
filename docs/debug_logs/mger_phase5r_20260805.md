@@ -10,7 +10,8 @@ historical/current controller runs are allowed.
 
 - Branch: `codex/mger-phase5r-repro-audit`
 - R1 implementation commit: `8b757e4`
-- Current reporting/runtime commit: `e33a74c`
+- Formal current live-run commit: `b9ebd2a`
+- Final reference-generator commit: `81abf3a`
 - Historical source revision: `74f012d`
 - Case root: `/home/xuboshen/zgw/mger_runs/cases10-input-74f012d-20260804`
 - Recorded fixture: `tests/fixtures/mger_phase3_cases10_74f012d`
@@ -59,6 +60,5 @@ historical/current controller runs are allowed.
 
 ## Next Actions
 
-1. Build `FrozenBehaviorReferenceV2` and conclude descriptive Gate R2.
-2. Complete the audit report, rerun the full
-   test suite, push the exact commit, and package the clean ZIP.
+1. Commit the final audit report and verify GitHub branch identity.
+2. Download the compact R1/R2 artifacts and package the clean ZIP.
