@@ -112,6 +112,8 @@ def build_behavior_reference(
     *,
     expected_case_count: int = 10,
     minimum_roots_per_arm: int = 3,
+    historical_runner_revision: str | None = None,
+    current_runner_revision: str | None = None,
 ) -> dict[str, Any]:
     historical = [dict(root) for root in historical_roots]
     current = [dict(root) for root in current_roots]
@@ -119,6 +121,13 @@ def build_behavior_reference(
     all_roots = [*historical, *current]
     historical_configs = {_stable_hash(root.get("audit_config")) for root in historical}
     current_configs = {_stable_hash(root.get("audit_config")) for root in current}
+    current_embedded_revisions = {
+        str(revision)
+        for root in current
+        for revision in tuple(
+            _mapping(root.get("provenance")).get("runner_commits", ()) or ()
+        )
+    }
     checks = {
         "minimum_roots_per_arm": (
             len(historical) >= minimum_roots_per_arm
@@ -138,6 +147,16 @@ def build_behavior_reference(
         "cross_arm_audit_config_match": bool(historical and current)
         and historical_configs == current_configs,
     }
+    if historical_runner_revision is not None or current_runner_revision is not None:
+        checks.update(
+            {
+                "runner_revisions_declared": bool(
+                    historical_runner_revision and current_runner_revision
+                ),
+                "current_runner_revision_embedded_match": bool(current_runner_revision)
+                and current_embedded_revisions == {str(current_runner_revision)},
+            }
+        )
     historical_summary = _arm_summary(historical, expected_ids)
     current_summary = _arm_summary(current, expected_ids)
     return {
@@ -153,6 +172,17 @@ def build_behavior_reference(
         "thresholds": {
             "expected_case_count": expected_case_count,
             "minimum_roots_per_arm": minimum_roots_per_arm,
+        },
+        "runner_revisions": {
+            "historical_commit_current_environment": {
+                "revision": historical_runner_revision,
+                "evidence": "externally_verified_detached_checkout",
+            },
+            "current_frozen_compatibility": {
+                "revision": current_runner_revision,
+                "embedded_revisions": sorted(current_embedded_revisions),
+                "evidence": "per_case_phase5r_provenance",
+            },
         },
         "checks": checks,
         "failed_checks": [key for key, passed in checks.items() if not passed],
@@ -492,6 +522,12 @@ def _provenance_summary(
         for row in interactions
         if row.get("prompt")
     ]
+    embedded_role_settings = [
+        settings
+        for row in embedded
+        for settings in _mapping(row.get("models")).values()
+        if isinstance(settings, Mapping)
+    ]
     return {
         "embedded_case_provenance_count": len(embedded),
         "historical_external_reconstruction": not bool(embedded),
@@ -504,6 +540,19 @@ def _provenance_summary(
         ),
         "requested_models": _unique_json_values(
             [config.get("models") for config in configs if config.get("models")]
+        ),
+        "requested_role_settings": _unique_json_values(embedded_role_settings),
+        "temperature_settings": _unique_json_values(
+            [row.get("temperature") for row in api_rows if "temperature" in row]
+            + [row.get("temperature") for row in embedded_role_settings]
+        ),
+        "top_p_settings": _unique_json_values(
+            [row.get("top_p") for row in api_rows if "top_p" in row]
+            + [row.get("top_p") for row in embedded_role_settings]
+        ),
+        "requested_seed_settings": _unique_json_values(
+            [row.get("requested_seed") for row in api_rows if "requested_seed" in row]
+            + [row.get("requested_seed") for row in embedded_role_settings]
         ),
         "temperatures": sorted(
             {
@@ -526,6 +575,11 @@ def _provenance_summary(
             {
                 str(row.get("provider_reported_seed_support"))
                 for row in api_rows
+                if row.get("provider_reported_seed_support") is not None
+            }
+            | {
+                str(row.get("provider_reported_seed_support"))
+                for row in embedded_role_settings
                 if row.get("provider_reported_seed_support") is not None
             }
         ),
@@ -656,6 +710,8 @@ def main() -> int:
     parser.add_argument("--current-root", action="append", required=True)
     parser.add_argument("--expected-case-count", type=int, default=10)
     parser.add_argument("--minimum-roots-per-arm", type=int, default=3)
+    parser.add_argument("--historical-runner-revision", required=True)
+    parser.add_argument("--current-runner-revision", required=True)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -666,6 +722,8 @@ def main() -> int:
         current,
         expected_case_count=args.expected_case_count,
         minimum_roots_per_arm=args.minimum_roots_per_arm,
+        historical_runner_revision=args.historical_runner_revision,
+        current_runner_revision=args.current_runner_revision,
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

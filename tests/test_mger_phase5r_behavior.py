@@ -165,6 +165,8 @@ def test_provenance_reconstructs_historical_interaction_metadata() -> None:
     assert result["provider_request_id_count"] == 1
     assert result["service_version_unpinned"] is True
     assert result["temperatures"] == [0.0]
+    assert result["temperature_settings"] == [0.0]
+    assert result["top_p_settings"] == [1.0]
     assert result["prompt_digest"]
 
 
@@ -188,11 +190,15 @@ def test_reference_reports_root_case_and_trace_distributions(tmp_path: Path) -> 
         current,
         expected_case_count=2,
         minimum_roots_per_arm=3,
+        historical_runner_revision="historical-commit",
+        current_runner_revision="commit",
     )
 
     assert result["decision"] == "READY"
     assert result["checks"]["within_arm_config_consistency"] is True
     assert result["checks"]["cross_arm_audit_config_match"] is True
+    assert result["checks"]["runner_revisions_declared"] is True
+    assert result["checks"]["current_runner_revision_embedded_match"] is True
     frame_comparison = result["cross_arm"]["root_metric_comparison"][
         "visual_frames_inspected"
     ]
