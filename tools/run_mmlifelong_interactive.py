@@ -151,12 +151,10 @@ def main() -> None:
     driver = VirtualVideoMultiRoundDriver(
         reasoner=reasoner,
         investigator=investigator,
-        max_rounds=max(
-            args.max_rounds,
-            reasoner.decision_count
-            if isinstance(reasoner, RecordedDecisionReasoner)
-            else args.max_rounds,
-        ),
+        # Recorded decisions must traverse the same semantic-budget boundary as
+        # their source run. The driver's finalize path can consume decisions
+        # recorded after that boundary without dispatching their tasks.
+        max_rounds=args.max_rounds,
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
         control_retry_budget=effective_control_retry_budget,
