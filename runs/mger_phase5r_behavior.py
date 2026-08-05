@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from statistics import mean, median
@@ -31,6 +32,8 @@ def collect_root(root: Path) -> dict[str, Any]:
     root = Path(root)
     cases: list[dict[str, Any]] = []
     configs: list[dict[str, Any]] = []
+    interactions: list[dict[str, Any]] = []
+    frame_manifest_digests: list[str] = []
     for case_dir in sorted((root / "cases").glob("*")):
         runtime_path = case_dir / "runtime_summary.json"
         config_path = case_dir / "run_config.json"
@@ -44,9 +47,12 @@ def collect_root(root: Path) -> dict[str, Any]:
             if isinstance(row, Mapping)
         ]
         observations = _read_jsonl(case_dir / "observation_log.jsonl")
-        frame_rows = _read_jsonl(
+        interactions.extend(_read_jsonl(case_dir / "interactions.jsonl"))
+        frame_manifest_path = (
             case_dir / "observations" / "window_frame_manifest.jsonl"
         )
+        frame_rows = _read_jsonl(frame_manifest_path)
+        frame_manifest_digests.append(_file_sha256(frame_manifest_path))
         cost = frame_cost_breakdown(trace, observations, frame_rows)
         decision_trace = runtime_decision_trace(trace)
         runtime_metrics = _mapping(runtime.get("runtime_metrics"))
@@ -88,7 +94,11 @@ def collect_root(root: Path) -> dict[str, Any]:
         "audit_config_digests": config_digests,
         "metrics": root_metrics,
         "cases": cases,
-        "provenance": _provenance_summary(configs),
+        "provenance": _provenance_summary(
+            configs,
+            interactions,
+            frame_manifest_digests,
+        ),
     }
 
 
@@ -375,39 +385,129 @@ def _audit_config(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _provenance_summary(configs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    rows = [
+def _provenance_summary(
+    configs: Sequence[Mapping[str, Any]],
+    interactions: Sequence[Mapping[str, Any]],
+    frame_manifest_digests: Sequence[str],
+) -> dict[str, Any]:
+    embedded = [
         _mapping(config.get("phase5r_provenance"))
         for config in configs
         if isinstance(config.get("phase5r_provenance"), Mapping)
     ]
+    api_rows = [
+        _mapping(row.get("api_response"))
+        for row in interactions
+        if isinstance(row.get("api_response"), Mapping)
+    ]
+    provider_request_ids = {
+        str(value)
+        for row in api_rows
+        if (value := row.get("provider_request_id"))
+    } | {
+        str(value)
+        for row in embedded
+        for value in tuple(row.get("provider_request_ids", ()) or ())
+        if value
+    }
+    resolved_deployments = {
+        str(value)
+        for row in api_rows
+        for key in ("resolved_deployment_name", "deployment_name", "resolved_model")
+        if (value := row.get(key))
+    } | {
+        str(value)
+        for row in embedded
+        for value in tuple(row.get("resolved_deployment_names", ()) or ())
+        if value
+    }
+    prompt_hashes = [
+        hashlib.sha256(str(row.get("prompt", "")).encode("utf-8")).hexdigest()
+        for row in interactions
+        if row.get("prompt")
+    ]
     return {
-        "case_provenance_count": len(rows),
+        "embedded_case_provenance_count": len(embedded),
+        "historical_external_reconstruction": not bool(embedded),
         "runner_commits": sorted(
-            {str(row.get("runner_commit", "") or "") for row in rows}
-        ),
-        "service_version_unpinned": any(
-            bool(row.get("service_version_unpinned")) for row in rows
-        ),
-        "resolved_deployment_names": sorted(
             {
-                str(name)
-                for row in rows
-                for name in tuple(row.get("resolved_deployment_names", ()) or ())
+                str(row.get("runner_commit", "") or "")
+                for row in embedded
+                if row.get("runner_commit")
             }
         ),
-        "provider_request_id_count": len(
+        "requested_models": _unique_json_values(
+            [config.get("models") for config in configs if config.get("models")]
+        ),
+        "temperatures": sorted(
+            {float(row["temperature"]) for row in api_rows if row.get("temperature") is not None}
+        ),
+        "top_p_values": sorted(
+            {float(row["top_p"]) for row in api_rows if row.get("top_p") is not None}
+        ),
+        "requested_seeds": sorted(
             {
-                str(request_id)
-                for row in rows
-                for request_id in tuple(row.get("provider_request_ids", ()) or ())
-                if request_id
+                str(row.get("requested_seed"))
+                for row in api_rows
+                if row.get("requested_seed") is not None
             }
         ),
+        "provider_seed_support": sorted(
+            {
+                str(row.get("provider_reported_seed_support"))
+                for row in api_rows
+                if row.get("provider_reported_seed_support") is not None
+            }
+        ),
+        "provider_request_ids": sorted(provider_request_ids),
+        "provider_request_id_count": len(provider_request_ids),
+        "resolved_deployment_names": sorted(resolved_deployments),
+        "service_version_unpinned": not bool(resolved_deployments),
+        "caption_index_digests": sorted(
+            {
+                str(config.get("caption_config_digest", "") or "")
+                for config in configs
+                if config.get("caption_config_digest")
+            }
+        ),
+        "embedding_revisions": sorted(
+            {
+                str(_mapping(config.get("embedding")).get("revision", "") or "")
+                for config in configs
+                if _mapping(config.get("embedding")).get("revision")
+            }
+        ),
+        "frame_cache_digests": sorted(
+            {
+                str(row.get("frame_cache_digest", "") or "")
+                for row in embedded
+                if row.get("frame_cache_digest")
+            }
+        ),
+        "output_frame_manifest_root_digest": _stable_hash(
+            sorted(frame_manifest_digests)
+        ),
+        "source_video_manifest_digests": sorted(
+            {
+                str(row.get("source_video_manifest_digest", "") or "")
+                for row in embedded
+                if row.get("source_video_manifest_digest")
+            }
+        ),
+        "input_digests": sorted(
+            {
+                str(config.get("input_digest", "") or "")
+                for config in configs
+                if config.get("input_digest")
+            }
+        ),
+        "prompt_digest": _stable_hash(prompt_hashes),
+        "reasoner_system_prompt_status": "not_separate_in_client_contract",
         "environment_digests": sorted(
             {
                 str(_mapping(row.get("environment")).get("digest", "") or "")
-                for row in rows
+                for row in embedded
+                if _mapping(row.get("environment")).get("digest")
             }
         ),
     }
@@ -430,10 +530,26 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _stable_hash(value: Any) -> str:
-    import hashlib
-
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _unique_json_values(values: Sequence[Any]) -> list[Any]:
+    keyed = {
+        json.dumps(value, sort_keys=True, separators=(",", ":"), default=str): value
+        for value in values
+    }
+    return [keyed[key] for key in sorted(keyed)]
+
+
+def _file_sha256(path: Path) -> str:
+    if not Path(path).is_file():
+        return hashlib.sha256(b"").hexdigest()
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_json(path: Path) -> dict[str, Any]:

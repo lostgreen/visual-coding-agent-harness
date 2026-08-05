@@ -5,6 +5,7 @@ from pathlib import Path
 
 from runs.mger_phase5r_behavior import (
     _distribution,
+    _provenance_summary,
     build_behavior_reference,
     collect_root,
 )
@@ -133,6 +134,38 @@ def test_collect_root_recomputes_cost_and_decision_trace(tmp_path: Path) -> None
     assert result["metrics"]["answer_rate"] == 1.0
     assert result["provenance"]["provider_request_id_count"] == 2
     assert all(case["decision_trace_digest"] for case in result["cases"])
+
+
+def test_provenance_reconstructs_historical_interaction_metadata() -> None:
+    result = _provenance_summary(
+        [
+            {
+                "models": {"reasoner": "model", "investigator": "model"},
+                "caption_config_digest": "caption-digest",
+                "input_digest": "input-digest",
+                "embedding": {"revision": "embedding-revision"},
+            }
+        ],
+        [
+            {
+                "prompt": "historical prompt",
+                "api_response": {
+                    "provider_request_id": "request-id",
+                    "provider_reported_seed_support": "unsupported",
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                },
+            }
+        ],
+        ["frame-manifest-digest"],
+    )
+
+    assert result["historical_external_reconstruction"] is True
+    assert result["provider_request_ids"] == ["request-id"]
+    assert result["provider_request_id_count"] == 1
+    assert result["service_version_unpinned"] is True
+    assert result["temperatures"] == [0.0]
+    assert result["prompt_digest"]
 
 
 def test_reference_reports_root_case_and_trace_distributions(tmp_path: Path) -> None:
