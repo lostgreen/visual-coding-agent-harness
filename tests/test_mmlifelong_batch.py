@@ -4,6 +4,7 @@ from collections import Counter
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -53,3 +54,42 @@ def test_stratified_selection_caps_limit_at_available_cases() -> None:
     selected = BATCH.select_stratified_cases(cases, 20)
 
     assert [case["case_id"] for case in selected] == ["only-case"]
+
+
+def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
+    fixture_root = tmp_path / "fixtures"
+    fixture_path = fixture_root / "cases" / "case-0072.json"
+    fixture_path.parent.mkdir(parents=True)
+    fixture_path.write_text("{}\n", encoding="utf-8")
+    args = SimpleNamespace(
+        config="api.yaml",
+        reasoner_section="reasoner_api",
+        investigator_section="investigator_api",
+        answer_policy="benchmark_best_effort",
+        controller_mode="frozen_baseline",
+        controller_evidence_visibility="none",
+        measurement_control="none",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        max_rounds=6,
+        max_investigations=12,
+        max_tasks_per_round=4,
+        control_retry_budget=0,
+        caption_index_mode="hybrid",
+        caption_query_strategy="joint",
+        caption_config_digest="digest",
+        embedding_model="embedding",
+        embedding_device="cpu",
+        embedding_batch_size=64,
+        embedding_revision=None,
+        recorded_fixture_root=str(fixture_root),
+    )
+    case = {
+        "case_id": "case-0072",
+        "case_workspace": "/cases/case-0072",
+    }
+
+    command = BATCH._case_command(case, args, tmp_path / "out")
+
+    index = command.index("--recorded-decisions")
+    assert command[index + 1] == str(fixture_path)

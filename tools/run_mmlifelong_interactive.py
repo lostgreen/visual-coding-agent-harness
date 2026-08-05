@@ -15,6 +15,15 @@ from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
 from vcah.model_client import OpenAICompatibleClient
 from vcah.multiround import VirtualVideoMultiRoundDriver
 from vcah.phase5 import Phase5Protocol, blind_prior_prompt
+from vcah.phase5r import (
+    MechanicalReplayClient,
+    RecordedDecisionReasoner,
+    build_run_provenance,
+    frame_cost_breakdown,
+    load_fixture,
+    mechanical_replay_audit,
+    runtime_decision_trace,
+)
 from vcah.runtime_metrics import agent_run_metrics
 from vcah.virtual_video import VirtualVideoWorkspace
 
@@ -47,8 +56,30 @@ def main() -> None:
     _write_json(run_root / "case.json", runtime_case_payload)
     workspace = VirtualVideoWorkspace.load(run_root)
 
-    reasoner_api = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.reasoner_section)
+    recorded_fixture = (
+        load_fixture(Path(args.recorded_decisions))
+        if args.recorded_decisions
+        else None
+    )
+    if recorded_fixture and (
+        protocol.controller_mode != "frozen_baseline"
+        or protocol.measurement_control != "none"
+    ):
+        raise ValueError(
+            "recorded replay requires --controller-mode frozen_baseline and "
+            "--measurement-control none"
+        )
+    if recorded_fixture and str(recorded_fixture.get("case_id", "")) != workspace.case.case_id:
+        raise ValueError("recorded replay fixture case_id does not match the case workspace")
+    reasoner_api = (
+        None
+        if recorded_fixture
+        else OpenAICompatibleClient.from_yaml(
+            Path(args.config), section=args.reasoner_section
+        )
+    )
     if protocol.measurement_control == "blind_prior":
+        assert reasoner_api is not None
         _run_blind_prior(
             workspace,
             source=source,
@@ -61,7 +92,13 @@ def main() -> None:
         raise RuntimeError(
             "minimal_tool is gated by Phase 5 Gate-0 and is not enabled in the measurement-control revision"
         )
-    investigator_api = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.investigator_section)
+    investigator_api = (
+        MechanicalReplayClient()
+        if recorded_fixture
+        else OpenAICompatibleClient.from_yaml(
+            Path(args.config), section=args.investigator_section
+        )
+    )
     embedding_adapter = None
     if args.caption_index_mode in {"dense", "hybrid"}:
         if not args.embedding_model:
@@ -76,6 +113,17 @@ def main() -> None:
 
     trace_path = workspace.root_dir / "interactions.jsonl"
     trace_path.touch(exist_ok=False)
+    reasoner = (
+        RecordedDecisionReasoner(recorded_fixture, trace_path=trace_path)
+        if recorded_fixture
+        else WorkspaceReasoner(
+            reasoner_api,
+            trace_path=trace_path,
+            controller_mode=protocol.controller_mode,
+            controller_evidence_visibility=protocol.controller_evidence_visibility,
+            measurement_control=protocol.measurement_control,
+        )
+    )
     investigator = VisionInvestigator(
         workspace,
         api=investigator_api,
@@ -86,7 +134,11 @@ def main() -> None:
         caption_query_strategy=args.caption_query_strategy,
     )
     effective_control_retry_budget = (
-        1 if protocol.controller_mode == "frozen_baseline" else args.control_retry_budget
+        0
+        if recorded_fixture
+        else 1
+        if protocol.controller_mode == "frozen_baseline"
+        else args.control_retry_budget
     )
     effective_evidence_control_mode = (
         args.evidence_control_mode if protocol.controller_mode == "mger" else "shadow"
@@ -97,15 +149,14 @@ def main() -> None:
         else "llm_authored"
     )
     driver = VirtualVideoMultiRoundDriver(
-        reasoner=WorkspaceReasoner(
-            reasoner_api,
-            trace_path=trace_path,
-            controller_mode=protocol.controller_mode,
-            controller_evidence_visibility=protocol.controller_evidence_visibility,
-            measurement_control=protocol.measurement_control,
-        ),
+        reasoner=reasoner,
         investigator=investigator,
-        max_rounds=args.max_rounds,
+        max_rounds=max(
+            args.max_rounds,
+            reasoner.decision_count
+            if isinstance(reasoner, RecordedDecisionReasoner)
+            else args.max_rounds,
+        ),
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
         control_retry_budget=effective_control_retry_budget,
@@ -128,6 +179,34 @@ def main() -> None:
         reference_valid=result.reference_valid,
         supporting_intervals=result.supporting_intervals,
     )
+    frame_rows = _read_jsonl(
+        workspace.root_dir / "observations" / "window_frame_manifest.jsonl"
+    )
+    decision_trace = runtime_decision_trace(result.trace)
+    cost_breakdown = frame_cost_breakdown(result.trace, observation_rows, frame_rows)
+    role_settings = {
+        "reasoner": (
+            {
+                "model": f"recorded:{reasoner.source_revision}",
+                "temperature": None,
+                "top_p": None,
+                "requested_seed": None,
+                "provider_seed_supported": False,
+                "provider_reported_seed_support": "not_applicable",
+            }
+            if isinstance(reasoner, RecordedDecisionReasoner)
+            else reasoner_api.replay_settings
+        ),
+        "investigator": investigator_api.replay_settings,
+    }
+    repository_root = Path(__file__).resolve().parents[1]
+    provenance = build_run_provenance(
+        workspace,
+        interactions_path=trace_path,
+        role_settings=role_settings,
+        caption_index_digest=args.caption_config_digest,
+        repository_root=repository_root,
+    )
 
     config = {
         "schema_version": "MMLifelongRunConfigV1",
@@ -136,8 +215,8 @@ def main() -> None:
         "answer_policy": args.answer_policy,
         "evidence_control_mode": effective_evidence_control_mode,
         "evidence_state_mode": effective_evidence_state_mode,
-        "max_rounds": args.max_rounds,
-        "semantic_round_budget": args.max_rounds,
+        "max_rounds": driver.max_rounds,
+        "semantic_round_budget": driver.semantic_round_budget,
         "control_retry_budget": effective_control_retry_budget,
         "require_obligation_coverage": protocol.controller_mode == "mger",
         "require_item_provenance": protocol.controller_mode == "mger",
@@ -162,9 +241,14 @@ def main() -> None:
         "implementation_digest": _implementation_digest(),
         "input_digest": _input_digest(source, runtime_question.to_dict()),
         "models": {
-            "reasoner": reasoner_api.model,
+            "reasoner": role_settings["reasoner"]["model"],
             "investigator": investigator_api.model,
         },
+        "phase5r_mode": "recorded_replay" if recorded_fixture else "live",
+        "recorded_fixture_digest": (
+            _file_sha256(Path(args.recorded_decisions)) if recorded_fixture else None
+        ),
+        "phase5r_provenance": provenance,
         "web_enabled": False,
         "supporting_interval_source": "explicit_support",
     }
@@ -193,6 +277,20 @@ def main() -> None:
     summary["schema_version"] = "RuntimeSummaryV1"
     summary["runtime_metrics"] = runtime_metrics
     summary["config_digest"] = config["config_digest"]
+    summary["decision_trace"] = decision_trace
+    summary["phase5r_cost_breakdown"] = cost_breakdown
+    if recorded_fixture:
+        replay_audit = mechanical_replay_audit(
+            recorded_fixture,
+            workspace_root=workspace.root_dir,
+            trace=result.trace,
+            observation_rows=observation_rows,
+        )
+        summary["phase5r_replay"] = {
+            "decision": replay_audit["decision"],
+            "failed_checks": replay_audit["failed_checks"],
+        }
+        _write_json(workspace.root_dir / "phase5r_replay.json", replay_audit)
     _write_json(summary_path, summary)
     _write_json(workspace.root_dir / "runtime_summary.json", summary)
 
@@ -205,6 +303,7 @@ def main() -> None:
                 "prediction": str(workspace.root_dir / "prediction.json"),
                 "runtime_summary": str(workspace.root_dir / "runtime_summary.json"),
                 "runtime_metrics": runtime_metrics,
+                "phase5r_replay": summary.get("phase5r_replay"),
                 "rounds": result.rounds,
                 "investigations": result.investigation_count,
                 "config_digest": config["config_digest"],
@@ -372,6 +471,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
         Path("src/vcah/phase5.py"),
+        Path("src/vcah/phase5r.py"),
         Path("src/vcah/evidence_state.py"),
         Path("src/vcah/evidence_runtime.py"),
         Path("src/vcah/sampling.py"),
@@ -453,6 +553,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
+    parser.add_argument(
+        "--recorded-decisions",
+        help="Phase 5R compact case fixture; disables Reasoner and Investigator API calls.",
+    )
     return parser.parse_args()
 
 

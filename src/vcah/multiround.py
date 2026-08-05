@@ -3298,13 +3298,16 @@ def _report_completed(report: InvestigationReport) -> int:
 def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
     return {
         "query_id": task.query_id,
+        "goal": task.goal,
         "segment_id": task.segment_id,
         "time_range": list(task.time_range) if task.time_range else [],
         "coordinate_space": task.coordinate_space,
         "source_video_ids": list(task.source_video_ids),
         "conversion_trace": [dict(item) for item in task.conversion_trace],
         "inspection_mode": task.inspection_mode,
+        "search_terms": list(task.search_terms),
         "caption_queries": list(task.caption_queries),
+        "expected_evidence": task.expected_evidence,
         "top_k": task.top_k,
         "index_mode": task.index_mode,
         "expand_neighbors": task.expand_neighbors,

@@ -14,6 +14,7 @@ import time
 from typing import Any, Mapping, Sequence
 
 from vcah.phase5 import Phase5Protocol
+from vcah.replay import file_checksum
 
 
 SELECTION_STRATEGY = "question_type_temporal_quantiles"
@@ -108,11 +109,20 @@ def main() -> None:
     (out_root / "cases").mkdir(exist_ok=True)
 
     candidates = discover_cases(Path(args.case_root))
-    selected = select_stratified_cases(candidates, args.limit)
+    if args.case_ids:
+        by_id = {str(case["case_id"]): case for case in candidates}
+        missing = [case_id for case_id in args.case_ids if case_id not in by_id]
+        if missing:
+            raise ValueError(f"requested case IDs are missing: {', '.join(missing)}")
+        selected = tuple(dict(by_id[case_id]) for case_id in args.case_ids)
+        selection_strategy = "explicit_case_ids"
+    else:
+        selected = select_stratified_cases(candidates, args.limit)
+        selection_strategy = SELECTION_STRATEGY
     selection = {
         "schema_version": 1,
         **protocol.to_dict(),
-        "strategy": SELECTION_STRATEGY,
+        "strategy": selection_strategy,
         "candidate_count": len(candidates),
         "selected_count": len(selected),
         "caption_config_digest": args.caption_config_digest,
@@ -122,6 +132,13 @@ def main() -> None:
         "evidence_control_mode": args.evidence_control_mode,
         "evidence_state_mode": args.evidence_state_mode,
         "workers": max(1, min(int(args.workers), len(selected))),
+        "phase5r_mode": "recorded_replay" if args.recorded_fixture_root else "live",
+        "recorded_fixture_root": str(args.recorded_fixture_root or ""),
+        "recorded_fixture_manifest": (
+            file_checksum(Path(args.recorded_fixture_root) / "manifest.json")
+            if args.recorded_fixture_root
+            else None
+        ),
         "question_type_counts": dict(Counter(case["question_type"] for case in selected)),
         "cases": [
             {
@@ -239,6 +256,8 @@ def _successful_result(
     prediction = json.loads(prediction_path.read_text(encoding="utf-8"))
     runtime_path = out_dir / "runtime_summary.json"
     runtime = json.loads(runtime_path.read_text(encoding="utf-8")) if runtime_path.is_file() else {}
+    replay_path = out_dir / "phase5r_replay.json"
+    replay = json.loads(replay_path.read_text(encoding="utf-8")) if replay_path.is_file() else {}
     return {
         "case_id": str(case["case_id"]),
         "question_type": case["question_type"],
@@ -254,6 +273,12 @@ def _successful_result(
             "reference_valid": runtime.get("reference_valid"),
             "runtime_metrics": runtime.get("runtime_metrics"),
         },
+        "phase5r_replay": {
+            "decision": replay.get("decision"),
+            "failed_checks": replay.get("failed_checks", []),
+        }
+        if replay
+        else None,
     }
 
 
@@ -311,6 +336,15 @@ def _case_command(
     ]
     if args.embedding_revision:
         command.extend(("--embedding-revision", str(args.embedding_revision)))
+    if args.recorded_fixture_root:
+        fixture_path = (
+            Path(args.recorded_fixture_root)
+            / "cases"
+            / f"{case['case_id']}.json"
+        )
+        if not fixture_path.is_file():
+            raise FileNotFoundError(f"missing recorded fixture: {fixture_path}")
+        command.extend(("--recorded-decisions", str(fixture_path)))
     return command
 
 
@@ -336,6 +370,10 @@ def _write_batch_summary(
                 "controller_evidence_visibility"
             ),
             "measurement_control": selection.get("measurement_control"),
+            "phase5r_mode": selection.get("phase5r_mode"),
+            "recorded_fixture_manifest": selection.get(
+                "recorded_fixture_manifest"
+            ),
             "results": [results[case_id] for case_id in sorted(results)],
         },
     )
@@ -359,6 +397,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--caption-config-digest", required=True)
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--case-ids", nargs="+")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--case-timeout-sec", type=int, default=1800)
     parser.add_argument("--reasoner-section", default="investigator_api")
@@ -398,6 +437,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
+    parser.add_argument("--recorded-fixture-root")
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
