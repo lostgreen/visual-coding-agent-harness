@@ -286,6 +286,10 @@ def _decision_trace_divergence(
     cases: dict[str, Any] = {}
     exact_pairs = 0
     total_pairs = 0
+    historical_within_exact = 0
+    historical_within_total = 0
+    current_within_exact = 0
+    current_within_total = 0
     for case_id in case_ids:
         old = _case_traces(historical_roots, case_id)
         new = _case_traces(current_roots, case_id)
@@ -297,6 +301,12 @@ def _decision_trace_divergence(
         case_exact = sum(value is None for value in divergences)
         exact_pairs += case_exact
         total_pairs += pair_count
+        historical_within = _within_arm_trace_summary(old)
+        current_within = _within_arm_trace_summary(new)
+        historical_within_exact += int(historical_within["exact_pair_count"])
+        historical_within_total += int(historical_within["pair_count"])
+        current_within_exact += int(current_within["exact_pair_count"])
+        current_within_total += int(current_within["pair_count"])
         finite = [float(value) for value in divergences if value is not None]
         old_digests = {_stable_hash(trace) for trace in old}
         new_digests = {_stable_hash(trace) for trace in new}
@@ -306,6 +316,8 @@ def _decision_trace_divergence(
             "shared_trace_digest_count": len(old_digests & new_digests),
             "historical_unique_traces": _unique_traces(old),
             "current_unique_traces": _unique_traces(new),
+            "historical_within_arm": historical_within,
+            "current_within_arm": current_within,
             "cross_arm_pair_count": pair_count,
             "exact_cross_arm_pair_count": case_exact,
             "exact_cross_arm_pair_rate": (
@@ -319,6 +331,10 @@ def _decision_trace_divergence(
         "exact_cross_arm_pair_rate": (
             round(exact_pairs / total_pairs, 6) if total_pairs else 0.0
         ),
+        "historical_within_arm": _pair_totals(
+            historical_within_exact, historical_within_total
+        ),
+        "current_within_arm": _pair_totals(current_within_exact, current_within_total),
         "cases": cases,
     }
 
@@ -344,6 +360,30 @@ def _unique_traces(
         for trace in traces
     }
     return [keyed[key] for key in sorted(keyed)]
+
+
+def _within_arm_trace_summary(
+    traces: Sequence[Sequence[Mapping[str, Any]]],
+) -> dict[str, Any]:
+    divergences = [
+        _earliest_divergence(traces[left], traces[right])
+        for left in range(len(traces))
+        for right in range(left + 1, len(traces))
+    ]
+    exact = sum(value is None for value in divergences)
+    finite = [float(value) for value in divergences if value is not None]
+    return {
+        **_pair_totals(exact, len(divergences)),
+        "earliest_divergence_round_distribution": _distribution(finite),
+    }
+
+
+def _pair_totals(exact: int, total: int) -> dict[str, Any]:
+    return {
+        "pair_count": total,
+        "exact_pair_count": exact,
+        "exact_pair_rate": round(exact / total, 6) if total else 0.0,
+    }
 
 
 def _earliest_divergence(

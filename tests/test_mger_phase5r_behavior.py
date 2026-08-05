@@ -203,5 +203,7 @@ def test_reference_reports_root_case_and_trace_distributions(tmp_path: Path) -> 
     divergence = result["cross_arm"]["decision_trace_divergence"]
     assert divergence["cross_arm_pair_count"] == 18
     assert divergence["exact_cross_arm_pair_count"] == 6
+    assert divergence["historical_within_arm"]["exact_pair_count"] == 6
+    assert divergence["current_within_arm"]["exact_pair_count"] == 2
     assert len(divergence["cases"]["case-0"]["historical_unique_traces"]) == 1
     assert len(divergence["cases"]["case-0"]["current_unique_traces"]) == 2
