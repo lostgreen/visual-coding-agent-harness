@@ -216,7 +216,7 @@ def _run_case(
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 check=False,
-                env=os.environ.copy(),
+                env=_subprocess_env(),
                 timeout=max(1, int(args.case_timeout_sec)),
             )
         duration = round(time.monotonic() - started, 3)
@@ -387,6 +387,19 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _subprocess_env() -> dict[str, str]:
+    environment = os.environ.copy()
+    repository_root = Path(__file__).resolve().parents[1]
+    required = (str(repository_root), str(repository_root / "src"))
+    existing = tuple(
+        item
+        for item in environment.get("PYTHONPATH", "").split(os.pathsep)
+        if item
+    )
+    environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys((*required, *existing)))
+    return environment
 
 
 def _parse_args() -> argparse.Namespace:

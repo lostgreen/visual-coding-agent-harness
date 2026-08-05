@@ -93,3 +93,11 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
 
     index = command.index("--recorded-decisions")
     assert command[index + 1] == str(fixture_path)
+
+
+def test_batch_subprocess_env_includes_repository_and_src() -> None:
+    environment = BATCH._subprocess_env()
+    entries = environment["PYTHONPATH"].split(BATCH.os.pathsep)
+    repository_root = str(Path(BATCH.__file__).resolve().parents[1])
+
+    assert entries[:2] == [repository_root, f"{repository_root}/src"]
