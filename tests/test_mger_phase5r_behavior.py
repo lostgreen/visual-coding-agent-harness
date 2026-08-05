@@ -93,9 +93,7 @@ def _write_root(
         (case_dir / "runtime_summary.json").write_text(
             json.dumps(runtime), encoding="utf-8"
         )
-        (case_dir / "run_config.json").write_text(
-            json.dumps(config), encoding="utf-8"
-        )
+        (case_dir / "run_config.json").write_text(json.dumps(config), encoding="utf-8")
         (case_dir / "observation_log.jsonl").write_text(
             json.dumps(observation) + "\n", encoding="utf-8"
         )

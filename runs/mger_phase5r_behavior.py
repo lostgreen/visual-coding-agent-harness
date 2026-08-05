@@ -48,16 +48,16 @@ def collect_root(root: Path) -> dict[str, Any]:
         ]
         observations = _read_jsonl(case_dir / "observation_log.jsonl")
         interactions.extend(_read_jsonl(case_dir / "interactions.jsonl"))
-        frame_manifest_path = (
-            case_dir / "observations" / "window_frame_manifest.jsonl"
-        )
+        frame_manifest_path = case_dir / "observations" / "window_frame_manifest.jsonl"
         frame_rows = _read_jsonl(frame_manifest_path)
         frame_manifest_digests.append(_file_sha256(frame_manifest_path))
         cost = frame_cost_breakdown(trace, observations, frame_rows)
         decision_trace = runtime_decision_trace(trace)
         runtime_metrics = _mapping(runtime.get("runtime_metrics"))
         cost["answer_rate"] = _number(
-            runtime_metrics.get("answer_rate", float(bool(runtime.get("answer_present"))))
+            runtime_metrics.get(
+                "answer_rate", float(bool(runtime.get("answer_present")))
+            )
         )
         cost["observed_case_rate"] = _number(
             runtime_metrics.get(
@@ -119,7 +119,9 @@ def build_behavior_reference(
             and len(current) >= minimum_roots_per_arm
         ),
         "expected_case_count": bool(all_roots)
-        and all(int(root.get("case_count", 0)) == expected_case_count for root in all_roots),
+        and all(
+            int(root.get("case_count", 0)) == expected_case_count for root in all_roots
+        ),
         "case_ids_exact": bool(expected_ids)
         and all(list(root.get("case_ids", ())) == expected_ids for root in all_roots),
         "within_root_config_consistency": bool(all_roots)
@@ -164,7 +166,9 @@ def build_behavior_reference(
     }
 
 
-def _arm_summary(roots: Sequence[Mapping[str, Any]], case_ids: Sequence[str]) -> dict[str, Any]:
+def _arm_summary(
+    roots: Sequence[Mapping[str, Any]], case_ids: Sequence[str]
+) -> dict[str, Any]:
     root_metric_distributions = {
         key: _distribution(
             [_number(_mapping(root.get("metrics")).get(key)) for root in roots]
@@ -214,9 +218,7 @@ def _metric_comparison(
         comparisons[key] = {
             "historical": dict(old),
             "current": dict(new),
-            "median_delta_current_minus_historical": round(
-                new_median - old_median, 6
-            ),
+            "median_delta_current_minus_historical": round(new_median - old_median, 6),
             "median_ratio_current_over_historical": (
                 round(new_median / old_median, 6) if old_median else None
             ),
@@ -379,8 +381,8 @@ def _audit_config(config: Mapping[str, Any]) -> dict[str, Any]:
         "caption_index_mode": config.get("caption_index_mode"),
         "caption_query_strategy": config.get("caption_query_strategy"),
         "caption_config_digest": config.get("caption_config_digest"),
-        "embedding_model": embedding.get("model"),
-        "embedding_revision": embedding.get("revision"),
+        "embedding_model": embedding.get("model", embedding.get("model_id")),
+        "embedding_revision": embedding.get("revision", embedding.get("model_version")),
         "models": config.get("models"),
     }
 
@@ -401,9 +403,7 @@ def _provenance_summary(
         if isinstance(row.get("api_response"), Mapping)
     ]
     provider_request_ids = {
-        str(value)
-        for row in api_rows
-        if (value := row.get("provider_request_id"))
+        str(value) for row in api_rows if (value := row.get("provider_request_id"))
     } | {
         str(value)
         for row in embedded
@@ -440,7 +440,11 @@ def _provenance_summary(
             [config.get("models") for config in configs if config.get("models")]
         ),
         "temperatures": sorted(
-            {float(row["temperature"]) for row in api_rows if row.get("temperature") is not None}
+            {
+                float(row["temperature"])
+                for row in api_rows
+                if row.get("temperature") is not None
+            }
         ),
         "top_p_values": sorted(
             {float(row["top_p"]) for row in api_rows if row.get("top_p") is not None}
@@ -475,6 +479,11 @@ def _provenance_summary(
                 str(_mapping(config.get("embedding")).get("revision", "") or "")
                 for config in configs
                 if _mapping(config.get("embedding")).get("revision")
+            }
+            | {
+                str(_mapping(config.get("embedding")).get("model_version", "") or "")
+                for config in configs
+                if _mapping(config.get("embedding")).get("model_version")
             }
         ),
         "frame_cache_digests": sorted(
@@ -591,7 +600,9 @@ def main() -> int:
     )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     old_frames = result["arms"]["historical_commit_current_environment"][
         "root_metric_distributions"
     ]["visual_frames_inspected"]
