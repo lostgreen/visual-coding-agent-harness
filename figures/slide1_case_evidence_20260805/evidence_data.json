@@ -1,0 +1,88 @@
+{
+  "case_0031": {
+    "window": [18011.0, 18047.0],
+    "frames": 72,
+    "sampling_fps": 2.0,
+    "readings": [
+      {
+        "run": "7222282-r2",
+        "attempt_id": "attempt_ac1c8a3ef78d2cf1e78ab229",
+        "text": "金钱尚有金石力，大圣天蓬遣虎狼"
+      },
+      {
+        "run": "74f012d-r1",
+        "attempt_id": "attempt_ac1c8a3ef78d2cf1e78ab229",
+        "text": "金钱勇石全无力，大圣天涯遣虎愁"
+      },
+      {
+        "run": "e91f7ac-r2",
+        "attempt_id": "attempt_54c71d2fc3c91ea85c072c9b",
+        "text": "金钱卖石金无力，大圣天涯遇虎妖"
+      }
+    ],
+    "frame": "raw/case0031_line.jpg",
+    "frame_virtual_time": 18028.9
+  },
+  "case_0038": {
+    "question_answer": "Old Rattle-Drum (旧拨浪鼓)",
+    "inspected_window": [17830.0, 17850.0],
+    "inspected_occurrence": "Tiger Vanguard (虎先锋)",
+    "model_answer": "Keeness of Tiger (虎之锋)",
+    "reference_valid": true,
+    "official_clue_window": [19950.0, 19952.0],
+    "candidate_windows": [[17749.0, 17844.0], [18000.0, 18047.0]],
+    "wrong_frame": "raw/case0038_wrong_item.jpg",
+    "wrong_frame_virtual_time": 17847.5,
+    "gold_frame": "raw/case0038_gold_a.jpg",
+    "gold_frame_virtual_time": 19949.8
+  },
+  "case_0146": {
+    "wide_window": [72521.375, 74563.475],
+    "duration_sec": 2042.1,
+    "requested_fps": 2.0,
+    "frames": 96,
+    "actual_fps": 0.047,
+    "sampling_fidelity": 0.023,
+    "median_sample_step_sec": 21.496,
+    "claims": [
+      {
+        "label": "Burn",
+        "virtual_time": 73725.139,
+        "actual_content": "Weapon crafting menu",
+        "frame": "raw/case0146_burn_probe.jpg"
+      },
+      {
+        "label": "Freeze",
+        "virtual_time": 74327.021,
+        "actual_content": "Woman / cutscene",
+        "frame": "raw/case0146_freeze_probe.jpg"
+      }
+    ],
+    "refinement_frames": 8,
+    "final_reference_status": "candidate_only / reference_invalid"
+  },
+  "phase_4": {
+    "mean_frames": {
+      "B0 Shadow": 59.9,
+      "Runtime-derived R1": 19.9,
+      "Runtime-derived R2": 36.4
+    },
+    "grounded_correct": {
+      "B0 Shadow": 0,
+      "Runtime-derived R1": 0,
+      "Runtime-derived R2": 0
+    },
+    "case_0117": {
+      "phase_3_status": "correct + reference_valid",
+      "phase_3_frames": 32,
+      "phase_4_status": "regressed in both paired roots"
+    }
+  },
+  "sources": [
+    "VCAH_MGER_cases4_adaptive_7222282_r2_light_20260804.zip",
+    "VCAH_MGER_cases10_adaptive_74f012d_r1_light_20260804.zip",
+    "VCAH_MGER_Phase3_10Case_e91f7ac_GPT55_Paired_Light_20260804.zip",
+    "VCAH_MGER_Phase3_Coding_Plan_10Case_Diagnosis_20260804.md",
+    "docs/MGER_PHASE4_REPORT_20260804.md"
+  ]
+}
