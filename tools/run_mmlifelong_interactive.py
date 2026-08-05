@@ -438,9 +438,11 @@ def _run_blind_prior(
 
 
 def _read_jsonl(path: Path) -> tuple[Mapping[str, Any], ...]:
+    if not Path(path).is_file():
+        return ()
     return tuple(
         dict(value)
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
         if line.strip() and isinstance((value := json.loads(line)), Mapping)
     )
 

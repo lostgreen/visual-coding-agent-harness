@@ -9,7 +9,8 @@ historical/current controller runs are allowed.
 ## Frozen Inputs
 
 - Branch: `codex/mger-phase5r-repro-audit`
-- Current implementation commit: `0aeb8d7`
+- R1 implementation commit: `8b757e4`
+- Current reporting/runtime commit: `e33a74c`
 - Historical source revision: `74f012d`
 - Case root: `/home/xuboshen/zgw/mger_runs/cases10-input-74f012d-20260804`
 - Recorded fixture: `tests/fixtures/mger_phase3_cases10_74f012d`
@@ -20,17 +21,20 @@ historical/current controller runs are allowed.
 
 ## Current Evidence
 
-- Local tests before the subprocess import fix: `343 passed`; focused tests
-  after the fix: `7 passed`.
+- Latest local full suite after the replay budget fix: `347 passed`.
 - Remote clean-worktree tests at `f3ed32a`: `343 passed`.
-- Focus-3 replay with incorrect `6/20/4` budgets happened to pass exact frame
-  parity for 0072, 0097, and 0119, but is not a formal audit artifact.
-- The first all-10 replay with incorrect `6/20/4` budgets passed 9/10. Case
-  0165 executed historical round-5 task `r1_t5`, adding 96 frames. Historical
-  execution stopped after round 4, so this STOP is a setup error, not runtime
-  drift, and is excluded from Gate R1.
-- Formal focus-3 replay with fixed `4/12/4` budgets is currently running at:
-  `/home/xuboshen/zgw/mger_runs/cases3-phase5r-replay-0aeb8d7-r4-cfg4124-20260805`.
+- The replay driver previously raised `max_rounds` to the number of recorded
+  decisions. Case 0165 exposed the error by dispatching historical round-5 task
+  `r1_t5`. Commit `8b757e4` preserves the configured semantic budget and lets
+  the normal finalization path consume post-budget decisions without dispatch.
+- Formal focus-3 R1: PASS, 119/119 frames at
+  `/home/xuboshen/zgw/mger_runs/phase5r-gate-r1-focus3-8b757e4-r1-20260805.json`.
+- Formal all-10 R1: PASS, 10/10 cases and 551/551 frames at
+  `/home/xuboshen/zgw/mger_runs/phase5r-gate-r1-all10-8b757e4-r1-20260805.json`.
+- The real historical worktree is clean at full revision
+  `74f012dfc1f3a3e29541ab6d21cb261c937c702a`.
+- Interleaved live Track B/C has started with historical root 1 at
+  `/home/xuboshen/zgw/mger_runs/cases10-phase5r-old74f012d-live-r1-20260805`.
 
 ## Stale Or Excluded Runs
 
@@ -38,10 +42,14 @@ historical/current controller runs are allowed.
 - `cases3-phase5r-replay-0aeb8d7-r2-20260805`: concurrent embedding cache failure.
 - `cases3-phase5r-replay-0aeb8d7-r3-20260805`: wrong `6/20/4` budgets.
 - `cases10-phase5r-replay-0aeb8d7-r1-20260805`: wrong `6/20/4` budgets.
+- `cases3-phase5r-replay-0aeb8d7-r4-cfg4124-20260805`: replay driver silently
+  raised the configured round budget.
+- `cases10-phase5r-replay-0aeb8d7-r2-cfg4124-20260805`: replay driver silently
+  raised the configured round budget.
 
 ## Next Actions
 
-1. Gate the corrected focus-3 replay, then run and gate all 10 cases.
-2. If and only if R1 passes, run interleaved historical/current live roots.
-3. Build `FrozenBehaviorReferenceV2`, complete the audit report, rerun the full
+1. Complete the interleaved historical/current three-root live sequence.
+2. Build `FrozenBehaviorReferenceV2` and conclude descriptive Gate R2.
+3. Complete the audit report, rerun the full
    test suite, push the exact commit, and package the clean ZIP.

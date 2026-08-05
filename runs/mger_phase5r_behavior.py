@@ -293,6 +293,8 @@ def _decision_trace_divergence(
             "historical_unique_trace_count": len(old_digests),
             "current_unique_trace_count": len(new_digests),
             "shared_trace_digest_count": len(old_digests & new_digests),
+            "historical_unique_traces": _unique_traces(old),
+            "current_unique_traces": _unique_traces(new),
             "cross_arm_pair_count": pair_count,
             "exact_cross_arm_pair_count": case_exact,
             "exact_cross_arm_pair_rate": (
@@ -319,6 +321,18 @@ def _case_traces(
         for case in tuple(root.get("cases", ()) or ())
         if isinstance(case, Mapping) and str(case.get("case_id", "")) == case_id
     ]
+
+
+def _unique_traces(
+    traces: Sequence[Sequence[Mapping[str, Any]]],
+) -> list[list[dict[str, Any]]]:
+    keyed = {
+        json.dumps(trace, sort_keys=True, separators=(",", ":"), default=str): [
+            dict(row) for row in trace
+        ]
+        for trace in traces
+    }
+    return [keyed[key] for key in sorted(keyed)]
 
 
 def _earliest_divergence(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -16,6 +17,15 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _load_interactive_runner():
+    path = Path(__file__).parents[1] / "tools" / "run_mmlifelong_interactive.py"
+    spec = importlib.util.spec_from_file_location("phase5r_interactive_runner", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _fixture() -> dict[str, object]:
@@ -44,9 +54,7 @@ def _fixture() -> dict[str, object]:
                             "sampling_floor_fps": 1.0,
                         }
                     ],
-                    "workspace_ops": [
-                        {"op": "add_claim", "claim_id": "historical-id"}
-                    ],
+                    "workspace_ops": [{"op": "add_claim", "claim_id": "historical-id"}],
                 },
             },
         ],
@@ -93,6 +101,14 @@ def test_recorded_reasoner_skips_repair_rows_and_historical_workspace_ops(
     assert row["source_index"] == 1
     assert "prompt" not in row
     assert "raw" not in row
+
+
+def test_interactive_runner_allows_unmaterialized_frame_manifest(
+    tmp_path: Path,
+) -> None:
+    runner = _load_interactive_runner()
+
+    assert runner._read_jsonl(tmp_path / "missing.jsonl") == ()
 
 
 def test_mechanical_replay_requires_exact_per_task_timestamp_parity(
