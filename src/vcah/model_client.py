@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import os
 from pathlib import Path
 import random
@@ -8,8 +9,25 @@ import threading
 import time
 from typing import Any, Mapping, Sequence
 
+from PIL import Image, ImageOps
 import requests
 import yaml
+
+
+_DEFAULT_IMAGE_PAYLOAD_LIMIT_BYTES = 18_000_000
+_IMAGE_REENCODE_STEPS = (
+    (1536, 85),
+    (1280, 85),
+    (1024, 82),
+    (896, 80),
+    (768, 78),
+    (640, 75),
+    (512, 72),
+    (384, 68),
+    (256, 65),
+    (192, 62),
+    (128, 60),
+)
 
 
 def _optional_float(value: Any) -> float | None:
@@ -66,6 +84,62 @@ class ImageAttachmentError(RuntimeError):
         self.metadata = dict(metadata)
 
 
+def _prepared_image_data_urls(
+    paths: Sequence[Path],
+    *,
+    payload_limit_bytes: int,
+) -> tuple[tuple[str, ...], dict[str, Any]]:
+    original_urls = tuple(_image_data_url(path) for path in paths)
+    original_bytes = sum(len(url.encode("ascii")) for url in original_urls)
+    metadata: dict[str, Any] = {
+        "image_payload_bytes_original": original_bytes,
+        "image_payload_bytes_attached": original_bytes,
+        "image_payload_limit_bytes": payload_limit_bytes or None,
+        "images_reencoded": 0,
+        "image_reencode_max_edge": None,
+        "image_reencode_quality": None,
+    }
+    if not payload_limit_bytes or original_bytes <= payload_limit_bytes:
+        return original_urls, metadata
+
+    last_bytes = original_bytes
+    for max_edge, quality in _IMAGE_REENCODE_STEPS:
+        urls = tuple(
+            _reencoded_image_data_url(path, max_edge=max_edge, quality=quality)
+            for path in paths
+        )
+        attached_bytes = sum(len(url.encode("ascii")) for url in urls)
+        last_bytes = attached_bytes
+        if attached_bytes <= payload_limit_bytes:
+            return urls, {
+                **metadata,
+                "image_payload_bytes_attached": attached_bytes,
+                "images_reencoded": len(paths),
+                "image_reencode_max_edge": max_edge,
+                "image_reencode_quality": quality,
+            }
+
+    raise ImageAttachmentError(
+        "Image attachments exceed the configured payload budget after re-encoding",
+        {
+            **metadata,
+            "image_payload_bytes_attached": last_bytes,
+            "images_reencoded": len(paths),
+            "finish_reason": "image_payload_budget_exceeded",
+        },
+    )
+
+
+def _reencoded_image_data_url(path: Path, *, max_edge: int, quality: int) -> str:
+    with Image.open(path) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+        image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
 class OpenAICompatibleClient:
     """Small OpenAI-compatible client with reproducibility metadata."""
 
@@ -82,6 +156,16 @@ class OpenAICompatibleClient:
         self.retry_max_sec = max(self.retry_base_sec, float(config.get("retry_max_sec", 30.0)))
         self.retry_jitter = max(0.0, min(1.0, float(config.get("retry_jitter", 0.2))))
         self.max_dropped_images = max(0, int(config.get("max_dropped_images", 0) or 0))
+        self.max_image_payload_bytes = max(
+            0,
+            int(
+                config.get(
+                    "max_image_payload_bytes",
+                    _DEFAULT_IMAGE_PAYLOAD_LIMIT_BYTES,
+                )
+                or 0
+            ),
+        )
         self.temperature = _optional_float(config.get("temperature"))
         self.top_p = _optional_float(config.get("top_p"))
         self.provider_reported_seed_support = _seed_support_status(
@@ -127,7 +211,7 @@ class OpenAICompatibleClient:
             raise ValueError("prompt_position must be 'first' or 'last'")
         attached_paths = tuple(path for path in requested_paths if Path(path).is_file())
         dropped_paths = tuple(path for path in requested_paths if not Path(path).is_file())
-        attachment_metadata = {
+        attachment_metadata: dict[str, Any] = {
             "images_requested": len(requested_paths),
             "images_attached": len(attached_paths),
             "images_dropped": len(dropped_paths),
@@ -147,14 +231,28 @@ class OpenAICompatibleClient:
                 self.last_response_metadata,
             )
 
+        try:
+            image_urls, payload_metadata = _prepared_image_data_urls(
+                tuple(Path(path) for path in attached_paths),
+                payload_limit_bytes=self.max_image_payload_bytes,
+            )
+        except ImageAttachmentError as exc:
+            self.last_response_metadata = {
+                **attachment_metadata,
+                **exc.metadata,
+                "requested_completion_tokens": int(max_tokens),
+            }
+            raise
+        attachment_metadata.update(payload_metadata)
+
         label_by_path = dict(zip(requested_paths, requested_labels)) if requested_labels else {}
         content: list[dict[str, Any]] = []
         if position == "first":
             content.append({"type": "text", "text": prompt})
-        for path in attached_paths:
+        for path, image_url in zip(attached_paths, image_urls):
             if requested_labels:
                 content.append({"type": "text", "text": label_by_path[path]})
-            content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
+            content.append({"type": "image_url", "image_url": {"url": image_url}})
         if position == "last":
             content.append({"type": "text", "text": prompt})
         body: dict[str, Any] = {

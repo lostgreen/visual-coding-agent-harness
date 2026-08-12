@@ -17,6 +17,9 @@ _CASE_SPECIFIC_CONFIG_KEYS = frozenset(
         "config_digest",
         "effective_caption_query_strategy",
         "input_digest",
+        "oracle_intervention",
+        "phase5r_provenance",
+        "recorded_fixture_digest",
     }
 )
 _EVALUATOR_CONFIG_KEYS = (
@@ -89,6 +92,15 @@ def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
             )
             for row in group
         ]
+        oracle_audits = [
+            row.get("runtime", {}).get("oracle_intervention_audit")
+            for row in group
+            if isinstance(row.get("runtime"), Mapping)
+            and isinstance(
+                row.get("runtime", {}).get("oracle_intervention_audit"),
+                Mapping,
+            )
+        ]
         config = dict(group[0].get("config", {}) or {})
         answer_scores = [_answer_score(row) for row in evaluations]
         observed_runtimes = [
@@ -107,6 +119,7 @@ def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
             {
                 "config_digest": digest,
                 "phase5_arm": config.get("phase5_arm", "unknown"),
+                "oracle_arm": config.get("oracle_arm", "o0"),
                 "controller_mode": config.get("controller_mode", "unknown"),
                 "controller_evidence_visibility": config.get(
                     "controller_evidence_visibility",
@@ -149,6 +162,15 @@ def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
                 "Ref@600": _optional_mean(_ref_score(row, 600) for row in evaluations),
                 "ClueRecall@5": _mean_path(evaluations, "retrieval", "ClueRecall@5"),
                 "AllCluesRecall@5": _mean_path(evaluations, "retrieval", "AllCluesRecall@5"),
+                "bootstrap_natural_clue_recall": _optional_mean(
+                    row.get("natural_clue_recall") for row in oracle_audits
+                ),
+                "bootstrap_final_clue_recall": _optional_mean(
+                    row.get("final_clue_recall") for row in oracle_audits
+                ),
+                "avg_injected_candidates": _optional_mean(
+                    row.get("injected_candidate_count") for row in oracle_audits
+                ),
                 "avg_rounds": _optional_mean(row.get("rounds") for row in runtimes),
                 "avg_caption_searches": _optional_mean(
                     row.get("caption_searches") for row in runtimes
@@ -204,6 +226,7 @@ def _comparison_config_digest(config: Any, provenance: Any) -> str:
 def render_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
     columns = (
         "phase5_arm",
+        "oracle_arm",
         "controller_mode",
         "caption_index_mode",
         "case_count",
@@ -219,6 +242,9 @@ def render_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
         "Ref@300",
         "Ref@600",
         "ClueRecall@5",
+        "bootstrap_natural_clue_recall",
+        "bootstrap_final_clue_recall",
+        "avg_injected_candidates",
         "caption_result_novelty_rate",
         "avg_occurrence_candidates",
         "avg_unique_visual_material_attempts",

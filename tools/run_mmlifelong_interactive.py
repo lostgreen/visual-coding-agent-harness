@@ -9,6 +9,12 @@ from typing import Any, Mapping
 
 from benchmarks.mmlifelong.adapter import runtime_question_from_case
 from benchmarks.mmlifelong.runner import prediction_artifact
+from benchmarks.mmlifelong.oracle import (
+    ORACLE_ARMS,
+    CaptionPacketIntervention,
+    bootstrap_tasks,
+    load_oracle_intervention,
+)
 from vcah.caption_schema import stable_digest
 from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
@@ -55,6 +61,30 @@ def main() -> None:
     runtime_case_payload["asset_ref"] = str(source.asset_root.resolve())
     _write_json(run_root / "case.json", runtime_case_payload)
     workspace = VirtualVideoWorkspace.load(run_root)
+
+    oracle_intervention = None
+    caption_packet_transform = None
+    if args.oracle_arm == "o0":
+        if args.oracle_intervention:
+            raise ValueError("O0 must not load an oracle intervention manifest")
+    else:
+        if not args.oracle_intervention:
+            raise ValueError(f"{args.oracle_arm} requires --oracle-intervention")
+        oracle_intervention = load_oracle_intervention(
+            Path(args.oracle_intervention)
+        )
+        if oracle_intervention.case_id != workspace.case.case_id:
+            raise ValueError("oracle intervention case_id does not match runtime case")
+        if oracle_intervention.caption_config_digest != str(
+            args.caption_config_digest or ""
+        ):
+            raise ValueError("oracle intervention Caption digest mismatch")
+        caption_packet_transform = CaptionPacketIntervention(
+            arm=args.oracle_arm,
+            intervention=oracle_intervention,
+            workspace=workspace,
+            audit_path=workspace.root_dir / "oracle_intervention_audit.json",
+        )
 
     recorded_fixture = (
         load_fixture(Path(args.recorded_decisions))
@@ -132,6 +162,12 @@ def main() -> None:
         caption_index_mode=args.caption_index_mode,
         caption_config_digest=args.caption_config_digest,
         caption_query_strategy=args.caption_query_strategy,
+        caption_packet_transform=caption_packet_transform,
+        anchor_execution_policy=(
+            "force_if_requested"
+            if args.oracle_arm == "o1.75-forced"
+            else "agent_controlled"
+        ),
     )
     effective_control_retry_budget = (
         0
@@ -167,6 +203,11 @@ def main() -> None:
         evidence_state_mode=effective_evidence_state_mode,
         allowed_inspection_modes=protocol.allowed_inspection_modes,
         controller_mode=protocol.controller_mode,
+        bootstrap_tasks=bootstrap_tasks(
+            arm=args.oracle_arm,
+            question=workspace.case.question,
+            index_mode=args.caption_index_mode,
+        ),
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
@@ -227,6 +268,17 @@ def main() -> None:
         "caption_query_policy": investigator.caption_query_policy,
         "effective_caption_query_strategy": investigator.caption_query_strategy,
         "caption_config_digest": args.caption_config_digest,
+        "oracle_arm": args.oracle_arm,
+        "anchor_execution_policy": investigator.anchor_execution_policy,
+        "oracle_intervention": (
+            {
+                "schema_version": "MMLifelongOracleInterventionV1",
+                "digest": oracle_intervention.digest,
+                "manifest_sha256": _file_sha256(Path(args.oracle_intervention)),
+            }
+            if oracle_intervention is not None
+            else None
+        ),
         "embedding": dict(embedding_adapter.manifest) if embedding_adapter else None,
         "caption_index_digests": sorted(
             {
@@ -277,6 +329,12 @@ def main() -> None:
     summary["config_digest"] = config["config_digest"]
     summary["decision_trace"] = decision_trace
     summary["phase5r_cost_breakdown"] = cost_breakdown
+    summary["oracle_arm"] = args.oracle_arm
+    summary["oracle_intervention_audit"] = (
+        dict(caption_packet_transform.audit)
+        if caption_packet_transform is not None
+        else None
+    )
     if recorded_fixture:
         replay_audit = mechanical_replay_audit(
             recorded_fixture,
@@ -305,6 +363,7 @@ def main() -> None:
                 "rounds": result.rounds,
                 "investigations": result.investigation_count,
                 "config_digest": config["config_digest"],
+                "oracle_arm": args.oracle_arm,
                 "workspace": str(workspace.root_dir),
             },
             ensure_ascii=False,
@@ -460,6 +519,7 @@ def _implementation_digest() -> str:
     repository_root = Path(__file__).resolve().parents[1]
     relative_paths = (
         Path("tools/run_mmlifelong_interactive.py"),
+        Path("benchmarks/mmlifelong/oracle.py"),
         Path("src/vcah/workspace.py"),
         Path("src/vcah/multiround.py"),
         Path("src/vcah/interactive_agents.py"),
@@ -549,6 +609,8 @@ def _parse_args() -> argparse.Namespace:
         default="joint",
     )
     parser.add_argument("--caption-config-digest")
+    parser.add_argument("--oracle-arm", choices=ORACLE_ARMS, default="o0")
+    parser.add_argument("--oracle-intervention")
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")

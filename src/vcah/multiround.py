@@ -80,6 +80,7 @@ _FROZEN_MECHANICAL_STATUS_KEYS = frozenset(
         "caption_occurrence_sets",
         "recommended_temporal_candidate",
         "temporal_candidate_groups",
+        "oracle_guidance",
         "entity_count",
         "candidate_interval_count",
         "supporting_interval_count",
@@ -326,6 +327,7 @@ class VirtualVideoMultiRoundDriver:
         evidence_state_mode: str = "llm_authored",
         allowed_inspection_modes: frozenset[str] | None = None,
         controller_mode: str = "mger",
+        bootstrap_tasks: Sequence[InvestigationTask | Mapping[str, Any]] = (),
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -361,6 +363,7 @@ class VirtualVideoMultiRoundDriver:
         if controller not in {"frozen_baseline", "minimal_tool", "mger"}:
             raise ValueError(f"unsupported controller_mode: {controller}")
         self.controller_mode = controller
+        self.bootstrap_tasks = tuple(_task(item) for item in bootstrap_tasks)
         self.allowed_inspection_modes = (
             None
             if allowed_inspection_modes is None
@@ -434,6 +437,52 @@ class VirtualVideoMultiRoundDriver:
                     "prompt_schema_token_cost": int(
                         plan_metadata.get("prompt_schema_token_cost", 0) or 0
                     ),
+                }
+            )
+
+        if self.bootstrap_tasks:
+            bootstrap_batch = investigator.run_batch(self.bootstrap_tasks)
+            bootstrap_batch = _stamp_interpretation_purposes(
+                bootstrap_batch,
+                self.bootstrap_tasks,
+            )
+            reports.extend(bootstrap_batch)
+            known_evidence_ids = {record.evidence_id for record in evidence_store.records}
+            bootstrap_rows: list[Mapping[str, Any]] = []
+            for report in bootstrap_batch:
+                for record in report.evidence:
+                    if record.evidence_id not in known_evidence_ids:
+                        evidence_store.add(record)
+                        known_evidence_ids.add(record.evidence_id)
+                for attempt in report.attempts:
+                    bootstrap_rows.append(
+                        observation_log.append_attempt(
+                            attempt,
+                            round_id="bootstrap",
+                            source_lineage=_attempt_lineage(attempt, report.evidence),
+                        )
+                    )
+            requested_observations = tuple(bootstrap_rows[-12:])
+            feedback = {
+                "type": "bootstrap_observations_ready",
+                "requested_tasks": len(self.bootstrap_tasks),
+                "completed_tasks": sum(
+                    _report_completed(report) for report in bootstrap_batch
+                ),
+                "new_observation_interpretations": len(bootstrap_rows),
+                "outcomes": list(_outcome_digest(bootstrap_batch)),
+                "consumes_investigation_budget": False,
+            }
+            trace.append(
+                {
+                    "type": "bootstrap_observation_batch",
+                    "requested_tasks": len(self.bootstrap_tasks),
+                    "completed_tasks": feedback["completed_tasks"],
+                    "attempt_ids": [
+                        str(row["attempt_id"]) for row in bootstrap_rows
+                    ],
+                    "outcomes": list(_outcome_digest(bootstrap_batch)),
+                    "consumes_investigation_budget": False,
                 }
             )
 
@@ -2016,6 +2065,7 @@ def _mechanical_status(
     caption_occurrences_by_key: dict[str, dict[str, Any]] = {}
     caption_occurrence_sets: list[dict[str, Any]] = []
     temporal_locators: list[dict[str, Any]] = []
+    oracle_guidance_packets: list[dict[str, Any]] = []
     for row in observations.rows:
         config = row.get("sampling_config")
         if not isinstance(config, Mapping) or config.get("mode") != "search_caption":
@@ -2023,6 +2073,9 @@ def _mechanical_status(
         temporal_locator = config.get("temporal_locator")
         if isinstance(temporal_locator, Mapping):
             temporal_locators.append(dict(temporal_locator))
+        oracle_guidance = config.get("oracle_guidance")
+        if isinstance(oracle_guidance, Mapping):
+            oracle_guidance_packets.append(dict(oracle_guidance))
         occurrence_set = config.get("occurrence_set")
         if isinstance(occurrence_set, Mapping):
             compact_candidates: list[dict[str, Any]] = []
@@ -2142,6 +2195,62 @@ def _mechanical_status(
         temporal_status["temporal_candidate_groups"] = [
             dict(item) for item in candidate_groups if isinstance(item, Mapping)
         ]
+    oracle_status: dict[str, Any] = {}
+    if oracle_guidance_packets:
+        oracle_status = dict(oracle_guidance_packets[-1])
+        selected_candidates: list[dict[str, Any]] = []
+        for raw_candidate in tuple(oracle_status.get("selected_candidates", ()) or ()):
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            candidate = dict(raw_candidate)
+            candidate_range = _time_range(candidate.get("inspection_range"))
+            candidate["visually_inspected"] = bool(
+                candidate_range
+                and any(
+                    _ranges_overlap(candidate_range, interval)
+                    for interval in visual_ranges
+                )
+            )
+            selected_candidates.append(candidate)
+        oracle_status["selected_candidates"] = selected_candidates
+        oracle_status["all_selected_candidates_inspected"] = bool(
+            selected_candidates
+        ) and all(
+            bool(candidate["visually_inspected"])
+            for candidate in selected_candidates
+        )
+        point_anchors: list[dict[str, Any]] = []
+        for raw_anchor in tuple(oracle_status.get("point_anchors", ()) or ()):
+            if not isinstance(raw_anchor, Mapping):
+                continue
+            timestamp = raw_anchor.get("anchor_timestamp_sec")
+            if not isinstance(timestamp, (int, float)):
+                continue
+            anchor = dict(raw_anchor)
+            anchor["visually_inspected"] = any(
+                interval[0] <= float(timestamp) <= interval[1]
+                for interval in visual_ranges
+            )
+            point_anchors.append(anchor)
+        if point_anchors:
+            oracle_status["point_anchors"] = point_anchors
+        anchor_status = [
+            {
+                "timestamp_sec": float(value),
+                "visually_inspected": any(
+                    interval[0] <= float(value) <= interval[1]
+                    for interval in visual_ranges
+                ),
+            }
+            for value in tuple(oracle_status.get("anchor_timestamps_sec", ()) or ())
+            if isinstance(value, (int, float))
+        ]
+        if anchor_status:
+            oracle_status["anchor_inspection_status"] = anchor_status
+            oracle_status["all_point_anchors_inspected"] = all(
+                bool(anchor["visually_inspected"])
+                for anchor in anchor_status
+            )
     caption_cited_claim_count = sum(
         any(modality_by_attempt.get(cite) == "caption_search" for cite in claim.cites)
         for claim in active_claims
@@ -2204,6 +2313,17 @@ def _mechanical_status(
         hints.append(
             "An explicit after/before/first contract produced a scoped temporal locator. "
             "Inspect recommended_temporal_candidate.inspection_range before unrelated Caption hits."
+        )
+    if oracle_status and (
+        not oracle_status.get("all_selected_candidates_inspected")
+        or (
+            oracle_status.get("anchor_inspection_status")
+            and not oracle_status.get("all_point_anchors_inspected")
+        )
+    ):
+        hints.append(
+            "Answer-free oracle guidance identifies locator candidates only. Inspect every selected candidate visually; "
+            "choose window width and refinement yourself, and never cite the guidance as answer support."
         )
     if temporal_scope_summary["temporal_scope_count"] and not temporal_scope_summary[
         "temporal_scope_resolved_rate"
@@ -2284,6 +2404,11 @@ def _mechanical_status(
         "caption_occurrence_ambiguous": bool(unresolved_competing_occurrence_sets),
         "caption_occurrence_sets": list(caption_occurrence_sets[-4:]),
         **temporal_status,
+        **(
+            {"oracle_guidance": oracle_status}
+            if oracle_status
+            else {}
+        ),
         **temporal_scope_summary,
         "entity_count": len(document.entities),
         "candidate_interval_count": sum(note.role == "candidate" for note in document.timeline),

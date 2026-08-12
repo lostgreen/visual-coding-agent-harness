@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import re
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from vcah.evidence_state import InterpretationItem
 from vcah.investigator import (
@@ -513,6 +513,10 @@ class VisionInvestigator(VirtualVideoInvestigator):
         caption_index_mode: str | None = None,
         caption_config_digest: str | None = None,
         caption_query_strategy: str = "joint",
+        caption_packet_transform: (
+            Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+        ) = None,
+        anchor_execution_policy: str = "agent_controlled",
     ) -> None:
         requested_query_strategy = str(caption_query_strategy or "joint").strip().casefold()
         if requested_query_strategy not in {"joint", "rema", "adaptive"}:
@@ -530,6 +534,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             caption_embedding_adapter=caption_embedding_adapter,
             caption_config_digest=caption_config_digest,
             caption_query_strategy=effective_query_strategy,
+            caption_packet_transform=caption_packet_transform,
         )
         self.api = api
         self.trace_path = trace_path
@@ -539,6 +544,11 @@ class VisionInvestigator(VirtualVideoInvestigator):
         self.caption_index_mode = mode or None
         self.caption_query_policy = requested_query_strategy
         self.caption_query_strategy = self._caption_query_strategy
+        policy = str(anchor_execution_policy or "agent_controlled").strip().casefold()
+        if policy not in {"agent_controlled", "force_if_requested"}:
+            raise ValueError(f"unsupported anchor_execution_policy: {policy}")
+        self.anchor_execution_policy = policy
+        self._oracle_guidance: dict[str, Any] = {}
         self._seen_asr_attempt_ids: set[str] = set()
         self._search_outcomes: list[SearchOutcome] = []
         self._duplicate_search_count = 0
@@ -564,6 +574,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
         self._saved_visual_calls = 0
         self._saved_visual_frames = 0
         self._visual_attempt_cache.clear()
+        self._oracle_guidance = {}
 
     def mechanical_status(self) -> Mapping[str, Any]:
         zero_hits = [outcome for outcome in self._search_outcomes if outcome.hit_count == 0]
@@ -648,6 +659,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
             end_sec,
             fps=fps,
             max_frames=frame_limit,
+            query_id=query_id,
+        )
+        window, forced_anchor_timestamps = self._force_requested_anchor_frames(
+            window,
+            requested_range=(start_sec, end_sec),
+            fps=fps,
             query_id=query_id,
         )
         frames = tuple(window["frames"])
@@ -791,6 +808,8 @@ class VisionInvestigator(VirtualVideoInvestigator):
             "probe_coverage_requirement": required_probe_count,
             "probe_coverage_satisfied": probe_coverage_satisfied,
             "temporal_scope_id": str(getattr(task, "temporal_scope_id", "") or ""),
+            "anchor_execution_policy": self.anchor_execution_policy,
+            "forced_anchor_timestamps_sec": list(forced_anchor_timestamps),
             **({"candidate_binding": candidate_binding} if candidate_binding else {}),
             **({"refinement_binding": refinement_binding} if refinement_binding else {}),
         }
@@ -917,6 +936,69 @@ class VisionInvestigator(VirtualVideoInvestigator):
         if frame_paths:
             self._visual_attempt_cache[cache_key] = report
         return report
+
+    def _force_requested_anchor_frames(
+        self,
+        window: Mapping[str, Any],
+        *,
+        requested_range: tuple[float, float],
+        fps: float,
+        query_id: str,
+    ) -> tuple[dict[str, Any], tuple[float, ...]]:
+        result = dict(window)
+        if self.anchor_execution_policy != "force_if_requested":
+            return result, ()
+        start_sec, end_sec = requested_range
+        anchors = tuple(
+            float(value)
+            for value in tuple(
+                self._oracle_guidance.get("anchor_timestamps_sec", ()) or ()
+            )
+            if isinstance(value, (int, float))
+            and start_sec <= float(value) <= end_sec
+        )
+        if not anchors:
+            return result, ()
+        frames = [dict(frame) for frame in tuple(result.get("frames", ()) or ())]
+        forced: list[float] = []
+        for index, anchor in enumerate(anchors, start=1):
+            if any(
+                abs(float(frame.get("virtual_time_sec", -1e30)) - anchor) <= 0.001
+                for frame in frames
+            ):
+                continue
+            anchor_window = self.inspect_window(
+                anchor,
+                anchor,
+                fps=fps,
+                max_frames=1,
+                query_id=f"{query_id}_oracle_anchor_{index:02d}",
+            )
+            anchor_frames = tuple(anchor_window.get("frames", ()) or ())
+            if not anchor_frames:
+                raise RuntimeError(f"failed to materialize requested oracle anchor {anchor}")
+            if not any(
+                abs(float(frame.get("virtual_time_sec", -1e30)) - anchor) <= 0.001
+                for frame in anchor_frames
+            ):
+                raise RuntimeError(
+                    f"materialized frame does not cover requested oracle anchor {anchor}"
+                )
+            frames.extend(dict(frame) for frame in anchor_frames)
+            forced.append(anchor)
+        result["frames"] = sorted(
+            frames,
+            key=lambda frame: (
+                float(frame.get("virtual_time_sec", 0.0)),
+                str(frame.get("path", "")),
+            ),
+        )
+        result["sampling"] = {
+            **dict(result.get("sampling", {}) or {}),
+            "actual_frames": len(result["frames"]),
+            "forced_anchor_timestamps_sec": list(forced),
+        }
+        return result, tuple(forced)
 
     def _search_asr(self, task: Any) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "search_asr")
@@ -1229,6 +1311,13 @@ class VisionInvestigator(VirtualVideoInvestigator):
             if isinstance(packet.get("occurrence_set"), Mapping)
             else {}
         )
+        oracle_guidance = (
+            dict(packet["oracle_guidance"])
+            if isinstance(packet.get("oracle_guidance"), Mapping)
+            else {}
+        )
+        if oracle_guidance:
+            self._oracle_guidance = oracle_guidance
         occurrence_by_passage = {
             str(passage_id): str(candidate.get("occurrence_id", "") or "")
             for candidate in tuple(occurrence_set.get("candidates", ()) or ())
@@ -1242,6 +1331,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "search_queries": list(queries),
                 "hits": hits,
                 "occurrence_set": occurrence_set,
+                **({"oracle_guidance": oracle_guidance} if oracle_guidance else {}),
                 "result_novelty": novelty_payload,
             },
             ensure_ascii=False,
@@ -1303,6 +1393,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
                     for hit in hits
                 ],
                 **({"occurrence_set": occurrence_set} if occurrence_set else {}),
+                **({"oracle_guidance": oracle_guidance} if oracle_guidance else {}),
                 **(
                     {"temporal_locator": dict(packet["temporal_locator"])}
                     if isinstance(packet.get("temporal_locator"), Mapping)
@@ -1816,11 +1907,13 @@ def _runtime_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         for key in (
             "pending_caption_candidates",
             "recommended_temporal_candidate",
+            "oracle_guidance",
             "remaining_unresolved_conditions",
             "source_coverage",
         )
         if mechanical_status.get(key)
     }
+    oracle_guidance_rule = _oracle_guidance_prompt_rule(compact_status)
     return (
         "You are the semantic controller for long-video QA. Runtime owns IDs, material lineage, evidence state, "
         "requirement progress, refinement lineage, and grounding audit. Never create or mutate obligations, cue states, "
@@ -1840,6 +1933,7 @@ def _runtime_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "foreign keys. Caption/ASR results are locator candidates, never answer support; inspect decisive content visually. "
         "Use occurrence handles when the catalog exposes competing candidates. Use refine_item on a refinable E handle for "
         "a narrow child observation. Do not repeat a text_exact material read; Runtime schedules its same-material reread.\n"
+        f"{oracle_guidance_rule}"
         "Final support may cite observation E handles directly. Replace the empty support_items example only with visible "
         "E handles that support the answer; never invent a handle. Mark a "
         "requirement unresolved only when evidence is genuinely insufficient; still provide the best semantic prediction "
@@ -1859,12 +1953,26 @@ def _prompt_schema_token_estimate(prompt: str) -> int:
     return (len(schema) + 3) // 4
 
 
+def _oracle_guidance_prompt_rule(mechanical_status: Mapping[str, Any]) -> str:
+    if not isinstance(mechanical_status.get("oracle_guidance"), Mapping):
+        return ""
+    return (
+        "Oracle guidance is answer-free locator supervision and takes priority over generic Caption ranking. For point "
+        "anchors, anchor_timestamp_sec is the occurrence center rather than an interval boundary and can lie outside its "
+        "mapped coarse passage because that passage only overlaps the occurrence. Treat selected_candidates and "
+        "point_anchors as the authoritative locator set instead of re-arbitrating generic Caption hits. Decide which listed "
+        "locator or locators the question requires, then choose each time_range, window width, zoom, batching, and stopping "
+        "rule yourself. The guidance is never answer support.\n"
+    )
+
+
 def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     """Phase-5 Arm A prompt frozen from the pre-MGER controller surface."""
     final = bool(kwargs.get("force_finalize"))
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    oracle_guidance_rule = _oracle_guidance_prompt_rule(mechanical_status)
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()
@@ -1943,6 +2051,7 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "time_range. To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and "
         "arbitration_attempt_id.\n"
         f"{caption_search_rule}"
+        f"{oracle_guidance_rule}"
         "When mechanical_status marks caption_occurrence_ambiguous, compare the separate source/time clusters in "
         "caption_occurrence_sets. A coherent caption chain from one cluster does not establish that it is the requested "
         "occurrence; inspect identity cues for competing clusters before promotion.\n"
@@ -2010,6 +2119,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    oracle_guidance_rule = _oracle_guidance_prompt_rule(mechanical_status)
     control_retry = bool(kwargs.get("control_retry"))
     closure_repair = bool(kwargs.get("closure_repair"))
     control_retry_rule = ""
@@ -2136,6 +2246,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
         f"{caption_search_rule}"
+        f"{oracle_guidance_rule}"
         "When mechanical_status marks caption_occurrence_ambiguous, compare the separate source/time clusters in "
         "caption_occurrence_sets. A coherent caption chain from one cluster does not establish that it is the requested "
         "occurrence; inspect identity cues for competing clusters before promotion.\n"

@@ -717,6 +717,27 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
                     "candidate_groups": [temporal_candidate],
                     "recommended": temporal_candidate,
                 },
+                "oracle_guidance": {
+                    "schema_version": "MMLifelongOracleGuidanceV1",
+                    "arm": "o1.75",
+                    "guidance_type": "selected_coarse_candidates_with_point_anchors",
+                    "boundary_visibility": "hidden",
+                    "selected_candidates": [
+                        {
+                            "candidate_rank": 1,
+                            "passage_id": "p1",
+                            "inspection_range": [5.0, 10.0],
+                        }
+                    ],
+                    "anchor_timestamps_sec": [7.5],
+                    "point_anchors": [
+                        {
+                            "anchor_timestamp_sec": 7.5,
+                            "selected_candidate_rank": 1,
+                            "selected_candidate_passage_id": "p1",
+                        }
+                    ],
+                },
                 "occurrence_set": {
                     "status": "competing_candidates",
                     "occurrence_ambiguous": True,
@@ -776,6 +797,15 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
     )
     assert status["recommended_temporal_candidate"]["inspection_range"] == [4.0, 11.0]
     assert status["temporal_candidate_groups"] == [temporal_candidate]
+    assert status["oracle_guidance"]["selected_candidates"][0][
+        "visually_inspected"
+    ] is False
+    assert status["oracle_guidance"]["anchor_inspection_status"] == [
+        {"timestamp_sec": 7.5, "visually_inspected": False}
+    ]
+    assert status["oracle_guidance"]["point_anchors"][0][
+        "visually_inspected"
+    ] is False
     assert status["caption_occurrence_candidate_count"] == 2
     assert status["pending_caption_occurrence_count"] == 2
     assert status["caption_occurrence_ambiguous"] is True
@@ -812,6 +842,8 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
     assert confirmed["pending_caption_occurrence_count"] == 1
     assert confirmed["caption_occurrence_ambiguous"] is True
     assert "recommended_temporal_candidate" not in confirmed
+    assert confirmed["oracle_guidance"]["all_selected_candidates_inspected"] is True
+    assert confirmed["oracle_guidance"]["all_point_anchors_inspected"] is True
 
 
 def test_mechanical_status_exposes_low_sampling_fidelity(tmp_path: Path) -> None:

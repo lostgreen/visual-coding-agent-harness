@@ -66,6 +66,15 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
                 "input_digest": "case-a-input",
                 "caption_index_mode": "hybrid",
                 "answer_policy": "benchmark_best_effort",
+                "oracle_arm": "o1",
+                "oracle_intervention": {"digest": "case-a"},
+            },
+            "runtime": {
+                "oracle_intervention_audit": {
+                    "natural_clue_recall": 0.0,
+                    "final_clue_recall": 1.0,
+                    "injected_candidate_count": 2,
+                }
             },
         },
         {
@@ -95,6 +104,15 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
                 "input_digest": "case-b-input",
                 "caption_index_mode": "hybrid",
                 "answer_policy": "benchmark_best_effort",
+                "oracle_arm": "o1",
+                "oracle_intervention": {"digest": "case-b"},
+            },
+            "runtime": {
+                "oracle_intervention_audit": {
+                    "natural_clue_recall": 0.5,
+                    "final_clue_recall": 1.0,
+                    "injected_candidate_count": 1,
+                }
             },
         },
     )
@@ -104,6 +122,9 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
 
     assert len(aggregates) == 1
     assert aggregates[0]["case_count"] == 2
+    assert aggregates[0]["oracle_arm"] == "o1"
+    assert aggregates[0]["bootstrap_natural_clue_recall"] == 0.25
+    assert aggregates[0]["bootstrap_final_clue_recall"] == 1.0
     assert aggregates[0]["Acc"] == 0.75
     assert aggregates[0]["mean_score"] == 0.75
     assert aggregates[0]["exact_correct_rate"] == 0.5

@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Any, Mapping, Sequence
 
+from benchmarks.mmlifelong.oracle import ORACLE_ARMS
 from vcah.phase5 import Phase5Protocol
 from vcah.replay import file_checksum
 
@@ -96,6 +97,11 @@ def select_stratified_cases(
 
 def main() -> None:
     args = _parse_args()
+    if args.oracle_arm == "o0":
+        if args.oracle_intervention_root:
+            raise ValueError("O0 must not load --oracle-intervention-root")
+    elif not args.oracle_intervention_root:
+        raise ValueError(f"{args.oracle_arm} requires --oracle-intervention-root")
     protocol = Phase5Protocol(
         controller_mode=args.controller_mode,
         controller_evidence_visibility=args.controller_evidence_visibility,
@@ -133,6 +139,8 @@ def main() -> None:
         "evidence_state_mode": args.evidence_state_mode,
         "workers": max(1, min(int(args.workers), len(selected))),
         "phase5r_mode": "recorded_replay" if args.recorded_fixture_root else "live",
+        "oracle_arm": args.oracle_arm,
+        "oracle_intervention_root": str(args.oracle_intervention_root or ""),
         "recorded_fixture_root": str(args.recorded_fixture_root or ""),
         "recorded_fixture_manifest": (
             file_checksum(Path(args.recorded_fixture_root) / "manifest.json")
@@ -273,6 +281,8 @@ def _successful_result(
             "reference_valid": runtime.get("reference_valid"),
             "runtime_metrics": runtime.get("runtime_metrics"),
         },
+        "oracle_arm": runtime.get("oracle_arm", "o0"),
+        "oracle_intervention_audit": runtime.get("oracle_intervention_audit"),
         "phase5r_replay": {
             "decision": replay.get("decision"),
             "failed_checks": replay.get("failed_checks", []),
@@ -327,6 +337,8 @@ def _case_command(
         str(args.caption_query_strategy),
         "--caption-config-digest",
         str(args.caption_config_digest),
+        "--oracle-arm",
+        str(args.oracle_arm),
         "--embedding-model",
         str(args.embedding_model),
         "--embedding-device",
@@ -336,6 +348,17 @@ def _case_command(
     ]
     if args.embedding_revision:
         command.extend(("--embedding-revision", str(args.embedding_revision)))
+    if args.oracle_intervention_root:
+        intervention_path = (
+            Path(args.oracle_intervention_root)
+            / "cases"
+            / f"{case['case_id']}.json"
+        )
+        if not intervention_path.is_file():
+            raise FileNotFoundError(
+                f"missing oracle intervention: {intervention_path}"
+            )
+        command.extend(("--oracle-intervention", str(intervention_path)))
     if args.recorded_fixture_root:
         fixture_path = (
             Path(args.recorded_fixture_root)
@@ -371,6 +394,7 @@ def _write_batch_summary(
             ),
             "measurement_control": selection.get("measurement_control"),
             "phase5r_mode": selection.get("phase5r_mode"),
+            "oracle_arm": selection.get("oracle_arm"),
             "recorded_fixture_manifest": selection.get(
                 "recorded_fixture_manifest"
             ),
@@ -408,6 +432,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-root", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--caption-config-digest", required=True)
+    parser.add_argument("--oracle-arm", choices=ORACLE_ARMS, default="o0")
+    parser.add_argument("--oracle-intervention-root")
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--case-ids", nargs="+")

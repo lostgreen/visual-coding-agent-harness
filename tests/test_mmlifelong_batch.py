@@ -83,6 +83,8 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
         embedding_batch_size=64,
         embedding_revision=None,
         recorded_fixture_root=str(fixture_root),
+        oracle_arm="o0",
+        oracle_intervention_root=None,
     )
     case = {
         "case_id": "case-0072",

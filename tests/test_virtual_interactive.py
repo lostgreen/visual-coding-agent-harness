@@ -3,10 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import random
 import sys
 from typing import Any, Mapping, Sequence
 
 import pytest
+from PIL import Image
 
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
 from vcah.investigator import ObservationAttempt
@@ -913,6 +915,61 @@ def test_client_can_interleave_image_labels_and_place_prompt_last(
     ]
     assert client.last_response_metadata["image_label_count"] == 2
     assert client.last_response_metadata["prompt_position"] == "last"
+
+
+def test_client_reencodes_images_to_stay_within_payload_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[Mapping[str, Any]] = []
+    raw = random.Random(20260811).randbytes(256 * 256 * 3)
+    paths = (tmp_path / "first.png", tmp_path / "second.png")
+    for offset, path in enumerate(paths):
+        image = Image.frombytes("RGB", (256, 256), raw)
+        if offset:
+            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        image.save(path, format="PNG")
+
+    class Response:
+        status_code = 200
+        headers: Mapping[str, str] = {}
+        text = ""
+
+        def json(self) -> Mapping[str, Any]:
+            return {
+                "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+                "usage": {},
+            }
+
+    def post(url: str, **kwargs: Any) -> Response:
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("vcah.model_client.requests.post", post)
+    client = OpenAICompatibleClient(
+        {
+            "base": "https://example.invalid/v1",
+            "model": "vision",
+            "api_key": "secret",
+            "max_retries": 0,
+            "max_image_payload_bytes": 20_000,
+        }
+    )
+
+    assert client.chat("inspect", image_paths=tuple(str(path) for path in paths)) == "ok"
+    image_urls = [
+        item["image_url"]["url"]
+        for item in calls[0]["json"]["messages"][0]["content"]
+        if item["type"] == "image_url"
+    ]
+    assert len(image_urls) == 2
+    assert all(url.startswith("data:image/jpeg;base64,") for url in image_urls)
+    assert sum(len(url.encode("ascii")) for url in image_urls) <= 20_000
+    assert client.last_response_metadata["images_reencoded"] == 2
+    assert (
+        client.last_response_metadata["image_payload_bytes_attached"]
+        < client.last_response_metadata["image_payload_bytes_original"]
+    )
 
 
 def test_runner_helpers_keep_order_and_parse_case_groups(tmp_path: Path) -> None:

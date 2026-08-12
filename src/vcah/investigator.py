@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 import json
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from vcah.evidence_state import InterpretationItem
 from vcah.caption_hybrid_search import CaptionHybridSearch
@@ -167,6 +167,9 @@ class VirtualVideoInvestigator:
         caption_embedding_adapter: TextEmbeddingAdapter | None = None,
         caption_config_digest: str | None = None,
         caption_query_strategy: str = "joint",
+        caption_packet_transform: (
+            Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+        ) = None,
     ) -> None:
         self.workspace = workspace
         self.sampler = sampler
@@ -180,6 +183,7 @@ class VirtualVideoInvestigator:
             raise ValueError(
                 f"unsupported caption_query_strategy: {self._caption_query_strategy}"
             )
+        self._caption_packet_transform = caption_packet_transform
         self.ledger_path = self.workspace.root_dir / "exploration_ledger.jsonl"
         self._visit_count = 0
 
@@ -427,7 +431,7 @@ class VirtualVideoInvestigator:
             segment_ids=index_segment_ids,
             expand_neighbors=expand_neighbors,
         )
-        return {
+        packet: Mapping[str, Any] = {
             "queries": [str(query) for query in queries],
             "time_range": list(time_range) if time_range else None,
             "segment_ids": list(scoped_segment_ids),
@@ -446,6 +450,24 @@ class VirtualVideoInvestigator:
             "occurrence_set": build_caption_occurrence_set(hits),
             "rendered": render_caption_hits(hits),
         }
+        if self._caption_packet_transform is not None:
+            transformed = self._caption_packet_transform(packet)
+            if not isinstance(transformed, Mapping):
+                raise TypeError("caption_packet_transform must return a mapping")
+            packet = dict(transformed)
+            for key in (
+                "config_digest",
+                "hits",
+                "index_digest",
+                "occurrence_set",
+                "query_fingerprint",
+                "rendered",
+            ):
+                if key not in packet:
+                    raise ValueError(
+                        f"caption_packet_transform removed required field: {key}"
+                    )
+        return packet
 
     def _load_caption_index(self, mode: str) -> Any:
         lexical = self._caption_indexes.get("lexical")
