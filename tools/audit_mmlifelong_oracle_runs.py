@@ -75,6 +75,9 @@ def collect_runs(
             records[case_id] = {
                 "config": config,
                 "runtime": _read_json(runtime_path),
+                "visible_guidance": _read_oracle_guidance(
+                    run_dir / "observation_log.jsonl"
+                ),
             }
         if not records:
             raise FileNotFoundError(f"no run_config.json files under {root}")
@@ -165,9 +168,12 @@ def build_report(
             if isinstance(audit, Mapping)
         }
         visible_guidance_signatures = {
-            case_id: _visible_guidance_signature(audit)
-            for case_id, audit in audits.items()
-            if isinstance(audit, Mapping)
+            case_id: _digest(record["visible_guidance"])
+            if isinstance(record.get("visible_guidance"), Mapping)
+            else _visible_guidance_signature(audits.get(case_id))
+            for case_id, record in records.items()
+            if isinstance(record.get("visible_guidance"), Mapping)
+            or isinstance(audits.get(case_id), Mapping)
         }
         internal[arm] = {
             "models": model_variants,
@@ -390,6 +396,25 @@ def _visible_guidance_signature(value: Mapping[str, Any]) -> str:
             )
         }
     )
+
+
+def _read_oracle_guidance(path: Path) -> dict[str, Any] | None:
+    if not Path(path).is_file():
+        return None
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            if not isinstance(payload, Mapping):
+                continue
+            sampling = payload.get("sampling_config")
+            if not isinstance(sampling, Mapping):
+                continue
+            guidance = sampling.get("oracle_guidance")
+            if isinstance(guidance, Mapping):
+                return dict(guidance)
+    return None
 
 
 def _variants(

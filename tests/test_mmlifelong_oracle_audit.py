@@ -105,6 +105,23 @@ def _write_fixture(root: Path, arm: str, case_id: str) -> None:
     (run_dir / "runtime_summary.json").write_text(
         json.dumps(runtime), encoding="utf-8"
     )
+    if arm in {"o1.75", "o1.75-forced"}:
+        guidance = {
+            "guidance_type": "selected_coarse_candidates_with_point_anchors",
+            "selected_candidates": [{"candidate_rank": 1}],
+            "anchor_timestamps_sec": [11.25],
+            "point_anchors": [{"anchor_timestamp_sec": 11.25}],
+        }
+        (run_dir / "observation_log.jsonl").write_text(
+            json.dumps(
+                {
+                    "modality": "caption_search",
+                    "sampling_config": {"oracle_guidance": guidance},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 def _runs(tmp_path: Path) -> dict[str, Path]:
