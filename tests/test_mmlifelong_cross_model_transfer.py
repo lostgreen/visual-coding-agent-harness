@@ -143,3 +143,23 @@ def test_cross_model_gate_rejects_nonisolated_model_change() -> None:
 
     assert report["runtime_gate_passed"] is False
     assert report["runtime_gate_checks"]["model_factor_isolation_valid"] is False
+
+
+def test_cross_model_gate_normalizes_legacy_anchor_execution_default() -> None:
+    manifest = {
+        "selection_is_outcome_independent": True,
+        "cases": [{"case_id": "single"}],
+    }
+    rows = [
+        _row(stack, arm, "single", 0.0, 1)
+        for stack in ("base", "r1_i0")
+        for arm in ANALYSIS.ARMS
+    ]
+    for row in rows:
+        if row["stack"] == "r1_i0":
+            row["frozen_config"]["anchor_execution_policy"] = "agent_controlled"
+
+    report = ANALYSIS.build_report(rows, manifest=manifest, bootstrap_samples=10)
+
+    assert report["runtime_gate_passed"] is True
+    assert report["runtime_gate_checks"]["frozen_runtime_aligned_except_models"] is True

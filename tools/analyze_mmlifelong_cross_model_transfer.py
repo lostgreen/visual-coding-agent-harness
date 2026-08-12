@@ -292,6 +292,9 @@ def _frozen_runtime_aligned(
                     return False
                 config = dict(row.get("frozen_config", {}) or {})
                 config.pop("models", None)
+                # Older baseline artifacts predate this explicit default.
+                if config.get("anchor_execution_policy") is None:
+                    config["anchor_execution_policy"] = "agent_controlled"
                 signatures.append(_digest(config))
         if len(set(signatures)) != 1:
             return False
