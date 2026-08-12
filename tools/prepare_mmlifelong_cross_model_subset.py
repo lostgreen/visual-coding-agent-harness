@@ -42,7 +42,16 @@ def discover_cases(case_root: Path) -> tuple[dict[str, Any], ...]:
         )
         if not intervals:
             raise ValueError(f"missing clue intervals: {evaluation_path}")
+        timeline_digest = None
         duration = float(metadata.get("total_seconds", 0.0) or 0.0)
+        if duration <= 0.0:
+            asset_ref = Path(str(case.get("asset_ref", "")))
+            timeline_path = asset_ref / "virtual_timeline.json"
+            if not timeline_path.is_file():
+                raise FileNotFoundError(timeline_path)
+            timeline = _read_json(timeline_path)
+            duration = float(timeline.get("duration_sec", 0.0) or 0.0)
+            timeline_digest = _file_sha256(timeline_path)
         if not math.isfinite(duration) or duration <= 0.0:
             raise ValueError(f"invalid total_seconds: {evaluation_path}")
         center = sum((start + end) / 2.0 for start, end in intervals) / len(intervals)
@@ -69,6 +78,7 @@ def discover_cases(case_root: Path) -> tuple[dict[str, Any], ...]:
                         ),
                         "clue_intervals": [list(value) for value in intervals],
                         "total_seconds": duration,
+                        "timeline_digest": timeline_digest,
                     }
                 ),
             }
@@ -256,6 +266,14 @@ def _seeded_hash(seed: int, value: str) -> str:
 def _digest(value: Any) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
