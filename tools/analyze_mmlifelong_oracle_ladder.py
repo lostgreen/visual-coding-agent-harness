@@ -105,6 +105,10 @@ def collect_rows(
                     "answer_rate": metrics.get("answer_rate"),
                     "reference_valid_rate": metrics.get("reference_valid_rate"),
                     "visual_frames": metrics.get("visual_frames_inspected"),
+                    "vlm_calls": metrics.get("visual_interpretation_count"),
+                    "occurrence_candidate_count": metrics.get(
+                        "caption_occurrence_candidate_count"
+                    ),
                     **trajectory,
                     "audit": dict(audit) if isinstance(audit, Mapping) else None,
                     "frozen_config": {
