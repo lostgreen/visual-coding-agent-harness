@@ -141,6 +141,9 @@ def build_report(
         arm_rows.append(
             {
                 "arm": arm,
+                "arm_label": (
+                    "intervention-scaffold control" if arm == "c0" else arm
+                ),
                 "case_count": len(group),
                 "mean_score": _optional_mean(row.get("score") for row in group),
                 "exact_correct_rate": _optional_mean(
@@ -308,7 +311,7 @@ def build_report(
     )
     official = all(row.get("official_judge_model_match") is True for row in rows)
     return {
-        "schema_version": "MMLifelongOracleLadderReportV2",
+        "schema_version": "MMLifelongOracleLadderReportV3",
         "expected_cases": int(expected_cases),
         "common_case_count": len(common_cases),
         "runtime_gate_passed": all(runtime_checks.values()),
@@ -325,6 +328,15 @@ def build_report(
             bootstrap_samples=bootstrap_samples,
             seed=seed,
         ),
+        "deprecated_metrics": {
+            "oracle_gap_recovery": {
+                "status": "deprecated",
+                "reason": (
+                    "O2 is not a valid empirical ceiling after later controls "
+                    "surpassed it. Values are retained for historical compatibility."
+                ),
+            }
+        },
         "strata": _stratified_rows(by_arm, common_cases),
         "case_matrix": matrix,
     }
@@ -361,7 +373,7 @@ def _trajectory_metrics(
         config = row.get("sampling_config")
         config = dict(config) if isinstance(config, Mapping) else {}
         raw_guidance = config.get("oracle_guidance")
-        if isinstance(raw_guidance, Mapping):
+        if isinstance(raw_guidance, Mapping) and not guidance:
             guidance = dict(raw_guidance)
         modality = str(row.get("modality", config.get("modality", "")) or "").casefold()
         if modality not in {"visual", "ocr"}:
@@ -480,6 +492,7 @@ def _trajectory_metrics(
         ),
         "anchor_attachment_failure_count": anchor_attachment_failure_count,
         "anchor_timestamps_sec": list(anchors),
+        "oracle_guidance": guidance or None,
         "mean_inspected_candidate_window_sec": _mean_minimum_window_width(
             selected_ranges,
             visual_request_ranges,
@@ -845,7 +858,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "| "
             + " | ".join(
                 (
-                    str(row["arm"]),
+                    str(row["arm_label"]),
                     str(row["case_count"]),
                     _fmt(row["mean_score"]),
                     _fmt(row["exact_correct_rate"]),
@@ -903,6 +916,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         )
     lines.extend(
         (
+            "",
+            "Deprecated OGR (historical compatibility only; O2 is not a ceiling)",
             "",
             "| Arm | Mean-score OGR | 95% CI | Exact OGR | 95% CI |",
             "| --- | ---: | ---: | ---: | ---: |",

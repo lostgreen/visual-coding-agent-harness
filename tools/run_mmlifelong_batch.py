@@ -115,7 +115,26 @@ def main() -> None:
     (out_root / "cases").mkdir(exist_ok=True)
 
     candidates = discover_cases(Path(args.case_root))
-    if args.case_ids:
+    case_manifest_digest = None
+    if args.case_manifest:
+        manifest_path = Path(args.case_manifest)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw_cases = manifest.get("cases", ()) if isinstance(manifest, Mapping) else ()
+        manifest_case_ids = [
+            str(row["case_id"])
+            for row in raw_cases
+            if isinstance(row, Mapping) and row.get("case_id")
+        ]
+        if not manifest_case_ids or len(manifest_case_ids) != len(set(manifest_case_ids)):
+            raise ValueError("case manifest must contain unique non-empty case IDs")
+        by_id = {str(case["case_id"]): case for case in candidates}
+        missing = [case_id for case_id in manifest_case_ids if case_id not in by_id]
+        if missing:
+            raise ValueError(f"manifest case IDs are missing: {', '.join(missing)}")
+        selected = tuple(dict(by_id[case_id]) for case_id in manifest_case_ids)
+        selection_strategy = "explicit_case_manifest"
+        case_manifest_digest = file_checksum(manifest_path)["sha256"]
+    elif args.case_ids:
         by_id = {str(case["case_id"]): case for case in candidates}
         missing = [case_id for case_id in args.case_ids if case_id not in by_id]
         if missing:
@@ -131,6 +150,7 @@ def main() -> None:
         "strategy": selection_strategy,
         "candidate_count": len(candidates),
         "selected_count": len(selected),
+        "case_manifest_sha256": case_manifest_digest,
         "caption_config_digest": args.caption_config_digest,
         "caption_index_mode": args.caption_index_mode,
         "caption_query_strategy": args.caption_query_strategy,
@@ -139,6 +159,16 @@ def main() -> None:
         "evidence_state_mode": args.evidence_state_mode,
         "workers": max(1, min(int(args.workers), len(selected))),
         "phase5r_mode": "recorded_replay" if args.recorded_fixture_root else "live",
+        "api_bindings": {
+            "reasoner": {
+                "config_name": Path(args.reasoner_config or args.config).name,
+                "section": args.reasoner_section,
+            },
+            "investigator": {
+                "config_name": Path(args.investigator_config or args.config).name,
+                "section": args.investigator_section,
+            },
+        },
         "oracle_arm": args.oracle_arm,
         "oracle_intervention_root": str(args.oracle_intervention_root or ""),
         "recorded_fixture_root": str(args.recorded_fixture_root or ""),
@@ -346,6 +376,10 @@ def _case_command(
         "--embedding-batch-size",
         str(args.embedding_batch_size),
     ]
+    if getattr(args, "reasoner_config", None):
+        command.extend(("--reasoner-config", str(args.reasoner_config)))
+    if getattr(args, "investigator_config", None):
+        command.extend(("--investigator-config", str(args.investigator_config)))
     if args.embedding_revision:
         command.extend(("--embedding-revision", str(args.embedding_revision)))
     if args.oracle_intervention_root:
@@ -431,12 +465,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--case-root", required=True)
     parser.add_argument("--out-root", required=True)
     parser.add_argument("--config", required=True)
+    parser.add_argument("--reasoner-config")
+    parser.add_argument("--investigator-config")
     parser.add_argument("--caption-config-digest", required=True)
     parser.add_argument("--oracle-arm", choices=ORACLE_ARMS, default="o0")
     parser.add_argument("--oracle-intervention-root")
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--case-ids", nargs="+")
+    parser.add_argument("--case-manifest")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--case-timeout-sec", type=int, default=1800)
     parser.add_argument("--reasoner-section", default="investigator_api")
@@ -478,7 +515,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-batch-size", type=int, default=64)
     parser.add_argument("--recorded-fixture-root")
     parser.add_argument("--resume", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.case_ids and args.case_manifest:
+        parser.error("--case-ids and --case-manifest are mutually exclusive")
+    return args
 
 
 def _selection_coordinate(case: Mapping[str, Any]) -> float:

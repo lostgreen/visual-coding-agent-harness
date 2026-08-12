@@ -63,6 +63,8 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
     fixture_path.write_text("{}\n", encoding="utf-8")
     args = SimpleNamespace(
         config="api.yaml",
+        reasoner_config="reasoner.yaml",
+        investigator_config="investigator.yaml",
         reasoner_section="reasoner_api",
         investigator_section="investigator_api",
         answer_policy="benchmark_best_effort",
@@ -95,6 +97,8 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
 
     index = command.index("--recorded-decisions")
     assert command[index + 1] == str(fixture_path)
+    assert command[command.index("--reasoner-config") + 1] == "reasoner.yaml"
+    assert command[command.index("--investigator-config") + 1] == "investigator.yaml"
 
 
 def test_batch_subprocess_env_includes_repository_and_src() -> None:

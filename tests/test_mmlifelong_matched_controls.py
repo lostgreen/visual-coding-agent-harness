@@ -28,7 +28,50 @@ def _row(arm: str, case_id: str, score: float) -> dict[str, Any]:
     forced = arm == "o1.75-forced"
     o175 = arm.startswith("o1.75")
     exact = arm.startswith("o2")
+    guided = arm == "o2-guided"
+    point_anchor = o175 or arm == "o2-center"
     policy = "force_if_requested" if forced else "agent_controlled"
+    guidance = None
+    if o175 or guided or arm == "o2-center":
+        guidance = {
+            "schema_version": "MMLifelongOracleGuidanceV1",
+            "arm": arm,
+            "guidance_type": (
+                "exact_locators_with_point_anchors"
+                if arm == "o2-center"
+                else "exact_locators"
+                if guided
+                else "selected_coarse_candidates_with_point_anchors"
+            ),
+            "scope": "answer_free_locator_only",
+            "selected_candidate_guarantee": (
+                "exact_annotated_occurrence" if exact else "overlaps_annotated_occurrence"
+            ),
+            "boundary_visibility": "exact" if exact else "hidden",
+            "selected_candidates": [
+                {
+                    "candidate_rank": 1,
+                    "passage_id": "p2",
+                    "inspection_range": [20.0, 22.0],
+                    "interval_precision": "exact_clue",
+                }
+            ],
+            "agent_controls": ["window_width", "zoom", "stopping"],
+        }
+        if point_anchor:
+            guidance.update(
+                {
+                    "anchor_guarantee": "annotated_occurrence_center",
+                    "anchor_timestamps_sec": [21.0],
+                    "point_anchors": [
+                        {
+                            "anchor_timestamp_sec": 21.0,
+                            "selected_candidate_rank": 1,
+                            "selected_candidate_passage_id": "p2",
+                        }
+                    ],
+                }
+            )
     audit = {
         "applied": True,
         "caption_config_digest": "caption-digest",
@@ -44,18 +87,26 @@ def _row(arm: str, case_id: str, score: float) -> dict[str, Any]:
             if o175
             else "exact_locators_with_point_anchors"
             if arm == "o2-center"
+            else "exact_locators"
+            if guided
             else ""
         ),
+        "selected_candidate_guarantee": (
+            "exact_annotated_occurrence" if guided else ""
+        ),
+        "boundary_visibility": "exact" if guided else "",
         "exact_boundaries_visible": exact,
         "exact_locator_count": 1 if exact else 0,
         "selected_candidate_ranks": [1],
         "selected_candidate_passage_ids": ["p2"],
         "selected_candidate_intervals": [[20.0, 22.0]],
-        "point_anchor_candidate_ranks": [1] if arm != "o2" else [],
-        "point_anchor_candidate_passage_ids": ["p2"] if arm != "o2" else [],
-        "anchor_timestamps_sec": [21.0] if arm != "o2" else [],
-        "anchor_count": 1 if arm != "o2" else 0,
-        "anchor_execution_policy": policy if arm != "o2" else "",
+        "selected_candidate_count": 1,
+        "selected_candidate_clue_recall": 1.0,
+        "point_anchor_candidate_ranks": [1] if point_anchor else [],
+        "point_anchor_candidate_passage_ids": ["p2"] if point_anchor else [],
+        "anchor_timestamps_sec": [21.0] if point_anchor else [],
+        "anchor_count": 1 if point_anchor else 0,
+        "anchor_execution_policy": policy if point_anchor else "",
     }
     return {
         "arm": arm,
@@ -66,19 +117,20 @@ def _row(arm: str, case_id: str, score: float) -> dict[str, Any]:
         "parse_status": "parsed",
         "judge_model": "gpt-5.5",
         "audit": audit,
+        "oracle_guidance": guidance,
         "frozen_config": {
             "controller_mode": "frozen_baseline",
             "anchor_execution_policy": policy,
         },
         "clue_visual_recall": 1.0,
         "clue_center_visual_recall": 1.0,
-        "anchor_request_recall": None if arm == "o2" else 1.0,
-        "anchor_inspection_recall": None if arm == "o2" else 1.0,
-        "anchor_frame_recall": None if arm == "o2" else 1.0,
-        "anchor_timestamps_sec": [21.0] if arm != "o2" else [],
-        "anchor_requested_count": 0 if arm == "o2" else 1,
-        "anchor_inspected_count": 0 if arm == "o2" else 1,
-        "anchor_exact_frame_count": 0 if arm == "o2" else 1,
+        "anchor_request_recall": 1.0 if point_anchor else None,
+        "anchor_inspection_recall": 1.0 if point_anchor else None,
+        "anchor_frame_recall": 1.0 if point_anchor else None,
+        "anchor_timestamps_sec": [21.0] if point_anchor else [],
+        "anchor_requested_count": 1 if point_anchor else 0,
+        "anchor_inspected_count": 1 if point_anchor else 0,
+        "anchor_exact_frame_count": 1 if point_anchor else 0,
         "forced_anchor_count": 1 if forced else 0,
         "anchor_attachment_failure_count": 0,
         "visual_frames": 8,
@@ -91,6 +143,7 @@ def test_matched_control_report_uses_absolute_paired_deltas() -> None:
         "o1.75": (0.0, 1.0),
         "o1.75-forced": (1.0, 1.0),
         "o2": (0.0, 0.0),
+        "o2-guided": (0.0, 0.0),
         "o2-center": (0.0, 1.0),
     }
     rows = [
@@ -110,6 +163,8 @@ def test_matched_control_report_uses_absolute_paired_deltas() -> None:
     assert report["runtime_gate_passed"] is True
     assert report["gate_passed"] is True
     assert comparisons["o1.75-forced-o1.75"]["mean_score_delta"] == 0.5
+    assert comparisons["o2-guided-o2"]["mean_score_delta"] == 0.0
+    assert comparisons["o2-center-o2-guided"]["mean_score_delta"] == 0.5
     assert comparisons["o2-center-o2"]["mean_score_delta"] == 0.5
     assert "oracle_gap_recovery" not in report
     forced = next(row for row in report["arms"] if row["arm"] == "o1.75-forced")

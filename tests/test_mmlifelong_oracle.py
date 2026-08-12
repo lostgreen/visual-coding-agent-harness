@@ -354,6 +354,42 @@ def test_o2_center_adds_center_guidance_to_exact_locators(tmp_path: Path) -> Non
     assert transform.audit["anchor_count"] == 1
 
 
+def test_o2_guided_matches_center_guidance_without_anchor_fields(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    passages = [
+        _passage("p0", 0.0, 20.0, "early"),
+        _passage("p2", 200.0, 220.0, "decisive event"),
+    ]
+    _write_passages(workspace, passages)
+    packet = _packet([_hit(passages[0], 1)])
+    transformed = {}
+    audits = {}
+    for arm in ("o2", "o2-guided", "o2-center"):
+        intervention = CaptionPacketIntervention(
+            arm=arm,
+            intervention=_intervention(),
+            workspace=workspace,
+            audit_path=workspace.root_dir / f"audit-{arm}.json",
+        )
+        transformed[arm] = intervention(packet)
+        audits[arm] = intervention.audit
+
+    assert transformed["o2"]["hits"] == transformed["o2-guided"]["hits"]
+    assert transformed["o2-guided"]["hits"] == transformed["o2-center"]["hits"]
+    guided = transformed["o2-guided"]["oracle_guidance"]
+    center = transformed["o2-center"]["oracle_guidance"]
+    assert guided["guidance_type"] == "exact_locators"
+    assert guided["selected_candidates"] == center["selected_candidates"]
+    assert guided["selected_candidate_guarantee"] == "exact_annotated_occurrence"
+    assert guided["boundary_visibility"] == "exact"
+    assert "anchor_timestamps_sec" not in guided
+    assert "point_anchors" not in guided
+    assert audits["o2-guided"]["anchor_count"] == 0
+    assert audits["o2-guided"]["point_anchor_candidate_ranks"] == []
+
+
 def test_intervention_manifest_rejects_answer_bearing_keys() -> None:
     with pytest.raises(ValueError, match="answer-bearing"):
         OracleIntervention.from_mapping(
@@ -375,6 +411,7 @@ def test_only_intervention_arms_receive_bootstrap_candidates() -> None:
         "o1.75",
         "o1.75-forced",
         "o2",
+        "o2-guided",
         "o2-center",
     ):
         tasks = bootstrap_tasks(arm=arm, question="q", index_mode="hybrid")

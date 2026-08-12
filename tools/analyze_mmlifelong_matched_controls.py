@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze O1.75-forced and O2-center as matched-action controls."""
+"""Analyze matched execution, guidance, and point-anchor controls."""
 
 from __future__ import annotations
 
@@ -18,9 +18,11 @@ assert _SPEC and _SPEC.loader
 LADDER = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(LADDER)
 
-ARMS = ("o1.75", "o1.75-forced", "o2", "o2-center")
+ARMS = ("o1.75", "o1.75-forced", "o2", "o2-guided", "o2-center")
 COMPARISONS = (
     ("o1.75-forced-o1.75", "o1.75-forced", "o1.75"),
+    ("o2-guided-o2", "o2-guided", "o2"),
+    ("o2-center-o2-guided", "o2-center", "o2-guided"),
     ("o2-center-o2", "o2-center", "o2"),
     ("o2-center-o1.75", "o2-center", "o1.75"),
     ("o2-center-o1.75-forced", "o2-center", "o1.75-forced"),
@@ -138,7 +140,11 @@ def build_report(
         "o2_exact_locators_matched": _candidate_pools_matched(
             by_arm,
             common,
-            ("o2", "o2-center"),
+            ("o2", "o2-guided", "o2-center"),
+        ),
+        "o2_guided_guidance_valid": _o2_guided_guidance_valid(by_arm, common),
+        "o2_guided_center_semantic_guidance_matched": (
+            _o2_guided_center_guidance_matched(by_arm, common)
         ),
         "o2_center_guidance_valid": _o2_center_guidance_valid(by_arm, common),
         "forced_requested_anchors_executed": all(
@@ -172,7 +178,7 @@ def build_report(
     }
     checks = {**runtime_checks, **evaluation_checks}
     return {
-        "schema_version": "MMLifelongMatchedActionControlReportV1",
+        "schema_version": "MMLifelongMatchedActionControlReportV2",
         "expected_cases": int(expected_cases),
         "common_case_count": len(common),
         "runtime_gate_passed": all(runtime_checks.values()),
@@ -342,6 +348,100 @@ def _o2_center_guidance_valid(
         ):
             return False
     return bool(cases)
+
+
+def _o2_guided_guidance_valid(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    cases: set[str],
+) -> bool:
+    for case_id in cases:
+        row = by_arm["o2-guided"][case_id]
+        audit = row.get("audit")
+        if not isinstance(audit, Mapping):
+            return False
+        clue_count = int(row.get("clue_count", 0) or 0)
+        if (
+            audit.get("guidance_type") != "exact_locators"
+            or audit.get("selected_candidate_guarantee")
+            != "exact_annotated_occurrence"
+            or audit.get("boundary_visibility") != "exact"
+            or audit.get("exact_boundaries_visible") is not True
+            or int(audit.get("exact_locator_count", -1)) != clue_count
+            or float(audit.get("final_clue_recall", -1.0)) != 1.0
+            or float(audit.get("selected_candidate_clue_recall", -1.0)) != 1.0
+            or int(audit.get("selected_candidate_count", 0) or 0) < 1
+            or int(audit.get("anchor_count", -1)) != 0
+            or tuple(audit.get("anchor_timestamps_sec", ()) or ())
+            or tuple(audit.get("point_anchor_candidate_ranks", ()) or ())
+            or tuple(audit.get("point_anchor_candidate_passage_ids", ()) or ())
+        ):
+            return False
+        guidance = row.get("oracle_guidance")
+        if not isinstance(guidance, Mapping):
+            return False
+        if any(
+            key in guidance
+            for key in ("anchor_guarantee", "anchor_timestamps_sec", "point_anchors")
+        ):
+            return False
+    return bool(cases)
+
+
+def _o2_guided_center_guidance_matched(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    cases: set[str],
+) -> bool:
+    for case_id in cases:
+        guided = by_arm["o2-guided"][case_id]
+        center = by_arm["o2-center"][case_id]
+        guided_audit = guided.get("audit")
+        center_audit = center.get("audit")
+        if not isinstance(guided_audit, Mapping) or not isinstance(
+            center_audit, Mapping
+        ):
+            return False
+        selected_keys = (
+            "selected_candidate_ranks",
+            "selected_candidate_passage_ids",
+            "selected_candidate_intervals",
+            "selected_candidate_clue_recall",
+        )
+        if any(
+            guided_audit.get(key) != center_audit.get(key)
+            for key in selected_keys
+        ):
+            return False
+        guided_visible = _semantic_guidance(guided.get("oracle_guidance"))
+        center_visible = _semantic_guidance(center.get("oracle_guidance"))
+        if not guided_visible or guided_visible != center_visible:
+            return False
+    return bool(cases)
+
+
+def _semantic_guidance(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    guidance = dict(value)
+    for key in (
+        "arm",
+        "guidance_type",
+        "anchor_guarantee",
+        "anchor_timestamps_sec",
+        "point_anchors",
+        "anchor_inspection_status",
+        "all_point_anchors_inspected",
+    ):
+        guidance.pop(key, None)
+    candidates = []
+    for raw in tuple(guidance.get("selected_candidates", ()) or ()):
+        if not isinstance(raw, Mapping):
+            continue
+        candidate = dict(raw)
+        candidate.pop("visually_inspected", None)
+        candidates.append(candidate)
+    guidance["selected_candidates"] = candidates
+    guidance.pop("all_selected_candidates_inspected", None)
+    return guidance
 
 
 def _optional_mean(values: Any) -> float | None:

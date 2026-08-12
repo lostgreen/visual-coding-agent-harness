@@ -26,14 +26,15 @@ ORACLE_ARMS = (
     "o1.75",
     "o1.75-forced",
     "o2",
+    "o2-guided",
     "o2-center",
 )
 _CANDIDATE_INCLUSION_ARMS = frozenset(
     {"o1", "o1.5", "o1.75", "o1.75-forced"}
 )
 _POINT_ANCHOR_ARMS = frozenset({"o1.75", "o1.75-forced", "o2-center"})
-_GUIDANCE_ARMS = frozenset({"o1.5", *_POINT_ANCHOR_ARMS})
-_EXACT_LOCATOR_ARMS = frozenset({"o2", "o2-center"})
+_GUIDANCE_ARMS = frozenset({"o1.5", "o2-guided", *_POINT_ANCHOR_ARMS})
+_EXACT_LOCATOR_ARMS = frozenset({"o2", "o2-guided", "o2-center"})
 _FULL_RECALL_ARMS = frozenset(
     {*_CANDIDATE_INCLUSION_ARMS, *_EXACT_LOCATOR_ARMS}
 )
@@ -252,6 +253,16 @@ class CaptionPacketIntervention:
                 if oracle_guidance
                 else ""
             ),
+            "selected_candidate_guarantee": (
+                str(oracle_guidance.get("selected_candidate_guarantee", ""))
+                if oracle_guidance
+                else ""
+            ),
+            "boundary_visibility": (
+                str(oracle_guidance.get("boundary_visibility", ""))
+                if oracle_guidance
+                else ""
+            ),
             "exact_boundaries_visible": self.arm in _EXACT_LOCATOR_ARMS,
             "anchor_execution_policy": (
                 "force_if_requested"
@@ -321,11 +332,13 @@ class CaptionPacketIntervention:
         selected_by_clue = self._selected_candidates_by_clue(ranked_hits)
         selected_by_rank = {hit.rank: hit for hit in selected_by_clue}
         selected = tuple(selected_by_rank[rank] for rank in sorted(selected_by_rank))
-        exact_locators = self.arm == "o2-center"
+        exact_locators = self.arm in {"o2-guided", "o2-center"}
         guidance: dict[str, Any] = {
             "schema_version": "MMLifelongOracleGuidanceV1",
             "arm": "o1.75" if self.arm == "o1.75-forced" else self.arm,
-            "guidance_type": "selected_coarse_candidates",
+            "guidance_type": (
+                "exact_locators" if exact_locators else "selected_coarse_candidates"
+            ),
             "scope": "answer_free_locator_only",
             "selected_candidate_guarantee": (
                 "exact_annotated_occurrence"

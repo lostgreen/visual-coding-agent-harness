@@ -105,7 +105,8 @@ def main() -> None:
         None
         if recorded_fixture
         else OpenAICompatibleClient.from_yaml(
-            Path(args.config), section=args.reasoner_section
+            Path(args.reasoner_config or args.config),
+            section=args.reasoner_section,
         )
     )
     if protocol.measurement_control == "blind_prior":
@@ -126,7 +127,8 @@ def main() -> None:
         MechanicalReplayClient()
         if recorded_fixture
         else OpenAICompatibleClient.from_yaml(
-            Path(args.config), section=args.investigator_section
+            Path(args.investigator_config or args.config),
+            section=args.investigator_section,
         )
     )
     embedding_adapter = None
@@ -293,6 +295,16 @@ def main() -> None:
         "models": {
             "reasoner": role_settings["reasoner"]["model"],
             "investigator": investigator_api.model,
+        },
+        "api_bindings": {
+            "reasoner": {
+                "config_name": Path(args.reasoner_config or args.config).name,
+                "section": args.reasoner_section,
+            },
+            "investigator": {
+                "config_name": Path(args.investigator_config or args.config).name,
+                "section": args.investigator_section,
+            },
         },
         "phase5r_mode": "recorded_replay" if recorded_fixture else "live",
         "recorded_fixture_digest": (
@@ -574,6 +586,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--case-workspace", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--config", required=True, help="OpenAI-compatible API YAML; secrets are not copied.")
+    parser.add_argument("--reasoner-config")
+    parser.add_argument("--investigator-config")
     parser.add_argument("--reasoner-section", default="investigator_api")
     parser.add_argument("--investigator-section", default="investigator_api")
     parser.add_argument("--answer-policy", choices=("strict", "benchmark_best_effort"), default="benchmark_best_effort")
