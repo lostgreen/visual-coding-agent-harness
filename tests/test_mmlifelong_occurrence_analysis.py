@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -13,6 +14,16 @@ SPEC = importlib.util.spec_from_file_location("occurrence_analysis", MODULE_PATH
 assert SPEC and SPEC.loader
 ANALYSIS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ANALYSIS)
+
+AUDIT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "audit_mmlifelong_occurrence_canary.py"
+)
+AUDIT_SPEC = importlib.util.spec_from_file_location("occurrence_audit", AUDIT_PATH)
+assert AUDIT_SPEC and AUDIT_SPEC.loader
+AUDIT = importlib.util.module_from_spec(AUDIT_SPEC)
+AUDIT_SPEC.loader.exec_module(AUDIT)
 
 
 def _row(
@@ -97,3 +108,62 @@ def test_a1_flat_text_mismatch_fails_structural_gate() -> None:
 
     assert report["text_budget_parity"]["passed"] is False
     assert report["structural_gate_passed"] is False
+
+
+def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
+    bindings = {}
+    for arm in ("a0", "a1-flat", "a1", "a2"):
+        root = tmp_path / arm
+        case = root / "cases" / "case-1"
+        case.mkdir(parents=True)
+        (case / "prediction.json").write_text(
+            json.dumps({"case_id": "case-1"}), encoding="utf-8"
+        )
+        (case / "run_config.json").write_text(
+            json.dumps(
+                {
+                    "occurrence_method_arm": arm,
+                    "models": {
+                        "reasoner": "pa/gmn-2.5-pr",
+                        "investigator": "pa/gmn-2.5-pr",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        trace = [
+            {"type": "occurrence_treatment_eligible", "round": 2},
+            {
+                "type": "reasoner_decision",
+                "occurrence_ops": (
+                    [{"op": "select", "occurrence_id": "occ_1"}]
+                    if arm == "a2"
+                    else []
+                ),
+                "occurrence_ops_accepted": True,
+            },
+        ]
+        if arm != "a0":
+            trace.append({"type": "occurrence_treatment_exposed", "round": 2})
+        (case / "runtime_summary.json").write_text(
+            json.dumps(
+                {
+                    "no_oracle_runtime_gate": {
+                        "no_oracle_runtime_gate_passed": True
+                    },
+                    "trace": trace,
+                }
+            ),
+            encoding="utf-8",
+        )
+        if arm == "a2":
+            (case / "occurrence_resolution_state.json").write_text(
+                "{}", encoding="utf-8"
+            )
+        bindings[arm] = root
+
+    report = AUDIT.audit_roots(bindings, expected_cases=1)
+
+    assert report["structural_gate_passed"] is True
+    assert report["per_arm"]["a2"]["occurrence_op_count"] == 1
+    assert report["per_arm"]["a2"]["state_file_count"] == 1
