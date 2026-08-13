@@ -210,6 +210,7 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
             },
             {
                 "type": "reasoner_decision",
+                "action": "update_workspace" if arm == "a2" else "investigate",
                 "occurrence_ops": (
                     [{"op": "select", "occurrence_id": "occ_1"}]
                     if arm == "a2"
@@ -227,6 +228,14 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
                         {"code": "occurrence_selection_required"}
                     ],
                 },
+            )
+            trace.append(
+                {
+                    "type": "reasoner_decision",
+                    "action": "answer",
+                    "occurrence_ops": [],
+                    "occurrence_ops_accepted": True,
+                }
             )
         if arm != "a0":
             trace.append({"type": "occurrence_treatment_exposed", "round": 2})
@@ -255,6 +264,8 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     assert report["per_arm"]["a2"]["selection_case_count"] == 1
     assert report["per_arm"]["a2"]["selection_required_case_count"] == 1
     assert report["per_arm"]["a2"]["selection_missing_case_count"] == 0
+    assert report["per_arm"]["a2"]["selection_not_prior_case_count"] == 0
+    assert report["per_arm"]["a2"]["answer_missing_after_selection_case_count"] == 0
     assert report["per_arm"]["a2"]["selection_required_retry_count"] == 1
     assert report["per_arm"]["a2"]["occurrence_validation_error_count"] == 0
     assert report["per_arm"]["a2"]["state_file_count"] == 1

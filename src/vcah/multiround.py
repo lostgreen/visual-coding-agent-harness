@@ -519,7 +519,10 @@ class VirtualVideoMultiRoundDriver:
 
         for round_id in range(
             1,
-            self.semantic_round_budget + self.closure_repair_budget + 3,
+            self.semantic_round_budget
+            + self.closure_repair_budget
+            + 3
+            + (1 if occurrence_state is not None else 0),
         ):
             remaining = max(0, self.max_investigations - completed_investigations)
             closure_repair_active = bool(
@@ -728,7 +731,16 @@ class VirtualVideoMultiRoundDriver:
                             allowed_modes=self.allowed_inspection_modes,
                         )
                     )
-                    if parsed_decision.action == "answer" and parsed_decision.answer:
+                    if (
+                        parsed_decision.action == "answer"
+                        and parsed_decision.answer
+                        and not any(
+                            str(error.get("code", "")).startswith(
+                                "occurrence_"
+                            )
+                            for error in schema_errors
+                        )
+                    ):
                         latest_answer_candidate = parsed_decision
                 trace.append(
                     {
@@ -851,6 +863,18 @@ class VirtualVideoMultiRoundDriver:
                         decision.occurrence_ops
                     )
                     occurrence_state.save(occurrence_state_path)
+                occurrence_selection_committed = bool(
+                    occurrence_apply_result["accepted"]
+                    and any(
+                        str(
+                            operation.get("op", operation.get("type", ""))
+                            or ""
+                        ).casefold()
+                        == "select"
+                        for operation in decision.occurrence_ops
+                        if isinstance(operation, Mapping)
+                    )
+                )
                 premature_occurrence_commit = bool(
                     occurrence_state is not None
                     and decision.action == "answer"
@@ -880,6 +904,9 @@ class VirtualVideoMultiRoundDriver:
                         "occurrence_ops_accepted": occurrence_apply_result[
                             "accepted"
                         ],
+                        "occurrence_selection_committed": (
+                            occurrence_selection_committed
+                        ),
                         "occurrence_state_revision": (
                             occurrence_state.revision
                             if occurrence_state is not None
@@ -1069,7 +1096,11 @@ class VirtualVideoMultiRoundDriver:
                     "returned_observation_count": len(requested_rows),
                     "revision": document.revision,
                 }
-                if force_finalize and not final_retry_available:
+                if (
+                    force_finalize
+                    and not final_retry_available
+                    and not occurrence_selection_committed
+                ):
                     break
                 continue
 
@@ -1433,19 +1464,11 @@ def _occurrence_answer_errors(
     viable = set(state.viable_occurrence_ids)
     if len(viable) <= 1 or state.selected_occurrence_id in viable:
         return []
-    selects_current_viable = any(
-        str(operation.get("op", operation.get("type", "")) or "").casefold()
-        == "select"
-        and str(operation.get("occurrence_id", "") or "") in viable
-        for operation in decision.occurrence_ops
-        if isinstance(operation, Mapping)
-    )
-    if selects_current_viable:
-        return []
     return [
         {
             "code": "occurrence_selection_required",
             "viable_occurrence_count": len(viable),
+            "selection_must_precede_answer": True,
         }
     ]
 
@@ -1944,7 +1967,7 @@ def _control_retry_feedback(
         )
     if "occurrence_selection_required" in codes:
         repair_rules.append(
-            "Before answering with multiple viable occurrences, submit one top-level occurrence_ops select operation using an occurrence_id from the current visible state; Runtime will validate the ID but will not choose it."
+            "Do not answer in this decision. Return action=update_workspace with no answer and one top-level occurrence_ops select operation using an occurrence_id from the current visible state. The persisted selection must precede a later answer decision; Runtime validates the ID but never chooses it."
         )
     instruction = "Preserve the semantic intent and return one corrected Decision JSON object."
     if repair_rules:

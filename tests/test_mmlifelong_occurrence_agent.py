@@ -266,11 +266,49 @@ def test_a2_requires_reasoner_selection_before_answer() -> None:
         answer="answer",
         occurrence_ops=({"op": "select", "occurrence_id": "occ_2"},),
     )
-    assert _occurrence_answer_errors(same_decision, state) == []
+    assert [
+        error["code"] for error in _occurrence_answer_errors(same_decision, state)
+    ] == ["occurrence_selection_required"]
     assert state.apply_ops(same_decision.occurrence_ops)["accepted"] is True
     assert _occurrence_answer_errors(
         ReasonerDecision(action="answer", answer="answer"), state
     ) == []
+
+
+def test_a2_prompt_requires_selection_in_a_prior_decision() -> None:
+    prompt = _frozen_reasoner_prompt(
+        {
+            "question": "q",
+            "options": {"A": "a", "B": "b"},
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    "schema_version": "OccurrenceResolutionStateV1",
+                    "viable_occurrence_ids": ["occ_1", "occ_2"],
+                }
+            },
+        }
+    )
+
+    assert "selection is a separate committed step" in prompt
+    assert 'Selection commit schema: {"action":"update_workspace"' in prompt
+    assert "Do not answer while multiple viable occurrences remain unselected" in prompt
+
+    final_prompt = _frozen_reasoner_prompt(
+        {
+            "question": "q",
+            "options": {"A": "a", "B": "b"},
+            "force_finalize": True,
+            "final_attempt": 2,
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    "schema_version": "OccurrenceResolutionStateV1",
+                    "viable_occurrence_ids": ["occ_1", "occ_2"],
+                }
+            },
+        }
+    )
+    assert "Investigation is closed; return action=update_workspace" in final_prompt
+    assert "Return action=answer only" not in final_prompt
 
 
 def test_method_arms_cannot_be_combined_with_oracle_interventions() -> None:

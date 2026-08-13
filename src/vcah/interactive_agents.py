@@ -2001,7 +2001,9 @@ def _occurrence_resolution_prompt_rule(
         "The state is locator-only and never answer support. When more than one viable occurrence remains, seek evidence "
         "that discriminates the leading competitors instead of committing to retrieval rank 1. Inspect identity, temporal, "
         "or state cues for at least the strongest alternatives, eliminate only from observed or caption evidence, and select "
-        "the occurrence you semantically judge correct before answering. Runtime validates only operation names, state "
+        "the occurrence you semantically judge correct before answering. For multiple viable occurrences, selection is a "
+        "separate committed step: first return action=update_workspace with no answer and occurrence_ops containing select; "
+        "only a later decision may answer. Runtime validates only operation names, state "
         "transitions, and visible foreign keys; it never chooses an occurrence or evaluates semantic correctness.\n"
     )
 
@@ -2016,10 +2018,16 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     occurrence_resolution_rule = _occurrence_resolution_prompt_rule(
         mechanical_status
     )
-    occurrence_answer_field = (
-        ',"occurrence_ops":[{"op":"select","occurrence_id":"occ_visible_id"}]'
-        if occurrence_resolution_rule
-        else ""
+    occurrence_state = mechanical_status.get("occurrence_resolution_state")
+    occurrence_state = (
+        occurrence_state if isinstance(occurrence_state, Mapping) else {}
+    )
+    viable_occurrence_ids = tuple(
+        occurrence_state.get("viable_occurrence_ids", ()) or ()
+    )
+    occurrence_selection_pending = (
+        len(viable_occurrence_ids) > 1
+        and not str(occurrence_state.get("selected_occurrence_id", "") or "")
     )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
@@ -2048,7 +2056,7 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         task_description = "long-video multiple-choice QA"
         answer_schema = (
             'Answer schema: {"action":"answer","answer":"A. exact option text","workspace_ops":[],'
-            f'"supporting_claim_ids":["c1"]{occurrence_answer_field},'
+            '"supporting_claim_ids":["c1"],'
             '"residual_uncertainty":""}. '
         )
         answer_rule = (
@@ -2059,14 +2067,24 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         task_description = "long-video free-form QA"
         answer_schema = (
             'Answer schema: {"action":"answer","answer":"concise factual answer","workspace_ops":[],'
-            f'"supporting_claim_ids":["c1"]{occurrence_answer_field},'
+            '"supporting_claim_ids":["c1"],'
             '"residual_uncertainty":"optional concise caveat"}. '
         )
         answer_rule = (
             "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
             "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
         )
-    if not final:
+    if occurrence_selection_pending and final:
+        action_rule = (
+            "Do not answer in this decision. Investigation is closed; return action=update_workspace with no answer and "
+            "commit exactly one currently visible occurrence using occurrence_ops select. A separate answer decision will follow."
+        )
+    elif occurrence_selection_pending:
+        action_rule = (
+            "Do not answer while multiple viable occurrences remain unselected. Investigate/read evidence to discriminate them, "
+            "or return action=update_workspace with no answer and commit one currently visible occurrence using occurrence_ops select."
+        )
+    elif not final:
         action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
     elif final_attempt <= 1:
         action_rule = (
@@ -2079,6 +2097,12 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Return action=answer only. Tool use, observation reads, and workspace-only updates are closed. "
             "Provide the best evidence-grounded answer available and list supporting_claim_ids when valid."
         )
+    occurrence_selection_schema = (
+        'Selection commit schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
+        '"occurrence_ops":[{"op":"select","occurrence_id":"occ_visible_id"}]}.\n'
+        if occurrence_resolution_rule
+        else ""
+    )
     return (
         f"You are the sole semantic decision maker for {task_description}. The framework only stores observations, "
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
@@ -2103,6 +2127,7 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         f"{caption_search_rule}"
         f"{oracle_guidance_rule}"
         f"{occurrence_resolution_rule}"
+        f"{occurrence_selection_schema}"
         "When mechanical_status marks caption_occurrence_ambiguous, compare the separate source/time clusters in "
         "caption_occurrence_sets. A coherent caption chain from one cluster does not establish that it is the requested "
         "occurrence; inspect identity cues for competing clusters before promotion.\n"

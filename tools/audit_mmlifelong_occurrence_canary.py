@@ -64,6 +64,26 @@ def audit_roots(
                 for operation in tuple(row.get("occurrence_ops", ()) or ())
                 if isinstance(operation, Mapping)
             )
+            prior_selection_indices = tuple(
+                index
+                for index, row in enumerate(decisions)
+                if row.get("action") != "answer"
+                and row.get("occurrence_ops_accepted") is not False
+                and any(
+                    str(
+                        operation.get("op", operation.get("type", "")) or ""
+                    ).casefold()
+                    == "select"
+                    for operation in tuple(row.get("occurrence_ops", ()) or ())
+                    if isinstance(operation, Mapping)
+                )
+            )
+            selection_before_answer = bool(prior_selection_indices)
+            answer_after_selection = any(
+                row.get("action") == "answer"
+                and index > prior_selection_indices[0]
+                for index, row in enumerate(decisions)
+            ) if prior_selection_indices else False
             selection_required = any(
                 row.get("type") == "occurrence_treatment_eligible"
                 and int(row.get("visible_occurrence_count", 0) or 0) > 1
@@ -100,6 +120,8 @@ def audit_roots(
                     ),
                     "selection_ops": selection_ops,
                     "selection_required": selection_required,
+                    "selection_before_answer": selection_before_answer,
+                    "answer_after_selection": answer_after_selection,
                     "ops_accepted": all(
                         row.get("occurrence_ops_accepted") is not False
                         for row in decisions
@@ -162,6 +184,16 @@ def audit_roots(
                 row["selection_required"] and row["selection_ops"] == 0
                 for row in cases
             ),
+            "selection_not_prior_case_count": sum(
+                row["selection_required"]
+                and not row["selection_before_answer"]
+                for row in cases
+            ),
+            "answer_missing_after_selection_case_count": sum(
+                row["selection_required"]
+                and not row["answer_after_selection"]
+                for row in cases
+            ),
             "all_occurrence_ops_accepted": all(
                 row["ops_accepted"] for row in cases
             ),
@@ -219,6 +251,12 @@ def audit_roots(
             per_arm.get("a2", {}).get("selection_required_case_count", 0)
             > 0
             and per_arm.get("a2", {}).get("selection_missing_case_count") == 0
+            and per_arm.get("a2", {}).get("selection_not_prior_case_count")
+            == 0
+            and per_arm.get("a2", {}).get(
+                "answer_missing_after_selection_case_count"
+            )
+            == 0
         ),
         "no_occurrence_validation_errors": sum(
             row["occurrence_validation_error_count"]
