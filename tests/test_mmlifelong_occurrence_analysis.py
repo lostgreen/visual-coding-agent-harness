@@ -209,6 +209,7 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     assert report["per_arm"]["a2"]["occurrence_op_count"] == 1
     assert report["per_arm"]["a2"]["selection_case_count"] == 1
     assert report["per_arm"]["a2"]["selection_required_case_count"] == 1
+    assert report["per_arm"]["a2"]["selection_missing_case_count"] == 0
     assert report["per_arm"]["a2"]["selection_required_retry_count"] == 1
     assert report["per_arm"]["a2"]["occurrence_validation_error_count"] == 0
     assert report["per_arm"]["a2"]["state_file_count"] == 1

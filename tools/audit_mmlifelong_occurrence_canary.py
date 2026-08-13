@@ -142,6 +142,10 @@ def audit_roots(
             "selection_required_case_count": sum(
                 row["selection_required"] for row in cases
             ),
+            "selection_missing_case_count": sum(
+                row["selection_required"] and row["selection_ops"] == 0
+                for row in cases
+            ),
             "all_occurrence_ops_accepted": all(
                 row["ops_accepted"] for row in cases
             ),
@@ -194,8 +198,7 @@ def audit_roots(
         "a2_selection_complete": (
             per_arm.get("a2", {}).get("selection_required_case_count", 0)
             > 0
-            and per_arm.get("a2", {}).get("selection_case_count")
-            == per_arm.get("a2", {}).get("selection_required_case_count")
+            and per_arm.get("a2", {}).get("selection_missing_case_count") == 0
         ),
         "no_occurrence_validation_errors": sum(
             row["occurrence_validation_error_count"]
