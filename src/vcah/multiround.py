@@ -19,6 +19,7 @@ from vcah.investigator import (
     VirtualVideoInvestigator,
 )
 from vcah.memory import EvidenceStore
+from vcah.occurrence_agent import candidate_cards_by_occurrence
 from vcah.phase5 import inspection_mode_policy_errors
 from vcah.runtime_metrics import (
     export_item_supporting_intervals,
@@ -2078,6 +2079,7 @@ def _mechanical_status(
             oracle_guidance_packets.append(dict(oracle_guidance))
         occurrence_set = config.get("occurrence_set")
         if isinstance(occurrence_set, Mapping):
+            occurrence_cards = candidate_cards_by_occurrence(occurrence_set)
             compact_candidates: list[dict[str, Any]] = []
             for raw_candidate in tuple(occurrence_set.get("candidates", ()) or ()):
                 if not isinstance(raw_candidate, Mapping):
@@ -2095,6 +2097,9 @@ def _mechanical_status(
                     "max_score": float(raw_candidate.get("max_score", 0.0) or 0.0),
                     "hit_count": int(raw_candidate.get("hit_count", 0) or 0),
                 }
+                occurrence_id = candidate["occurrence_id"]
+                if occurrence_id in occurrence_cards:
+                    candidate["candidate_card"] = occurrence_cards[occurrence_id]
                 compact_candidates.append(candidate)
                 key = candidate["occurrence_id"] or json.dumps(
                     [candidate["source_video_ids"], candidate["time_range"]],

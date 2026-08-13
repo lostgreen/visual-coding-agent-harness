@@ -14,6 +14,10 @@ import time
 from typing import Any, Mapping, Sequence
 
 from benchmarks.mmlifelong.oracle import ORACLE_ARMS
+from vcah.occurrence_agent import (
+    OCCURRENCE_METHOD_ARMS,
+    validate_occurrence_method_configuration,
+)
 from vcah.phase5 import Phase5Protocol
 from vcah.replay import file_checksum
 
@@ -97,6 +101,11 @@ def select_stratified_cases(
 
 def main() -> None:
     args = _parse_args()
+    occurrence_method_arm = validate_occurrence_method_configuration(
+        method_arm=args.occurrence_method_arm,
+        oracle_arm=args.oracle_arm,
+        oracle_intervention=args.oracle_intervention_root,
+    )
     if args.oracle_arm == "o0":
         if args.oracle_intervention_root:
             raise ValueError("O0 must not load --oracle-intervention-root")
@@ -170,6 +179,7 @@ def main() -> None:
             },
         },
         "oracle_arm": args.oracle_arm,
+        "occurrence_method_arm": occurrence_method_arm,
         "oracle_intervention_root": str(args.oracle_intervention_root or ""),
         "recorded_fixture_root": str(args.recorded_fixture_root or ""),
         "recorded_fixture_manifest": (
@@ -369,6 +379,8 @@ def _case_command(
         str(args.caption_config_digest),
         "--oracle-arm",
         str(args.oracle_arm),
+        "--occurrence-method-arm",
+        str(getattr(args, "occurrence_method_arm", "none")),
         "--embedding-model",
         str(args.embedding_model),
         "--embedding-device",
@@ -429,6 +441,7 @@ def _write_batch_summary(
             "measurement_control": selection.get("measurement_control"),
             "phase5r_mode": selection.get("phase5r_mode"),
             "oracle_arm": selection.get("oracle_arm"),
+            "occurrence_method_arm": selection.get("occurrence_method_arm"),
             "recorded_fixture_manifest": selection.get(
                 "recorded_fixture_manifest"
             ),
@@ -470,6 +483,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--caption-config-digest", required=True)
     parser.add_argument("--oracle-arm", choices=ORACLE_ARMS, default="o0")
     parser.add_argument("--oracle-intervention-root")
+    parser.add_argument(
+        "--occurrence-method-arm",
+        choices=OCCURRENCE_METHOD_ARMS,
+        default="none",
+    )
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--case-ids", nargs="+")

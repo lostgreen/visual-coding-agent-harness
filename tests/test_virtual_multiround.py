@@ -741,6 +741,24 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
                 "occurrence_set": {
                     "status": "competing_candidates",
                     "occurrence_ambiguous": True,
+                    "candidate_cards": [
+                        {
+                            "occurrence_id": "occ-1",
+                            "rank": 1,
+                            "time_range": [5.0, 10.0],
+                            "matched_queries": ["person raises cup"],
+                            "representative_passages": [
+                                {
+                                    "passage_id": "p1",
+                                    "time_range": [5.0, 10.0],
+                                    "caption_excerpt": "The person raises a cup.",
+                                    "query_matches": ["person raises cup"],
+                                }
+                            ],
+                            "evidence_role": "locator_only",
+                            "answer_support": False,
+                        }
+                    ],
                     "candidates": [
                         {
                             "occurrence_id": "occ-1",
@@ -807,6 +825,9 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
         "visually_inspected"
     ] is False
     assert status["caption_occurrence_candidate_count"] == 2
+    compact_occurrences = status["caption_occurrence_sets"][0]["candidates"]
+    assert compact_occurrences[0]["candidate_card"]["occurrence_id"] == "occ-1"
+    assert "candidate_card" not in compact_occurrences[1]
     assert status["pending_caption_occurrence_count"] == 2
     assert status["caption_occurrence_ambiguous"] is True
     assert any("locator candidates" in hint for hint in status["prompt_hints"])

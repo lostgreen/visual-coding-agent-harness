@@ -20,6 +20,11 @@ from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
 from vcah.model_client import OpenAICompatibleClient
 from vcah.multiround import VirtualVideoMultiRoundDriver
+from vcah.occurrence_agent import (
+    OCCURRENCE_METHOD_ARMS,
+    OccurrencePacketTransform,
+    validate_occurrence_method_configuration,
+)
 from vcah.phase5 import Phase5Protocol, blind_prior_prompt
 from vcah.phase5r import (
     MechanicalReplayClient,
@@ -36,6 +41,11 @@ from vcah.virtual_video import VirtualVideoWorkspace
 
 def main() -> None:
     args = _parse_args()
+    occurrence_method_arm = validate_occurrence_method_configuration(
+        method_arm=args.occurrence_method_arm,
+        oracle_arm=args.oracle_arm,
+        oracle_intervention=args.oracle_intervention,
+    )
     protocol = Phase5Protocol(
         controller_mode=args.controller_mode,
         controller_evidence_visibility=args.controller_evidence_visibility,
@@ -63,6 +73,8 @@ def main() -> None:
     workspace = VirtualVideoWorkspace.load(run_root)
 
     oracle_intervention = None
+    oracle_packet_transform = None
+    occurrence_packet_transform = None
     caption_packet_transform = None
     if args.oracle_arm == "o0":
         if args.oracle_intervention:
@@ -79,12 +91,23 @@ def main() -> None:
             args.caption_config_digest or ""
         ):
             raise ValueError("oracle intervention Caption digest mismatch")
-        caption_packet_transform = CaptionPacketIntervention(
+        oracle_packet_transform = CaptionPacketIntervention(
             arm=args.oracle_arm,
             intervention=oracle_intervention,
             workspace=workspace,
             audit_path=workspace.root_dir / "oracle_intervention_audit.json",
         )
+        caption_packet_transform = oracle_packet_transform
+    if occurrence_method_arm != "none":
+        occurrence_packet_transform = OccurrencePacketTransform(
+            arm=occurrence_method_arm,
+            audit_path=workspace.root_dir / "no_oracle_runtime_audit.json",
+        )
+        occurrence_packet_transform.validate_surface(
+            runtime_case_payload,
+            surface="runtime_case",
+        )
+        caption_packet_transform = occurrence_packet_transform
 
     recorded_fixture = (
         load_fixture(Path(args.recorded_decisions))
@@ -270,6 +293,17 @@ def main() -> None:
         "caption_query_policy": investigator.caption_query_policy,
         "effective_caption_query_strategy": investigator.caption_query_strategy,
         "caption_config_digest": args.caption_config_digest,
+        "occurrence_method_arm": occurrence_method_arm,
+        "no_oracle_runtime_gate": (
+            {
+                "schema_version": "MMLifelongNoOracleRuntimeGateV1",
+                "method_arm": occurrence_method_arm,
+                "passed": True,
+                "audit_file": "no_oracle_runtime_audit.json",
+            }
+            if occurrence_packet_transform is not None
+            else None
+        ),
         "oracle_arm": args.oracle_arm,
         "anchor_execution_policy": investigator.anchor_execution_policy,
         "oracle_intervention": (
@@ -342,9 +376,15 @@ def main() -> None:
     summary["decision_trace"] = decision_trace
     summary["phase5r_cost_breakdown"] = cost_breakdown
     summary["oracle_arm"] = args.oracle_arm
+    summary["occurrence_method_arm"] = occurrence_method_arm
+    summary["no_oracle_runtime_gate"] = (
+        dict(occurrence_packet_transform.audit)
+        if occurrence_packet_transform is not None
+        else None
+    )
     summary["oracle_intervention_audit"] = (
-        dict(caption_packet_transform.audit)
-        if caption_packet_transform is not None
+        dict(oracle_packet_transform.audit)
+        if oracle_packet_transform is not None
         else None
     )
     if recorded_fixture:
@@ -376,6 +416,7 @@ def main() -> None:
                 "investigations": result.investigation_count,
                 "config_digest": config["config_digest"],
                 "oracle_arm": args.oracle_arm,
+                "occurrence_method_arm": occurrence_method_arm,
                 "workspace": str(workspace.root_dir),
             },
             ensure_ascii=False,
@@ -625,6 +666,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--caption-config-digest")
     parser.add_argument("--oracle-arm", choices=ORACLE_ARMS, default="o0")
     parser.add_argument("--oracle-intervention")
+    parser.add_argument(
+        "--occurrence-method-arm",
+        choices=OCCURRENCE_METHOD_ARMS,
+        default="none",
+    )
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")

@@ -87,6 +87,7 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
         recorded_fixture_root=str(fixture_root),
         oracle_arm="o0",
         oracle_intervention_root=None,
+        occurrence_method_arm="a1",
     )
     case = {
         "case_id": "case-0072",
@@ -99,6 +100,7 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
     assert command[index + 1] == str(fixture_path)
     assert command[command.index("--reasoner-config") + 1] == "reasoner.yaml"
     assert command[command.index("--investigator-config") + 1] == "investigator.yaml"
+    assert command[command.index("--occurrence-method-arm") + 1] == "a1"
 
 
 def test_batch_subprocess_env_includes_repository_and_src() -> None:
