@@ -444,7 +444,14 @@ def _text_parity(
             ]
     return {
         "applicable": True,
-        "passed": comparable > 0 and matched == comparable,
+        "passed": matched == comparable if comparable else None,
+        "status": (
+            "passed"
+            if comparable and matched == comparable
+            else "failed"
+            if comparable
+            else "not_comparable"
+        ),
         "paired_n": len(case_ids),
         "comparable_n": comparable,
         "matched_n": matched,

@@ -15,6 +15,8 @@ from vcah.occurrence_agent import (
 )
 from vcah.interactive_agents import _frozen_reasoner_prompt
 from vcah.multiround import (
+    ReasonerDecision,
+    _occurrence_answer_errors,
     _occurrence_treatment_surface,
     _visible_occurrence_ids,
 )
@@ -241,6 +243,29 @@ def test_a2_prompt_is_only_enabled_by_resolution_state() -> None:
         },
     }
     assert "Explicit occurrence arbitration" in _frozen_reasoner_prompt(enabled)
+
+
+def test_a2_requires_reasoner_selection_before_answer() -> None:
+    state = OccurrenceResolutionStateV1()
+    state.sync_visible(("occ_1", "occ_2"))
+
+    missing = _occurrence_answer_errors(
+        ReasonerDecision(action="answer", answer="answer"), state
+    )
+    assert [error["code"] for error in missing] == [
+        "occurrence_selection_required"
+    ]
+
+    same_decision = ReasonerDecision(
+        action="answer",
+        answer="answer",
+        occurrence_ops=({"op": "select", "occurrence_id": "occ_2"},),
+    )
+    assert _occurrence_answer_errors(same_decision, state) == []
+    assert state.apply_ops(same_decision.occurrence_ops)["accepted"] is True
+    assert _occurrence_answer_errors(
+        ReasonerDecision(action="answer", answer="answer"), state
+    ) == []
 
 
 def test_method_arms_cannot_be_combined_with_oracle_interventions() -> None:

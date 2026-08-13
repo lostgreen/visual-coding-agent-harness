@@ -2016,6 +2016,11 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     occurrence_resolution_rule = _occurrence_resolution_prompt_rule(
         mechanical_status
     )
+    occurrence_answer_field = (
+        ',"occurrence_ops":[{"op":"select","occurrence_id":"occ_visible_id"}]'
+        if occurrence_resolution_rule
+        else ""
+    )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()
@@ -2043,7 +2048,8 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         task_description = "long-video multiple-choice QA"
         answer_schema = (
             'Answer schema: {"action":"answer","answer":"A. exact option text","workspace_ops":[],'
-            '"supporting_claim_ids":["c1"],"residual_uncertainty":""}. '
+            f'"supporting_claim_ids":["c1"]{occurrence_answer_field},'
+            '"residual_uncertainty":""}. '
         )
         answer_rule = (
             "Never answer by closest match or add facts absent from the supporting observation lineage. If any selected-option "
@@ -2053,7 +2059,8 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         task_description = "long-video free-form QA"
         answer_schema = (
             'Answer schema: {"action":"answer","answer":"concise factual answer","workspace_ops":[],'
-            '"supporting_claim_ids":["c1"],"residual_uncertainty":"optional concise caveat"}. '
+            f'"supporting_claim_ids":["c1"]{occurrence_answer_field},'
+            '"residual_uncertainty":"optional concise caveat"}. '
         )
         answer_rule = (
             "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "

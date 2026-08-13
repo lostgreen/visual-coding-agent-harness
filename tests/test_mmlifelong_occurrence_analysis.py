@@ -110,6 +110,33 @@ def test_a1_flat_text_mismatch_fails_structural_gate() -> None:
     assert report["structural_gate_passed"] is False
 
 
+def test_a1_flat_text_parity_is_not_comparable_after_trajectory_divergence() -> None:
+    rows = (
+        _row(
+            "a1",
+            "c1",
+            score=0.0,
+            signature=[{"action": "investigate", "tasks": []}],
+            digest="left",
+        ),
+        _row(
+            "a1-flat",
+            "c1",
+            score=0.0,
+            signature=[{"action": "answer", "tasks": []}],
+            digest="right",
+        ),
+    )
+
+    report = ANALYSIS.build_report(
+        rows, expected_cases=1, bootstrap_samples=10, seed=3
+    )
+
+    assert report["text_budget_parity"]["passed"] is None
+    assert report["text_budget_parity"]["status"] == "not_comparable"
+    assert report["structural_gate_passed"] is True
+
+
 def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     bindings = {}
     for arm in ("a0", "a1-flat", "a1", "a2"):
@@ -132,7 +159,11 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
             encoding="utf-8",
         )
         trace = [
-            {"type": "occurrence_treatment_eligible", "round": 2},
+            {
+                "type": "occurrence_treatment_eligible",
+                "round": 2,
+                "visible_occurrence_count": 2 if arm == "a2" else 1,
+            },
             {
                 "type": "reasoner_decision",
                 "occurrence_ops": (
@@ -143,6 +174,16 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
                 "occurrence_ops_accepted": True,
             },
         ]
+        if arm == "a2":
+            trace.insert(
+                1,
+                {
+                    "type": "decision_schema_error",
+                    "errors": [
+                        {"code": "occurrence_selection_required"}
+                    ],
+                },
+            )
         if arm != "a0":
             trace.append({"type": "occurrence_treatment_exposed", "round": 2})
         (case / "runtime_summary.json").write_text(
@@ -166,4 +207,8 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
 
     assert report["structural_gate_passed"] is True
     assert report["per_arm"]["a2"]["occurrence_op_count"] == 1
+    assert report["per_arm"]["a2"]["selection_case_count"] == 1
+    assert report["per_arm"]["a2"]["selection_required_case_count"] == 1
+    assert report["per_arm"]["a2"]["selection_required_retry_count"] == 1
+    assert report["per_arm"]["a2"]["occurrence_validation_error_count"] == 0
     assert report["per_arm"]["a2"]["state_file_count"] == 1

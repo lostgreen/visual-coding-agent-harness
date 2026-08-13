@@ -36,6 +36,33 @@ def audit_roots(
                 if isinstance(error, Mapping)
                 and str(error.get("code", "")).startswith("occurrence_")
             )
+            occurrence_validation_errors = tuple(
+                error
+                for error in occurrence_errors
+                if str(error.get("code", ""))
+                != "occurrence_selection_required"
+            )
+            terminal_occurrence_failures = tuple(
+                error
+                for row in trace
+                if row.get("type") == "decision_control_exhausted"
+                for error in tuple(row.get("errors", ()) or ())
+                if isinstance(error, Mapping)
+                and str(error.get("code", "")).startswith("occurrence_")
+            )
+            selection_ops = sum(
+                str(operation.get("op", operation.get("type", "")) or "")
+                .casefold()
+                == "select"
+                for row in decisions
+                for operation in tuple(row.get("occurrence_ops", ()) or ())
+                if isinstance(operation, Mapping)
+            )
+            selection_required = any(
+                row.get("type") == "occurrence_treatment_eligible"
+                and int(row.get("visible_occurrence_count", 0) or 0) > 1
+                for row in trace
+            )
             arm = str(config.get("occurrence_method_arm", "none") or "none")
             case_id = str(_read_json(prediction_path).get("case_id", run_dir.name))
             cases.append(
@@ -60,11 +87,24 @@ def audit_roots(
                         len(tuple(row.get("occurrence_ops", ()) or ()))
                         for row in decisions
                     ),
+                    "selection_ops": selection_ops,
+                    "selection_required": selection_required,
                     "ops_accepted": all(
                         row.get("occurrence_ops_accepted") is not False
                         for row in decisions
                     ),
                     "occurrence_schema_errors": len(occurrence_errors),
+                    "selection_required_retries": sum(
+                        str(error.get("code", ""))
+                        == "occurrence_selection_required"
+                        for error in occurrence_errors
+                    ),
+                    "occurrence_validation_errors": len(
+                        occurrence_validation_errors
+                    ),
+                    "terminal_occurrence_failures": len(
+                        terminal_occurrence_failures
+                    ),
                     "state_file": (
                         run_dir / "occurrence_resolution_state.json"
                     ).is_file(),
@@ -96,11 +136,26 @@ def audit_roots(
                 row["exposure_events"] for row in cases
             ),
             "occurrence_op_count": sum(row["occurrence_ops"] for row in cases),
+            "selection_case_count": sum(
+                row["selection_ops"] > 0 for row in cases
+            ),
+            "selection_required_case_count": sum(
+                row["selection_required"] for row in cases
+            ),
             "all_occurrence_ops_accepted": all(
                 row["ops_accepted"] for row in cases
             ),
             "occurrence_schema_error_count": sum(
                 row["occurrence_schema_errors"] for row in cases
+            ),
+            "selection_required_retry_count": sum(
+                row["selection_required_retries"] for row in cases
+            ),
+            "occurrence_validation_error_count": sum(
+                row["occurrence_validation_errors"] for row in cases
+            ),
+            "terminal_occurrence_failure_count": sum(
+                row["terminal_occurrence_failures"] for row in cases
             ),
             "state_file_count": sum(row["state_file"] for row in cases),
             "premature_commit_count": sum(
@@ -136,8 +191,20 @@ def audit_roots(
             "state_file_count"
         )
         == int(expected_cases),
-        "no_occurrence_schema_errors": sum(
-            row["occurrence_schema_error_count"] for row in per_arm.values()
+        "a2_selection_complete": (
+            per_arm.get("a2", {}).get("selection_required_case_count", 0)
+            > 0
+            and per_arm.get("a2", {}).get("selection_case_count")
+            == per_arm.get("a2", {}).get("selection_required_case_count")
+        ),
+        "no_occurrence_validation_errors": sum(
+            row["occurrence_validation_error_count"]
+            for row in per_arm.values()
+        )
+        == 0,
+        "no_terminal_occurrence_failures": sum(
+            row["terminal_occurrence_failure_count"]
+            for row in per_arm.values()
         )
         == 0,
         "all_submitted_occurrence_ops_accepted": all(
@@ -145,7 +212,7 @@ def audit_roots(
         ),
     }
     return {
-        "schema_version": "MMLifelongOccurrenceCanaryAuditV1",
+        "schema_version": "MMLifelongOccurrenceCanaryAuditV2",
         "per_arm": per_arm,
         "checks": checks,
         "structural_gate_passed": all(checks.values()),

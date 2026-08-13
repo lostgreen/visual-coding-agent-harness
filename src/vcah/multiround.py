@@ -691,6 +691,13 @@ class VirtualVideoMultiRoundDriver:
                                     parsed_decision.occurrence_ops
                                 )
                             )
+                    if occurrence_state is not None:
+                        schema_errors.extend(
+                            _occurrence_answer_errors(
+                                parsed_decision,
+                                occurrence_state,
+                            )
+                        )
                     if self.evidence_state_mode == "runtime_derived":
                         parsed_decision, handle_errors, ignored_state_ops = _resolve_runtime_decision(
                             parsed_decision,
@@ -758,6 +765,12 @@ class VirtualVideoMultiRoundDriver:
                         and parsed_decision is not None
                         and parsed_decision.action == "answer"
                         and parsed_decision.answer
+                        and not any(
+                            str(error.get("code", "")).startswith(
+                                "occurrence_"
+                            )
+                            for error in schema_errors
+                        )
                     ):
                         trace.append(
                             {
@@ -1411,6 +1424,32 @@ def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _occurrence_answer_errors(
+    decision: ReasonerDecision,
+    state: OccurrenceResolutionStateV1,
+) -> list[dict[str, Any]]:
+    if decision.action != "answer" or not decision.answer:
+        return []
+    viable = set(state.viable_occurrence_ids)
+    if len(viable) <= 1 or state.selected_occurrence_id in viable:
+        return []
+    selects_current_viable = any(
+        str(operation.get("op", operation.get("type", "")) or "").casefold()
+        == "select"
+        and str(operation.get("occurrence_id", "") or "") in viable
+        for operation in decision.occurrence_ops
+        if isinstance(operation, Mapping)
+    )
+    if selects_current_viable:
+        return []
+    return [
+        {
+            "code": "occurrence_selection_required",
+            "viable_occurrence_count": len(viable),
+        }
+    ]
+
+
 def _occurrence_treatment_surface(
     status: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -1902,6 +1941,10 @@ def _control_retry_feedback(
     ):
         repair_rules.append(
             "Do not satisfy a dependent obligation until its dependency is satisfied and its supporting claim derives from the dependency's supporting claim lineage."
+        )
+    if "occurrence_selection_required" in codes:
+        repair_rules.append(
+            "Before answering with multiple viable occurrences, submit one top-level occurrence_ops select operation using an occurrence_id from the current visible state; Runtime will validate the ID but will not choose it."
         )
     instruction = "Preserve the semantic intent and return one corrected Decision JSON object."
     if repair_rules:
