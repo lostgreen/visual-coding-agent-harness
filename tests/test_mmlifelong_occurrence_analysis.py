@@ -33,6 +33,7 @@ def _row(
     score: float,
     signature: list[dict],
     digest: str = "digest",
+    retrieval_digest: str = "retrieval",
 ) -> dict:
     return {
         "arm": arm,
@@ -57,6 +58,10 @@ def _row(
             "visible_text_digest": digest,
             "visible_excerpt_count": 2,
         },
+        "treatment_retrieval_identity_digest": retrieval_digest,
+        "same_packet_text_budget_parity_passed": (
+            True if arm in {"a1", "a1-flat"} else None
+        ),
         "no_oracle_gate_passed": True,
         "frozen_config": {"controller_mode": "frozen_baseline"},
     }
@@ -137,6 +142,45 @@ def test_a1_flat_text_parity_is_not_comparable_after_trajectory_divergence() -> 
     assert report["structural_gate_passed"] is True
 
 
+def test_a1_flat_text_parity_is_not_comparable_after_retrieval_divergence() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    rows = (
+        _row(
+            "a1",
+            "c1",
+            score=0.0,
+            signature=signature,
+            digest="left",
+            retrieval_digest="retrieval-left",
+        ),
+        _row(
+            "a1-flat",
+            "c1",
+            score=0.0,
+            signature=signature,
+            digest="right",
+            retrieval_digest="retrieval-right",
+        ),
+    )
+
+    report = ANALYSIS.build_report(
+        rows, expected_cases=1, bootstrap_samples=10, seed=3
+    )
+
+    assert report["text_budget_parity"]["passed"] is None
+    assert report["text_budget_parity"]["status"] == "not_comparable"
+    assert report["structural_gate_passed"] is True
+
+
+def test_first_exposed_retrieval_identity_skips_empty_card_packets() -> None:
+    audit = {
+        "candidate_card_counts": [0, 3],
+        "retrieval_identity_digests": ["empty", "exposed"],
+    }
+
+    assert ANALYSIS._first_exposed_retrieval_identity(audit) == "exposed"
+
+
 def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     bindings = {}
     for arm in ("a0", "a1-flat", "a1", "a2"):
@@ -190,7 +234,8 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
             json.dumps(
                 {
                     "no_oracle_runtime_gate": {
-                        "no_oracle_runtime_gate_passed": True
+                        "no_oracle_runtime_gate_passed": True,
+                        "text_budget_parity_passed": True,
                     },
                     "trace": trace,
                 }

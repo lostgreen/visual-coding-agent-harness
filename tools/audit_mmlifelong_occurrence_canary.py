@@ -20,6 +20,12 @@ def audit_roots(
             run_dir = prediction_path.parent
             config = _read_json(run_dir / "run_config.json")
             runtime = _read_json(run_dir / "runtime_summary.json")
+            raw_no_oracle_audit = runtime.get("no_oracle_runtime_gate", {})
+            no_oracle_audit = (
+                raw_no_oracle_audit
+                if isinstance(raw_no_oracle_audit, Mapping)
+                else {}
+            )
             trace = tuple(
                 row
                 for row in tuple(runtime.get("trace", ()) or ())
@@ -71,9 +77,14 @@ def audit_roots(
                     "arm": arm,
                     "models": config.get("models"),
                     "no_oracle": bool(
-                        runtime.get("no_oracle_runtime_gate", {}).get(
+                        no_oracle_audit.get(
                             "no_oracle_runtime_gate_passed", False
                         )
+                    ),
+                    "text_budget_parity": (
+                        bool(no_oracle_audit.get("text_budget_parity_passed"))
+                        if arm in {"a1-flat", "a1"}
+                        else None
                     ),
                     "eligible_events": sum(
                         row.get("type") == "occurrence_treatment_eligible"
@@ -129,6 +140,11 @@ def audit_roots(
                 for row in cases
             ),
             "no_oracle_gate_passed": all(row["no_oracle"] for row in cases),
+            "text_budget_parity_passed": all(
+                row["text_budget_parity"] is True
+                for row in cases
+                if row["arm"] in {"a1-flat", "a1"}
+            ),
             "eligible_event_count": sum(
                 row["eligible_events"] for row in cases
             ),
@@ -186,6 +202,10 @@ def audit_roots(
         "treatment_exposure_complete": all(
             per_arm[arm]["exposure_event_count"] == int(expected_cases)
             for arm in ("a1-flat", "a1", "a2")
+        ),
+        "a1_flat_same_packet_text_budget_parity": all(
+            per_arm[arm]["text_budget_parity_passed"]
+            for arm in ("a1-flat", "a1")
         ),
         "a0_has_no_treatment_exposure": per_arm.get("a0", {}).get(
             "exposure_event_count"

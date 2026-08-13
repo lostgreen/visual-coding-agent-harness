@@ -264,6 +264,8 @@ class OccurrencePacketTransform:
         self._card_counts: list[int] = []
         self._representations: list[str] = []
         self._visible_excerpt_digests: list[str] = []
+        self._retrieval_identity_digests: list[str] = []
+        self._text_budget_parity_checks: list[dict[str, Any]] = []
         self._write_audit()
 
     @property
@@ -294,15 +296,37 @@ class OccurrencePacketTransform:
                 query_limit=self.query_limit,
                 query_chars=self.query_chars,
             )
+            flat_passages = flatten_occurrence_candidate_cards(cards)
+            flat_queries = flatten_occurrence_candidate_queries(cards)
+            grouped_text_digest = occurrence_visible_text_digest(cards=cards)
+            flat_text_digest = occurrence_visible_text_digest(
+                flat_passages=flat_passages,
+                flat_queries=flat_queries,
+            )
+            grouped_text_chars = occurrence_visible_text_chars(cards=cards)
+            flat_text_chars = occurrence_visible_text_chars(
+                flat_passages=flat_passages,
+                flat_queries=flat_queries,
+            )
+            text_budget_parity = {
+                "grouped_text_digest": grouped_text_digest,
+                "flat_text_digest": flat_text_digest,
+                "grouped_text_chars": grouped_text_chars,
+                "flat_text_chars": flat_text_chars,
+                "passed": (
+                    grouped_text_digest == flat_text_digest
+                    and grouped_text_chars == flat_text_chars
+                ),
+            }
+            if not text_budget_parity["passed"]:
+                raise ValueError(
+                    "grouped and flat occurrence text budgets differ"
+                )
             occurrence_set["method_arm"] = self.arm
             if self.arm == "a1-flat":
                 representation = "flat"
-                occurrence_set["flat_candidate_passages"] = (
-                    flatten_occurrence_candidate_cards(cards)
-                )
-                occurrence_set["flat_candidate_queries"] = (
-                    flatten_occurrence_candidate_queries(cards)
-                )
+                occurrence_set["flat_candidate_passages"] = flat_passages
+                occurrence_set["flat_candidate_queries"] = flat_queries
             else:
                 representation = "grouped"
                 occurrence_set["candidate_cards"] = cards
@@ -310,6 +334,7 @@ class OccurrencePacketTransform:
             transformed["occurrence_set"] = occurrence_set
             card_count = len(cards)
             visible_excerpt_digest = candidate_card_excerpt_digest(cards)
+            self._text_budget_parity_checks.append(text_budget_parity)
         retrieval_after = _retrieval_identity(transformed)
         parity_passed = retrieval_before == retrieval_after
         self._retrieval_parity_passed &= parity_passed
@@ -322,6 +347,7 @@ class OccurrencePacketTransform:
         self._card_counts.append(card_count)
         self._representations.append(representation)
         self._visible_excerpt_digests.append(visible_excerpt_digest)
+        self._retrieval_identity_digests.append(retrieval_before)
         self._write_audit()
         return transformed
 
@@ -336,7 +362,7 @@ class OccurrencePacketTransform:
 
     def _audit_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": "MMLifelongNoOracleRuntimeAuditV1",
+            "schema_version": "MMLifelongNoOracleRuntimeAuditV2",
             "method_arm": self.arm,
             "no_oracle_runtime_gate_passed": True,
             "forbidden_agent_visible_keys": sorted(FORBIDDEN_AGENT_VISIBLE_KEYS),
@@ -348,6 +374,16 @@ class OccurrencePacketTransform:
             "candidate_card_budget": self._card_budget(),
             "representations": list(self._representations),
             "visible_excerpt_digests": list(self._visible_excerpt_digests),
+            "retrieval_identity_digests": list(
+                self._retrieval_identity_digests
+            ),
+            "text_budget_parity_checks": list(
+                self._text_budget_parity_checks
+            ),
+            "text_budget_parity_passed": all(
+                bool(row.get("passed"))
+                for row in self._text_budget_parity_checks
+            ),
         }
 
     def _write_audit(self) -> None:
@@ -511,6 +547,20 @@ def occurrence_visible_text_digest(
     flat_passages: Sequence[Mapping[str, Any]] = (),
     flat_queries: Sequence[Mapping[str, Any]] = (),
 ) -> str:
+    inventory = _occurrence_visible_text_inventory(
+        cards=cards,
+        flat_passages=flat_passages,
+        flat_queries=flat_queries,
+    )
+    return stable_digest(sorted(inventory, key=stable_digest))
+
+
+def _occurrence_visible_text_inventory(
+    *,
+    cards: Sequence[Mapping[str, Any]] = (),
+    flat_passages: Sequence[Mapping[str, Any]] = (),
+    flat_queries: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, str]]:
     inventory: list[dict[str, Any]] = []
     for card in cards:
         for query in tuple(card.get("matched_queries", ()) or ()):
@@ -549,7 +599,21 @@ def occurrence_visible_text_digest(
         for query in flat_queries
         if isinstance(query, Mapping)
     )
-    return stable_digest(sorted(inventory, key=stable_digest))
+    return inventory
+
+
+def occurrence_visible_text_chars(
+    *,
+    cards: Sequence[Mapping[str, Any]] = (),
+    flat_passages: Sequence[Mapping[str, Any]] = (),
+    flat_queries: Sequence[Mapping[str, Any]] = (),
+) -> int:
+    inventory = _occurrence_visible_text_inventory(
+        cards=cards,
+        flat_passages=flat_passages,
+        flat_queries=flat_queries,
+    )
+    return sum(len(str(row["text"])) for row in inventory)
 
 
 def _representative_passage(

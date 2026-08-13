@@ -106,6 +106,11 @@ def test_a1_adds_bounded_cards_without_changing_retrieval(tmp_path) -> None:
     assert cards[0]["answer_support"] is False
     assert transform.audit["candidate_card_counts"] == [2]
     assert transform.audit["retrieval_parity_passed"] is True
+    assert transform.audit["text_budget_parity_passed"] is True
+    parity = transform.audit["text_budget_parity_checks"][0]
+    assert parity["grouped_text_digest"] == parity["flat_text_digest"]
+    assert parity["grouped_text_chars"] == parity["flat_text_chars"]
+    assert len(transform.audit["retrieval_identity_digests"]) == 1
 
 
 def test_no_oracle_gate_rejects_nested_benchmark_annotations() -> None:

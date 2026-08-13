@@ -95,6 +95,12 @@ def collect_rows(
                 trace, "occurrence_treatment_eligible"
             )
             exposure = _event(trace, "occurrence_treatment_exposed")
+            raw_no_oracle_audit = runtime.get("no_oracle_runtime_gate", {})
+            no_oracle_audit = (
+                raw_no_oracle_audit
+                if isinstance(raw_no_oracle_audit, Mapping)
+                else {}
+            )
             rows.append(
                 {
                     "arm": arm,
@@ -138,8 +144,17 @@ def collect_rows(
                         trace, eligibility_round
                     ),
                     "treatment_exposure": dict(exposure) if exposure else None,
+                    "treatment_retrieval_identity_digest": (
+                        _first_exposed_retrieval_identity(no_oracle_audit)
+                    ),
+                    "same_packet_text_budget_parity_passed": (
+                        bool(no_oracle_audit.get("text_budget_parity_passed"))
+                        if arm in {"a1-flat", "a1"}
+                        and isinstance(no_oracle_audit, Mapping)
+                        else None
+                    ),
                     "no_oracle_gate_passed": bool(
-                        runtime.get("no_oracle_runtime_gate", {}).get(
+                        no_oracle_audit.get(
                             "no_oracle_runtime_gate_passed", False
                         )
                     ),
@@ -229,6 +244,11 @@ def build_report(
             if row.get("score") is not None
         ),
         "a1_flat_text_budget_parity": text_parity.get("passed"),
+        "a1_flat_same_packet_text_budget_parity": all(
+            row.get("same_packet_text_budget_parity_passed") is True
+            for arm in ("a1-flat", "a1")
+            for row in by_arm.get(arm, {}).values()
+        ),
     }
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV1",
@@ -412,6 +432,18 @@ def _selected_occurrence_id(trace: Sequence[Mapping[str, Any]]) -> str:
     return selected
 
 
+def _first_exposed_retrieval_identity(
+    audit: Mapping[str, Any],
+) -> str | None:
+    card_counts = tuple(audit.get("candidate_card_counts", ()) or ())
+    identities = tuple(audit.get("retrieval_identity_digests", ()) or ())
+    for index, count in enumerate(card_counts):
+        if int(count or 0) > 0 and index < len(identities):
+            value = str(identities[index] or "")
+            return value or None
+    return None
+
+
 def _text_parity(
     by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]]
 ) -> dict[str, Any]:
@@ -427,10 +459,19 @@ def _text_parity(
         right_signature = by_arm["a1-flat"][case_id].get(
             "pre_treatment_signature"
         )
+        left_retrieval = by_arm["a1"][case_id].get(
+            "treatment_retrieval_identity_digest"
+        )
+        right_retrieval = by_arm["a1-flat"][case_id].get(
+            "treatment_retrieval_identity_digest"
+        )
         if (
             left_signature is None
             or right_signature is None
             or left_signature != right_signature
+            or not left_retrieval
+            or not right_retrieval
+            or left_retrieval != right_retrieval
         ):
             continue
         left = by_arm["a1"][case_id].get("treatment_exposure") or {}
