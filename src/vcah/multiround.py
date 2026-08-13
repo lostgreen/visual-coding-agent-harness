@@ -664,7 +664,11 @@ class VirtualVideoMultiRoundDriver:
                     decision_metadata.get("decision_schema_errors", ())
                 )
                 schema_errors = (
-                    []
+                    [
+                        error
+                        for error in raw_schema_errors
+                        if str(error.get("code", "")).startswith("occurrence_")
+                    ]
                     if self.controller_mode == "frozen_baseline"
                     else list(raw_schema_errors)
                 )

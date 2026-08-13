@@ -446,7 +446,8 @@ def flatten_occurrence_candidate_cards(
                 continue
             flattened.append(
                 {
-                    "excerpt_rank": len(flattened) + 1,
+                    "passage_id": str(passage.get("passage_id", "") or ""),
+                    "time_range": list(passage.get("time_range", ()) or ()),
                     "caption_excerpt": str(
                         passage.get("caption_excerpt", "") or ""
                     ),
@@ -469,7 +470,6 @@ def flatten_occurrence_candidate_queries(
                 continue
             flattened.append(
                 {
-                    "query_rank": len(flattened) + 1,
                     "query": text,
                     "evidence_role": "locator_only",
                     "answer_support": False,

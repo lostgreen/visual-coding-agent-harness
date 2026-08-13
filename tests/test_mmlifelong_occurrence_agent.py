@@ -131,8 +131,10 @@ def test_a1_flat_matches_a1_text_budget_without_occurrence_binding(tmp_path) -> 
         for passage in card["representative_passages"]
     ] == [passage["caption_excerpt"] for passage in passages]
     assert all("occurrence_id" not in passage for passage in passages)
-    assert all("time_range" not in passage for passage in passages)
-    assert all("passage_id" not in passage for passage in passages)
+    assert all("source_video_ids" not in passage for passage in passages)
+    assert all("candidate_rank" not in passage for passage in passages)
+    assert all(passage["time_range"] for passage in passages)
+    assert all(passage["passage_id"] for passage in passages)
     assert candidate_card_excerpt_digest(cards)
 
 
