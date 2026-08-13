@@ -35,6 +35,9 @@ def discover_runs(run_roots: Sequence[Path]) -> tuple[dict[str, str], ...]:
                 {
                     "case_id": str(prediction["case_id"]),
                     "oracle_arm": str(config.get("oracle_arm", "o0")),
+                    "occurrence_method_arm": str(
+                        config.get("occurrence_method_arm", "none") or "none"
+                    ),
                     "run_dir": str(run_dir),
                 }
             )
@@ -203,6 +206,11 @@ def _write_summary(
         "oracle_arm_counts": dict(
             sorted(Counter(run["oracle_arm"] for run in runs).items())
         ),
+        "occurrence_method_arm_counts": dict(
+            sorted(
+                Counter(run["occurrence_method_arm"] for run in runs).items()
+            )
+        ),
         "results": [results[key] for key in sorted(results)],
     }
     temporary = path.with_name(f".{path.name}.tmp")
@@ -215,6 +223,9 @@ def _write_summary(
 
 
 def _run_key(run: Mapping[str, str]) -> str:
+    method_arm = str(run.get("occurrence_method_arm", "none") or "none")
+    if method_arm != "none":
+        return f"{run['oracle_arm']}:{method_arm}:{run['case_id']}"
     return f"{run['oracle_arm']}:{run['case_id']}"
 
 

@@ -40,6 +40,33 @@ def test_discovers_same_case_in_distinct_oracle_arms(tmp_path: Path) -> None:
     assert [BATCH._run_key(run) for run in discovered] == ["c0:case-1", "o1:case-1"]
 
 
+def test_discovers_same_o0_case_in_distinct_occurrence_method_arms(
+    tmp_path: Path,
+) -> None:
+    roots = []
+    for method_arm in ("a0", "a1"):
+        root = tmp_path / method_arm
+        run = root / "cases" / "case-1"
+        run.mkdir(parents=True)
+        (run / "prediction.json").write_text(
+            json.dumps({"case_id": "case-1"}), encoding="utf-8"
+        )
+        (run / "run_config.json").write_text(
+            json.dumps(
+                {"oracle_arm": "o0", "occurrence_method_arm": method_arm}
+            ),
+            encoding="utf-8",
+        )
+        roots.append(root)
+
+    discovered = BATCH.discover_runs(roots)
+
+    assert [BATCH._run_key(run) for run in discovered] == [
+        "o0:a0:case-1",
+        "o0:a1:case-1",
+    ]
+
+
 def test_command_uses_prepared_evaluator_only_record(tmp_path: Path) -> None:
     record = tmp_path / "records" / "case-1" / "evaluation_case.json"
     record.parent.mkdir(parents=True)
