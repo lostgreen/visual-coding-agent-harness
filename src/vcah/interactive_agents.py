@@ -311,6 +311,26 @@ def _normalize_decision(
                         "workspace_op_index": index,
                     }
                 )
+    raw_occurrence_ops = payload.get("occurrence_ops", ())
+    if raw_occurrence_ops is None:
+        raw_occurrence_ops = ()
+    if not isinstance(raw_occurrence_ops, Sequence) or isinstance(
+        raw_occurrence_ops, (str, bytes)
+    ):
+        normalized_decision_errors.append(
+            {"code": "occurrence_ops_must_be_array", "field": "occurrence_ops"}
+        )
+        raw_occurrence_ops = ()
+    else:
+        for index, operation in enumerate(raw_occurrence_ops):
+            if not isinstance(operation, Mapping):
+                normalized_decision_errors.append(
+                    {
+                        "code": "occurrence_op_must_be_object",
+                        "field": "occurrence_ops",
+                        "occurrence_op_index": index,
+                    }
+                )
     action = str(payload.get("action", "") or "").strip().casefold()
     if action not in _DECISION_ACTIONS:
         action = "update_workspace"
@@ -320,6 +340,9 @@ def _normalize_decision(
         "answer": payload.get("answer", ""),
         "citations": tuple(str(item) for item in payload.get("citations", ()) or () if str(item).strip()),
         "workspace_ops": tuple(dict(item) for item in raw_workspace_ops if isinstance(item, Mapping)),
+        "occurrence_ops": tuple(
+            dict(item) for item in raw_occurrence_ops if isinstance(item, Mapping)
+        ),
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
         "supporting_item_ids": tuple(
             str(item)
@@ -1966,6 +1989,23 @@ def _oracle_guidance_prompt_rule(mechanical_status: Mapping[str, Any]) -> str:
     )
 
 
+def _occurrence_resolution_prompt_rule(
+    mechanical_status: Mapping[str, Any],
+) -> str:
+    state = mechanical_status.get("occurrence_resolution_state")
+    if not isinstance(state, Mapping):
+        return ""
+    return (
+        "Explicit occurrence arbitration is enabled. Use top-level occurrence_ops with only currently visible IDs: "
+        '[{"op":"keep|eliminate|select|reopen","occurrence_id":"occ_..."}]. '
+        "The state is locator-only and never answer support. When more than one viable occurrence remains, seek evidence "
+        "that discriminates the leading competitors instead of committing to retrieval rank 1. Inspect identity, temporal, "
+        "or state cues for at least the strongest alternatives, eliminate only from observed or caption evidence, and select "
+        "the occurrence you semantically judge correct before answering. Runtime validates only operation names, state "
+        "transitions, and visible foreign keys; it never chooses an occurrence or evaluates semantic correctness.\n"
+    )
+
+
 def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     """Phase-5 Arm A prompt frozen from the pre-MGER controller surface."""
     final = bool(kwargs.get("force_finalize"))
@@ -1973,6 +2013,9 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
     oracle_guidance_rule = _oracle_guidance_prompt_rule(mechanical_status)
+    occurrence_resolution_rule = _occurrence_resolution_prompt_rule(
+        mechanical_status
+    )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()
@@ -2052,6 +2095,7 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "arbitration_attempt_id.\n"
         f"{caption_search_rule}"
         f"{oracle_guidance_rule}"
+        f"{occurrence_resolution_rule}"
         "When mechanical_status marks caption_occurrence_ambiguous, compare the separate source/time clusters in "
         "caption_occurrence_sets. A coherent caption chain from one cluster does not establish that it is the requested "
         "occurrence; inspect identity cues for competing clusters before promotion.\n"

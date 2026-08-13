@@ -233,6 +233,7 @@ def main() -> None:
             question=workspace.case.question,
             index_mode=args.caption_index_mode,
         ),
+        occurrence_method_arm=occurrence_method_arm,
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")

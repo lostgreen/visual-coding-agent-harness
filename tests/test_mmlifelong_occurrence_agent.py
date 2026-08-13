@@ -8,8 +8,15 @@ from vcah.caption_occurrence import build_caption_occurrence_set
 from vcah.caption_schema import stable_digest
 from vcah.occurrence_agent import (
     OccurrencePacketTransform,
+    OccurrenceResolutionStateV1,
     assert_no_oracle_packet,
+    candidate_card_excerpt_digest,
     validate_occurrence_method_configuration,
+)
+from vcah.interactive_agents import _frozen_reasoner_prompt
+from vcah.multiround import (
+    _occurrence_treatment_surface,
+    _visible_occurrence_ids,
 )
 
 
@@ -105,6 +112,133 @@ def test_no_oracle_gate_rejects_nested_benchmark_annotations() -> None:
             {"runtime_metadata": {"gold_answer": "hidden"}},
             surface="runtime_case",
         )
+
+
+def test_a1_flat_matches_a1_text_budget_without_occurrence_binding(tmp_path) -> None:
+    packet = _packet()
+    grouped = OccurrencePacketTransform(
+        arm="a1", audit_path=tmp_path / "grouped.json"
+    )(packet)
+    flattened = OccurrencePacketTransform(
+        arm="a1-flat", audit_path=tmp_path / "flat.json"
+    )(packet)
+
+    cards = grouped["occurrence_set"]["candidate_cards"]
+    passages = flattened["occurrence_set"]["flat_candidate_passages"]
+    assert [
+        passage["caption_excerpt"]
+        for card in cards
+        for passage in card["representative_passages"]
+    ] == [passage["caption_excerpt"] for passage in passages]
+    assert all("occurrence_id" not in passage for passage in passages)
+    assert all("time_range" not in passage for passage in passages)
+    assert all("passage_id" not in passage for passage in passages)
+    assert candidate_card_excerpt_digest(cards)
+
+
+def test_a2_occurrence_state_rejects_hidden_ids_transactionally() -> None:
+    state = OccurrenceResolutionStateV1()
+    state.sync_visible(("occ_1", "occ_2"))
+
+    rejected = state.apply_ops(
+        (
+            {"op": "eliminate", "occurrence_id": "occ_1"},
+            {"op": "select", "occurrence_id": "invented"},
+        )
+    )
+    assert rejected["accepted"] is False
+    assert state.states["occ_1"] == "active"
+    assert state.selected_occurrence_id == ""
+
+    assert state.apply_ops(
+        ({"op": "eliminate", "occurrence_id": "occ_1"},)
+    )["accepted"] is True
+    assert state.states["occ_1"] == "eliminated"
+    assert state.apply_ops(
+        ({"op": "select", "occurrence_id": "occ_2"},)
+    )["accepted"] is True
+    assert state.selected_occurrence_id == "occ_2"
+    assert state.apply_ops(
+        ({"op": "eliminate", "occurrence_id": "occ_2"},)
+    )["accepted"] is True
+    assert state.apply_ops(
+        ({"op": "keep", "occurrence_id": "occ_2"},)
+    )["accepted"] is False
+    assert state.apply_ops(
+        ({"op": "reopen", "occurrence_id": "occ_2"},)
+    )["accepted"] is True
+
+
+def test_grouped_and_flat_treatment_surfaces_have_text_parity(tmp_path) -> None:
+    packet = _packet()
+    grouped_packet = OccurrencePacketTransform(
+        arm="a1", audit_path=tmp_path / "grouped.json"
+    )(packet)
+    flat_packet = OccurrencePacketTransform(
+        arm="a1-flat", audit_path=tmp_path / "flat.json"
+    )(packet)
+    grouped_status = {
+        "caption_occurrence_sets": [
+            {
+                "candidates": [
+                    {
+                        "occurrence_id": card["occurrence_id"],
+                        "candidate_card": card,
+                    }
+                    for card in grouped_packet["occurrence_set"][
+                        "candidate_cards"
+                    ]
+                ]
+            }
+        ]
+    }
+    flat_status = {
+        "caption_occurrence_sets": [
+            {
+                "candidates": [
+                    {"occurrence_id": candidate["occurrence_id"]}
+                    for candidate in flat_packet["occurrence_set"][
+                        "candidates"
+                    ]
+                ]
+            }
+        ],
+        "flat_occurrence_passages": flat_packet["occurrence_set"][
+            "flat_candidate_passages"
+        ],
+        "flat_occurrence_queries": flat_packet["occurrence_set"][
+            "flat_candidate_queries"
+        ],
+    }
+
+    grouped = _occurrence_treatment_surface(grouped_status)
+    flattened = _occurrence_treatment_surface(flat_status)
+    assert grouped and flattened
+    assert grouped["visible_excerpt_digest"] == flattened[
+        "visible_excerpt_digest"
+    ]
+    assert grouped["visible_excerpt_chars"] == flattened[
+        "visible_excerpt_chars"
+    ]
+    assert grouped["visible_text_digest"] == flattened["visible_text_digest"]
+    assert _visible_occurrence_ids(flat_status) == tuple(
+        candidate["occurrence_id"]
+        for candidate in flat_packet["occurrence_set"]["candidates"]
+    )
+
+
+def test_a2_prompt_is_only_enabled_by_resolution_state() -> None:
+    base = {"question": "q", "options": {}, "mechanical_status": {}}
+    assert "Explicit occurrence arbitration" not in _frozen_reasoner_prompt(base)
+    enabled = {
+        **base,
+        "mechanical_status": {
+            "occurrence_resolution_state": {
+                "schema_version": "OccurrenceResolutionStateV1"
+            }
+        },
+    }
+    assert "Explicit occurrence arbitration" in _frozen_reasoner_prompt(enabled)
 
 
 def test_method_arms_cannot_be_combined_with_oracle_interventions() -> None:

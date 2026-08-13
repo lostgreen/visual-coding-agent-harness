@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -7,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from vcah.caption_schema import stable_digest
 
 
-OCCURRENCE_METHOD_ARMS = ("none", "a0", "a1")
+OCCURRENCE_METHOD_ARMS = ("none", "a0", "a1", "a1-flat", "a2")
 FORBIDDEN_AGENT_VISIBLE_KEYS = frozenset(
     {
         "clue_intervals",
@@ -26,6 +27,179 @@ DEFAULT_CARD_EXCERPT_LIMIT = 3
 DEFAULT_CARD_EXCERPT_CHARS = 240
 DEFAULT_CARD_QUERY_LIMIT = 4
 DEFAULT_CARD_QUERY_CHARS = 160
+OCCURRENCE_RESOLUTION_OPS = frozenset({"keep", "eliminate", "select", "reopen"})
+
+
+@dataclass
+class OccurrenceResolutionStateV1:
+    """Runtime-owned state; the Reasoner remains responsible for every semantic choice."""
+
+    states: dict[str, str] = field(default_factory=dict)
+    current_visible_ids: tuple[str, ...] = ()
+    selected_occurrence_id: str = ""
+    revision: int = 0
+
+    def sync_visible(self, occurrence_ids: Sequence[str]) -> bool:
+        visible = tuple(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in occurrence_ids
+                if str(value or "").strip()
+            )
+        )
+        changed = visible != self.current_visible_ids
+        self.current_visible_ids = visible
+        for occurrence_id in visible:
+            self.states.setdefault(occurrence_id, "active")
+        if self.selected_occurrence_id not in set(visible):
+            if self.states.get(self.selected_occurrence_id) == "selected":
+                self.states[self.selected_occurrence_id] = "active"
+            self.selected_occurrence_id = ""
+        if changed:
+            self.revision += 1
+        return changed
+
+    def validate_ops(
+        self, operations: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        errors: list[dict[str, Any]] = []
+        visible = set(self.current_visible_ids)
+        shadow_states = dict(self.states)
+        shadow_selected = self.selected_occurrence_id
+        for index, operation in enumerate(operations):
+            if not isinstance(operation, Mapping):
+                errors.append(
+                    {
+                        "code": "occurrence_op_must_be_object",
+                        "occurrence_op_index": index,
+                    }
+                )
+                continue
+            op = str(operation.get("op", operation.get("type", "")) or "").casefold()
+            occurrence_id = str(operation.get("occurrence_id", "") or "").strip()
+            if op not in OCCURRENCE_RESOLUTION_OPS:
+                errors.append(
+                    {
+                        "code": "unsupported_occurrence_op",
+                        "occurrence_op_index": index,
+                        "op": op,
+                    }
+                )
+                continue
+            if not occurrence_id or occurrence_id not in visible:
+                errors.append(
+                    {
+                        "code": "occurrence_id_not_currently_visible",
+                        "occurrence_op_index": index,
+                        "occurrence_id": occurrence_id,
+                    }
+                )
+                continue
+            if op == "select" and shadow_states.get(occurrence_id) == "eliminated":
+                errors.append(
+                    {
+                        "code": "eliminated_occurrence_requires_reopen",
+                        "occurrence_op_index": index,
+                        "occurrence_id": occurrence_id,
+                    }
+                )
+                continue
+            if op == "keep" and shadow_states.get(occurrence_id) == "eliminated":
+                errors.append(
+                    {
+                        "code": "eliminated_occurrence_requires_reopen",
+                        "occurrence_op_index": index,
+                        "occurrence_id": occurrence_id,
+                    }
+                )
+                continue
+            shadow_selected = _apply_occurrence_op(
+                shadow_states,
+                selected_occurrence_id=shadow_selected,
+                op=op,
+                occurrence_id=occurrence_id,
+            )
+        return errors
+
+    def apply_ops(
+        self, operations: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        normalized = tuple(dict(item) for item in operations if isinstance(item, Mapping))
+        errors = self.validate_ops(normalized)
+        if errors:
+            return {"accepted": False, "errors": errors, "applied": []}
+        applied: list[dict[str, str]] = []
+        for operation in normalized:
+            op = str(operation.get("op", operation.get("type", "")) or "").casefold()
+            occurrence_id = str(operation.get("occurrence_id", "") or "").strip()
+            self.selected_occurrence_id = _apply_occurrence_op(
+                self.states,
+                selected_occurrence_id=self.selected_occurrence_id,
+                op=op,
+                occurrence_id=occurrence_id,
+            )
+            applied.append({"op": op, "occurrence_id": occurrence_id})
+        if applied:
+            self.revision += 1
+        return {"accepted": True, "errors": [], "applied": applied}
+
+    @property
+    def viable_occurrence_ids(self) -> tuple[str, ...]:
+        return tuple(
+            occurrence_id
+            for occurrence_id in self.current_visible_ids
+            if self.states.get(occurrence_id, "active") != "eliminated"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "OccurrenceResolutionStateV1",
+            "revision": self.revision,
+            "current_visible_occurrence_ids": list(self.current_visible_ids),
+            "candidates": [
+                {
+                    "occurrence_id": occurrence_id,
+                    "status": self.states.get(occurrence_id, "active"),
+                }
+                for occurrence_id in self.current_visible_ids
+            ],
+            "viable_occurrence_ids": list(self.viable_occurrence_ids),
+            "selected_occurrence_id": self.selected_occurrence_id or None,
+        }
+
+    def save(self, path: Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.tmp")
+        temporary.write_text(
+            json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+
+
+def _apply_occurrence_op(
+    states: dict[str, str],
+    *,
+    selected_occurrence_id: str,
+    op: str,
+    occurrence_id: str,
+) -> str:
+    selected = selected_occurrence_id
+    if op == "select":
+        if selected and selected != occurrence_id and states.get(selected) == "selected":
+            states[selected] = "active"
+        states[occurrence_id] = "selected"
+        return occurrence_id
+    if op == "eliminate":
+        states[occurrence_id] = "eliminated"
+        return "" if selected == occurrence_id else selected
+    if op == "reopen":
+        states[occurrence_id] = "active"
+        return "" if selected == occurrence_id else selected
+    if states.get(occurrence_id) != "selected":
+        states[occurrence_id] = "active"
+    return selected
 
 
 def validate_occurrence_method_configuration(
@@ -57,7 +231,7 @@ def assert_no_oracle_packet(packet: Mapping[str, Any], *, surface: str) -> None:
 
 
 class OccurrencePacketTransform:
-    """Audit A0 packets or enrich A1 packets without changing retrieval."""
+    """Audit or reshape occurrence evidence without changing retrieval."""
 
     def __init__(
         self,
@@ -76,7 +250,7 @@ class OccurrencePacketTransform:
             oracle_intervention=None,
         )
         if normalized == "none":
-            raise ValueError("OccurrencePacketTransform requires a0 or a1")
+            raise ValueError("OccurrencePacketTransform requires a method arm")
         self.arm = normalized
         self.audit_path = Path(audit_path)
         self.candidate_limit = max(1, int(candidate_limit))
@@ -88,6 +262,8 @@ class OccurrencePacketTransform:
         self._call_count = 0
         self._retrieval_parity_passed = True
         self._card_counts: list[int] = []
+        self._representations: list[str] = []
+        self._visible_excerpt_digests: list[str] = []
         self._write_audit()
 
     @property
@@ -102,6 +278,8 @@ class OccurrencePacketTransform:
     def __call__(self, packet: Mapping[str, Any]) -> Mapping[str, Any]:
         assert_no_oracle_packet(packet, surface="caption_packet_before_transform")
         retrieval_before = _retrieval_identity(packet)
+        representation = "identity"
+        visible_excerpt_digest = stable_digest([])
         if self.arm == "a0":
             transformed: Mapping[str, Any] = packet
             card_count = 0
@@ -117,10 +295,21 @@ class OccurrencePacketTransform:
                 query_chars=self.query_chars,
             )
             occurrence_set["method_arm"] = self.arm
-            occurrence_set["candidate_cards"] = cards
+            if self.arm == "a1-flat":
+                representation = "flat"
+                occurrence_set["flat_candidate_passages"] = (
+                    flatten_occurrence_candidate_cards(cards)
+                )
+                occurrence_set["flat_candidate_queries"] = (
+                    flatten_occurrence_candidate_queries(cards)
+                )
+            else:
+                representation = "grouped"
+                occurrence_set["candidate_cards"] = cards
             occurrence_set["candidate_card_budget"] = self._card_budget()
             transformed["occurrence_set"] = occurrence_set
             card_count = len(cards)
+            visible_excerpt_digest = candidate_card_excerpt_digest(cards)
         retrieval_after = _retrieval_identity(transformed)
         parity_passed = retrieval_before == retrieval_after
         self._retrieval_parity_passed &= parity_passed
@@ -131,6 +320,8 @@ class OccurrencePacketTransform:
         )
         self._call_count += 1
         self._card_counts.append(card_count)
+        self._representations.append(representation)
+        self._visible_excerpt_digests.append(visible_excerpt_digest)
         self._write_audit()
         return transformed
 
@@ -155,6 +346,8 @@ class OccurrencePacketTransform:
             "retrieval_parity_passed": self._retrieval_parity_passed,
             "candidate_card_counts": list(self._card_counts),
             "candidate_card_budget": self._card_budget(),
+            "representations": list(self._representations),
+            "visible_excerpt_digests": list(self._visible_excerpt_digests),
         }
 
     def _write_audit(self) -> None:
@@ -240,6 +433,123 @@ def candidate_cards_by_occurrence(
         for card in tuple(occurrence_set.get("candidate_cards", ()) or ())
         if isinstance(card, Mapping) and str(card.get("occurrence_id", "") or "")
     }
+
+
+def flatten_occurrence_candidate_cards(
+    cards: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose A1's excerpt budget without mechanically binding text to an occurrence."""
+    flattened: list[dict[str, Any]] = []
+    for card in cards:
+        for passage in tuple(card.get("representative_passages", ()) or ()):
+            if not isinstance(passage, Mapping):
+                continue
+            flattened.append(
+                {
+                    "excerpt_rank": len(flattened) + 1,
+                    "caption_excerpt": str(
+                        passage.get("caption_excerpt", "") or ""
+                    ),
+                    "query_matches": list(passage.get("query_matches", ()) or ()),
+                    "evidence_role": "locator_only",
+                    "answer_support": False,
+                }
+            )
+    return flattened
+
+
+def flatten_occurrence_candidate_queries(
+    cards: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    flattened: list[dict[str, Any]] = []
+    for card in cards:
+        for query in tuple(card.get("matched_queries", ()) or ()):
+            text = str(query or "").strip()
+            if not text:
+                continue
+            flattened.append(
+                {
+                    "query_rank": len(flattened) + 1,
+                    "query": text,
+                    "evidence_role": "locator_only",
+                    "answer_support": False,
+                }
+            )
+    return flattened
+
+
+def candidate_card_excerpt_digest(cards: Sequence[Mapping[str, Any]]) -> str:
+    excerpts = [
+            {
+                "caption_excerpt": str(
+                    passage.get("caption_excerpt", "") or ""
+                ),
+                "query_matches": list(passage.get("query_matches", ()) or ()),
+            }
+            for card in cards
+            for passage in tuple(card.get("representative_passages", ()) or ())
+            if isinstance(passage, Mapping)
+        ]
+    return occurrence_excerpt_digest(excerpts)
+
+
+def occurrence_excerpt_digest(excerpts: Sequence[Mapping[str, Any]]) -> str:
+    normalized = [
+        {
+            "caption_excerpt": str(item.get("caption_excerpt", "") or ""),
+            "query_matches": list(item.get("query_matches", ()) or ()),
+        }
+        for item in excerpts
+        if isinstance(item, Mapping)
+    ]
+    return stable_digest(sorted(normalized, key=stable_digest))
+
+
+def occurrence_visible_text_digest(
+    *,
+    cards: Sequence[Mapping[str, Any]] = (),
+    flat_passages: Sequence[Mapping[str, Any]] = (),
+    flat_queries: Sequence[Mapping[str, Any]] = (),
+) -> str:
+    inventory: list[dict[str, Any]] = []
+    for card in cards:
+        for query in tuple(card.get("matched_queries", ()) or ()):
+            inventory.append({"kind": "candidate_query", "text": str(query or "")})
+        for passage in tuple(card.get("representative_passages", ()) or ()):
+            if not isinstance(passage, Mapping):
+                continue
+            inventory.append(
+                {
+                    "kind": "caption_excerpt",
+                    "text": str(passage.get("caption_excerpt", "") or ""),
+                }
+            )
+            inventory.extend(
+                {"kind": "passage_query", "text": str(query or "")}
+                for query in tuple(passage.get("query_matches", ()) or ())
+            )
+    for passage in flat_passages:
+        if not isinstance(passage, Mapping):
+            continue
+        inventory.append(
+            {
+                "kind": "caption_excerpt",
+                "text": str(passage.get("caption_excerpt", "") or ""),
+            }
+        )
+        inventory.extend(
+            {"kind": "passage_query", "text": str(query or "")}
+            for query in tuple(passage.get("query_matches", ()) or ())
+        )
+    inventory.extend(
+        {
+            "kind": "candidate_query",
+            "text": str(query.get("query", "") or ""),
+        }
+        for query in flat_queries
+        if isinstance(query, Mapping)
+    )
+    return stable_digest(sorted(inventory, key=stable_digest))
 
 
 def _representative_passage(

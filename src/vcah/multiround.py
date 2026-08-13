@@ -19,7 +19,13 @@ from vcah.investigator import (
     VirtualVideoInvestigator,
 )
 from vcah.memory import EvidenceStore
-from vcah.occurrence_agent import candidate_cards_by_occurrence
+from vcah.occurrence_agent import (
+    OCCURRENCE_METHOD_ARMS,
+    OccurrenceResolutionStateV1,
+    candidate_cards_by_occurrence,
+    occurrence_excerpt_digest,
+    occurrence_visible_text_digest,
+)
 from vcah.phase5 import inspection_mode_policy_errors
 from vcah.runtime_metrics import (
     export_item_supporting_intervals,
@@ -48,6 +54,7 @@ RUN_ARTIFACT_NAMES = (
     "working_document.json",
     "workspace_ops.jsonl",
     "exploration_ledger.jsonl",
+    "occurrence_resolution_state.json",
     "run_summary.json",
 )
 _FROZEN_MECHANICAL_STATUS_KEYS = frozenset(
@@ -79,6 +86,8 @@ _FROZEN_MECHANICAL_STATUS_KEYS = frozenset(
         "pending_caption_occurrences",
         "caption_occurrence_ambiguous",
         "caption_occurrence_sets",
+        "flat_occurrence_passages",
+        "flat_occurrence_queries",
         "recommended_temporal_candidate",
         "temporal_candidate_groups",
         "oracle_guidance",
@@ -227,6 +236,7 @@ class ReasonerDecision:
     answer: str = ""
     citations: tuple[str, ...] = ()
     workspace_ops: tuple[Mapping[str, Any], ...] = ()
+    occurrence_ops: tuple[Mapping[str, Any], ...] = ()
     supporting_claim_ids: tuple[str, ...] = ()
     supporting_item_ids: tuple[str, ...] = ()
     supports_requirement_ids: tuple[str, ...] = ()
@@ -250,6 +260,11 @@ class ReasonerDecision:
             self,
             "workspace_ops",
             tuple(dict(item) for item in self.workspace_ops if isinstance(item, Mapping)),
+        )
+        object.__setattr__(
+            self,
+            "occurrence_ops",
+            tuple(dict(item) for item in self.occurrence_ops if isinstance(item, Mapping)),
         )
         object.__setattr__(
             self,
@@ -329,6 +344,7 @@ class VirtualVideoMultiRoundDriver:
         allowed_inspection_modes: frozenset[str] | None = None,
         controller_mode: str = "mger",
         bootstrap_tasks: Sequence[InvestigationTask | Mapping[str, Any]] = (),
+        occurrence_method_arm: str = "none",
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -364,6 +380,10 @@ class VirtualVideoMultiRoundDriver:
         if controller not in {"frozen_baseline", "minimal_tool", "mger"}:
             raise ValueError(f"unsupported controller_mode: {controller}")
         self.controller_mode = controller
+        method_arm = str(occurrence_method_arm or "none").strip().casefold()
+        if method_arm not in OCCURRENCE_METHOD_ARMS:
+            raise ValueError(f"unsupported occurrence method arm: {method_arm}")
+        self.occurrence_method_arm = method_arm
         self.bootstrap_tasks = tuple(_task(item) for item in bootstrap_tasks)
         self.allowed_inspection_modes = (
             None
@@ -404,6 +424,16 @@ class VirtualVideoMultiRoundDriver:
         closure_repair_pending = False
         closure_repair_count = 0
         runtime_catalog = RuntimeEvidenceCatalog.build(document, observation_log)
+        occurrence_state = (
+            OccurrenceResolutionStateV1()
+            if self.occurrence_method_arm == "a2"
+            else None
+        )
+        occurrence_state_path = workspace.root_dir / "occurrence_resolution_state.json"
+        treatment_eligible_recorded = False
+        treatment_exposed_recorded = False
+        if occurrence_state is not None:
+            occurrence_state.save(occurrence_state_path)
 
         if self.evidence_state_mode == "runtime_derived":
             raw_plan = (
@@ -526,6 +556,32 @@ class VirtualVideoMultiRoundDriver:
             else:
                 status["evidence_state_mode"] = self.evidence_state_mode
                 status["evidence_control_mode"] = self.evidence_control_mode
+            visible_occurrence_ids = _visible_occurrence_ids(status)
+            if visible_occurrence_ids and not treatment_eligible_recorded:
+                trace.append(
+                    {
+                        "type": "occurrence_treatment_eligible",
+                        "round": round_id,
+                        "method_arm": self.occurrence_method_arm,
+                        "visible_occurrence_count": len(visible_occurrence_ids),
+                    }
+                )
+                treatment_eligible_recorded = True
+            treatment_surface = _occurrence_treatment_surface(status)
+            if treatment_surface is not None and not treatment_exposed_recorded:
+                trace.append(
+                    {
+                        "type": "occurrence_treatment_exposed",
+                        "round": round_id,
+                        "method_arm": self.occurrence_method_arm,
+                        **treatment_surface,
+                    }
+                )
+                treatment_exposed_recorded = True
+            if occurrence_state is not None:
+                occurrence_state.sync_visible(visible_occurrence_ids)
+                occurrence_state.save(occurrence_state_path)
+                status["occurrence_resolution_state"] = occurrence_state.to_dict()
             force_finalize = (
                 round_id > self.semantic_round_budget or remaining <= 0
             ) and not closure_repair_active
@@ -620,6 +676,17 @@ class VirtualVideoMultiRoundDriver:
                         {"code": "invalid_decision_payload", "detail": str(exc)}
                     )
                 if parsed_decision is not None:
+                    if parsed_decision.occurrence_ops:
+                        if occurrence_state is None:
+                            schema_errors.append(
+                                {"code": "occurrence_ops_not_enabled"}
+                            )
+                        else:
+                            schema_errors.extend(
+                                occurrence_state.validate_ops(
+                                    parsed_decision.occurrence_ops
+                                )
+                            )
                     if self.evidence_state_mode == "runtime_derived":
                         parsed_decision, handle_errors, ignored_state_ops = _resolve_runtime_decision(
                             parsed_decision,
@@ -757,6 +824,23 @@ class VirtualVideoMultiRoundDriver:
                     )
                     if apply_result.accepted:
                         document.save(document_path)
+                occurrence_apply_result: dict[str, Any] = {
+                    "accepted": not bool(decision.occurrence_ops),
+                    "errors": [],
+                    "applied": [],
+                }
+                if occurrence_state is not None and apply_result.accepted:
+                    occurrence_apply_result = occurrence_state.apply_ops(
+                        decision.occurrence_ops
+                    )
+                    occurrence_state.save(occurrence_state_path)
+                premature_occurrence_commit = bool(
+                    occurrence_state is not None
+                    and decision.action == "answer"
+                    and decision.answer
+                    and len(occurrence_state.viable_occurrence_ids) > 1
+                    and not occurrence_state.selected_occurrence_id
+                )
                 trace.append(
                     {
                         "type": "reasoner_decision",
@@ -773,6 +857,23 @@ class VirtualVideoMultiRoundDriver:
                         "workspace_revision": document.revision,
                         "workspace_ops_accepted": apply_result.accepted,
                         "workspace_errors": list(apply_result.errors),
+                        "occurrence_ops": [
+                            dict(operation) for operation in decision.occurrence_ops
+                        ],
+                        "occurrence_ops_accepted": occurrence_apply_result[
+                            "accepted"
+                        ],
+                        "occurrence_state_revision": (
+                            occurrence_state.revision
+                            if occurrence_state is not None
+                            else None
+                        ),
+                        "selected_occurrence_id": (
+                            occurrence_state.selected_occurrence_id
+                            if occurrence_state is not None
+                            else ""
+                        ),
+                        "premature_occurrence_commit": premature_occurrence_commit,
                         "supporting_claim_ids": list(decision.supporting_claim_ids),
                         "supporting_item_ids": list(decision.supporting_item_ids),
                         "supports_requirement_ids": list(decision.supports_requirement_ids),
@@ -1289,6 +1390,90 @@ def _frozen_mechanical_status(
         for key, value in status.items()
         if str(key) in _FROZEN_MECHANICAL_STATUS_KEYS
         or str(key) in runtime_keys
+    }
+
+
+def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
+    occurrence_sets = tuple(status.get("caption_occurrence_sets", ()) or ())
+    if not occurrence_sets or not isinstance(occurrence_sets[-1], Mapping):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(candidate.get("occurrence_id", "") or "")
+            for candidate in tuple(occurrence_sets[-1].get("candidates", ()) or ())
+            if isinstance(candidate, Mapping)
+            and str(candidate.get("occurrence_id", "") or "")
+        )
+    )
+
+
+def _occurrence_treatment_surface(
+    status: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    grouped_cards: list[Mapping[str, Any]] = []
+    occurrence_sets = tuple(status.get("caption_occurrence_sets", ()) or ())
+    if occurrence_sets and isinstance(occurrence_sets[-1], Mapping):
+        grouped_cards = [
+            candidate["candidate_card"]
+            for candidate in tuple(occurrence_sets[-1].get("candidates", ()) or ())
+            if isinstance(candidate, Mapping)
+            and isinstance(candidate.get("candidate_card"), Mapping)
+        ]
+    if grouped_cards:
+        excerpts = [
+            {
+                "caption_excerpt": str(
+                    passage.get("caption_excerpt", "") or ""
+                ),
+                "query_matches": list(passage.get("query_matches", ()) or ()),
+            }
+            for card in grouped_cards
+            for passage in tuple(card.get("representative_passages", ()) or ())
+            if isinstance(passage, Mapping)
+        ]
+        return {
+            "representation": "grouped",
+            "visible_occurrence_count": len(grouped_cards),
+            "visible_excerpt_count": len(excerpts),
+            "visible_excerpt_chars": sum(
+                len(str(row["caption_excerpt"])) for row in excerpts
+            ),
+            "visible_excerpt_digest": occurrence_excerpt_digest(excerpts),
+            "visible_text_digest": occurrence_visible_text_digest(
+                cards=grouped_cards
+            ),
+        }
+    flat = [
+        passage
+        for passage in tuple(status.get("flat_occurrence_passages", ()) or ())
+        if isinstance(passage, Mapping)
+    ]
+    if not flat:
+        return None
+    flat_queries = [
+        query
+        for query in tuple(status.get("flat_occurrence_queries", ()) or ())
+        if isinstance(query, Mapping)
+    ]
+    excerpts = [
+        {
+            "caption_excerpt": str(passage.get("caption_excerpt", "") or ""),
+            "query_matches": list(passage.get("query_matches", ()) or ()),
+        }
+        for passage in flat
+    ]
+    return {
+        "representation": "flat",
+        "visible_occurrence_count": 0,
+        "visible_excerpt_count": len(excerpts),
+        "visible_excerpt_chars": sum(
+            len(str(row["caption_excerpt"])) for row in excerpts
+        ),
+        "visible_excerpt_digest": occurrence_excerpt_digest(excerpts),
+        "visible_text_digest": occurrence_visible_text_digest(
+            flat_passages=flat,
+            flat_queries=flat_queries,
+        ),
     }
 
 
@@ -2065,6 +2250,8 @@ def _mechanical_status(
     candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
     caption_occurrences_by_key: dict[str, dict[str, Any]] = {}
     caption_occurrence_sets: list[dict[str, Any]] = []
+    latest_flat_occurrence_passages: list[dict[str, Any]] = []
+    latest_flat_occurrence_queries: list[dict[str, Any]] = []
     temporal_locators: list[dict[str, Any]] = []
     oracle_guidance_packets: list[dict[str, Any]] = []
     for row in observations.rows:
@@ -2080,6 +2267,27 @@ def _mechanical_status(
         occurrence_set = config.get("occurrence_set")
         if isinstance(occurrence_set, Mapping):
             occurrence_cards = candidate_cards_by_occurrence(occurrence_set)
+            raw_flat_passages = tuple(
+                occurrence_set.get("flat_candidate_passages", ()) or ()
+            )
+            if raw_flat_passages:
+                latest_flat_occurrence_passages = [
+                    {
+                        "attempt_id": str(row.get("attempt_id", "")),
+                        **dict(raw_passage),
+                    }
+                    for raw_passage in raw_flat_passages
+                    if isinstance(raw_passage, Mapping)
+                ]
+            raw_flat_queries = tuple(
+                occurrence_set.get("flat_candidate_queries", ()) or ()
+            )
+            if raw_flat_queries:
+                latest_flat_occurrence_queries = [
+                    dict(raw_query)
+                    for raw_query in raw_flat_queries
+                    if isinstance(raw_query, Mapping)
+                ]
             compact_candidates: list[dict[str, Any]] = []
             for raw_candidate in tuple(occurrence_set.get("candidates", ()) or ()):
                 if not isinstance(raw_candidate, Mapping):
@@ -2408,6 +2616,8 @@ def _mechanical_status(
         "pending_caption_occurrences": list(pending_caption_occurrences[:8]),
         "caption_occurrence_ambiguous": bool(unresolved_competing_occurrence_sets),
         "caption_occurrence_sets": list(caption_occurrence_sets[-4:]),
+        "flat_occurrence_passages": list(latest_flat_occurrence_passages[:24]),
+        "flat_occurrence_queries": list(latest_flat_occurrence_queries[:32]),
         **temporal_status,
         **(
             {"oracle_guidance": oracle_status}
@@ -3469,6 +3679,7 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         answer=str(value.get("answer", "") or ""),
         citations=tuple(value.get("citations", ()) or ()),
         workspace_ops=tuple(value.get("workspace_ops", value.get("ops", ())) or ()),
+        occurrence_ops=tuple(value.get("occurrence_ops", ()) or ()),
         supporting_claim_ids=tuple(value.get("supporting_claim_ids", ()) or ()),
         supporting_item_ids=tuple(value.get("supporting_item_ids", value.get("support_items", ())) or ()),
         supports_requirement_ids=tuple(
