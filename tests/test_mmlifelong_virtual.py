@@ -50,6 +50,34 @@ def _probe(path: str) -> float:
     return 10.0 if Path(path).name.startswith("001") else 20.0
 
 
+def _week_dataset(tmp_path: Path) -> Path:
+    root = tmp_path / "MM-Lifelong"
+    day1 = root / "videos" / "week" / "EgoLife" / "A1_JAKE" / "DAY1"
+    day2 = root / "videos" / "week" / "EgoLife" / "A1_JAKE" / "DAY2"
+    day1.mkdir(parents=True)
+    day2.mkdir(parents=True)
+    (day1 / "DAY1_A1_001.mp4").write_bytes(b"day1")
+    (day2 / "DAY2_A1_001.mp4").write_bytes(b"day2")
+    metadata = [
+        {
+            "index": 0,
+            "question": "What happens on the second day?",
+            "answer": "an event",
+            "question_type": "Event Tracking",
+            "clue_intervals": [
+                {"video_id": "day2", "intervals": [[2, 4]]}
+            ],
+            "total_intervals": [[12, 14]],
+            "temporal_certificate": "Long",
+        }
+    ]
+    (root / "week").mkdir()
+    (root / "week" / "test.json").write_text(
+        json.dumps(metadata), encoding="utf-8"
+    )
+    return root
+
+
 def test_day_builder_writes_one_shared_asset_and_free_form_cases(tmp_path: Path) -> None:
     dataset_root = _dataset(tmp_path)
     asset_root = tmp_path / "out" / "assets" / "game"
@@ -149,6 +177,57 @@ def test_day_builder_rejects_unmapped_clue_and_existing_output(tmp_path: Path) -
     build_mmlifelong_workspaces(valid_root, asset_root, case_root, duration_probe=_probe)
     with pytest.raises(FileExistsError, match="output already exists"):
         build_mmlifelong_workspaces(valid_root, asset_root, case_root, duration_probe=_probe)
+
+
+def test_week_builder_uses_global_intervals_and_reuses_duration_cache(
+    tmp_path: Path,
+) -> None:
+    dataset_root = _week_dataset(tmp_path)
+    asset_root = tmp_path / "assets" / "week"
+    case_root = tmp_path / "cases" / "week"
+    probe_calls = 0
+
+    def counted_probe(path: str) -> float:
+        nonlocal probe_calls
+        probe_calls += 1
+        return 10.0
+
+    result = build_mmlifelong_workspaces(
+        dataset_root,
+        asset_root,
+        case_root,
+        subset="week",
+        duration_probe=counted_probe,
+    )
+
+    assert probe_calls == 2
+    assert [segment.day_index for segment in result.workspaces[0].manifest.segments] == [
+        1,
+        2,
+    ]
+    assert result.evaluation_records[0].clue_intervals == ((12.0, 14.0),)
+    assert result.evaluation_records[0].evaluation_metadata[
+        "source_clue_intervals"
+    ] == [{"video_id": "day2", "intervals": [[2, 4]]}]
+    cache = json.loads(
+        (asset_root / "source_durations.json").read_text(encoding="utf-8")
+    )
+    assert cache["entry_count"] == 2
+
+    retry_case_root = tmp_path / "cases" / "week-retry"
+    for path in (
+        asset_root / "virtual_timeline.json",
+        asset_root / "manifest.json",
+    ):
+        path.unlink()
+    build_mmlifelong_workspaces(
+        dataset_root,
+        asset_root,
+        retry_case_root,
+        subset="week",
+        duration_probe=counted_probe,
+    )
+    assert probe_calls == 2
 
 
 def test_legacy_workspace_promotes_target_interval_to_one_gold_clue(tmp_path: Path) -> None:

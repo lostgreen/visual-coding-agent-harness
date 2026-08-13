@@ -28,6 +28,8 @@ _SUBSET_ALIASES = {
 _SOURCE_SUBSETS = {"game": "day", "week": "week", "month": "month"}
 _NATURAL_PART_RE = re.compile(r"(\d+)")
 _MIN_CLUE_DURATION_SEC = 0.001
+_DURATION_CACHE_SCHEMA_VERSION = "MMLifelongSourceDurationCacheV1"
+_DURATION_CACHE_FLUSH_INTERVAL = 128
 
 
 @dataclass(frozen=True)
@@ -99,11 +101,13 @@ def build_mmlifelong_workspaces(
     if not video_paths:
         raise ValueError(f"No MP4 files found under {video_root}")
 
+    asset_root.mkdir(parents=True, exist_ok=True)
     segments = _build_segments(
         video_paths,
         video_root=video_root,
         source_subset=source_subset,
         duration_probe=duration_probe,
+        duration_cache_path=asset_root / "source_durations.json",
     )
     manifest = VirtualVideoManifest(
         workspace_id=f"mmlifelong-{internal_subset}",
@@ -211,20 +215,48 @@ def _build_segments(
     video_root: Path,
     source_subset: str,
     duration_probe: DurationProbe,
+    duration_cache_path: Path | None = None,
 ) -> tuple[VirtualVideoSegment, ...]:
     segments: list[VirtualVideoSegment] = []
     cursor = 0.0
+    cache_path = Path(duration_cache_path) if duration_cache_path is not None else None
+    cached_durations = _load_duration_cache(cache_path, video_root=video_root)
+    cache_changed = False
     for index, path in enumerate(video_paths, start=1):
-        try:
-            duration = round(float(duration_probe(str(path))), 3)
-        except Exception as exc:
-            relative_path = path.relative_to(video_root)
-            raise RuntimeError(f"Failed to probe MM-Lifelong video duration: {relative_path}") from exc
+        relative_path = path.relative_to(video_root).as_posix()
+        stat = path.stat()
+        cached = cached_durations.get(relative_path)
+        if (
+            isinstance(cached, Mapping)
+            and int(cached.get("size_bytes", -1)) == stat.st_size
+            and int(cached.get("mtime_ns", -1)) == stat.st_mtime_ns
+        ):
+            duration = round(float(cached.get("duration_sec", 0.0) or 0.0), 3)
+        else:
+            try:
+                duration = round(float(duration_probe(str(path))), 3)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to probe MM-Lifelong video duration: {relative_path}"
+                ) from exc
+            cached_durations[relative_path] = {
+                "duration_sec": duration,
+                "size_bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+            cache_changed = True
+            if cache_path is not None and index % _DURATION_CACHE_FLUSH_INTERVAL == 0:
+                _write_duration_cache(
+                    cache_path,
+                    video_root=video_root,
+                    entries=cached_durations,
+                )
+                cache_changed = False
         if not math.isfinite(duration) or duration <= 0.0:
             raise ValueError(f"Invalid video duration for {path}: {duration}")
         virtual_start = round(cursor, 3)
         virtual_end = round(virtual_start + duration, 3)
-        relative_path = path.relative_to(video_root).as_posix()
+        day_index = _day_index(path.relative_to(video_root).parts)
         segments.append(
             VirtualVideoSegment(
                 segment_id=f"seg_{index:04d}",
@@ -234,15 +266,66 @@ def _build_segments(
                 source_end_sec=duration,
                 virtual_start_sec=virtual_start,
                 virtual_end_sec=virtual_end,
-                day_index=1,
+                day_index=day_index,
                 metadata={
                     "source_subset": source_subset,
                     "relative_source_path": relative_path,
+                    "source_day_id": f"day{day_index}" if day_index is not None else None,
                 },
             )
         )
         cursor = virtual_end
+    if cache_path is not None and (cache_changed or not cache_path.is_file()):
+        _write_duration_cache(
+            cache_path,
+            video_root=video_root,
+            entries=cached_durations,
+        )
     return tuple(segments)
+
+
+def _load_duration_cache(
+    path: Path | None, *, video_root: Path
+) -> dict[str, dict[str, Any]]:
+    if path is None or not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        return {}
+    if payload.get("schema_version") != _DURATION_CACHE_SCHEMA_VERSION:
+        return {}
+    if str(payload.get("video_root", "")) != str(video_root.resolve()):
+        return {}
+    entries = payload.get("entries")
+    if not isinstance(entries, Mapping):
+        return {}
+    return {
+        str(key): dict(value)
+        for key, value in entries.items()
+        if isinstance(value, Mapping)
+    }
+
+
+def _write_duration_cache(
+    path: Path, *, video_root: Path, entries: Mapping[str, Mapping[str, Any]]
+) -> None:
+    _write_json(
+        path,
+        {
+            "schema_version": _DURATION_CACHE_SCHEMA_VERSION,
+            "video_root": str(video_root.resolve()),
+            "entry_count": len(entries),
+            "entries": {key: dict(entries[key]) for key in sorted(entries)},
+        },
+    )
+
+
+def _day_index(parts: Sequence[str]) -> int | None:
+    for part in parts:
+        match = re.fullmatch(r"day[_-]?(\d+)", str(part), flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return 1
 
 
 def _load_rows(metadata_path: Path) -> list[dict[str, Any]]:
@@ -362,9 +445,12 @@ def _source_indices_match(left: Any, right: Any) -> bool:
 
 def _dataset_clue_intervals(row: Mapping[str, Any]) -> tuple[tuple[float, float], ...]:
     raw = row.get("clue_intervals")
-    if isinstance(raw, (list, tuple)):
+    if _is_interval_sequence(raw):
         return tuple(_coerce_clue_interval(item) for item in raw)
-    nested = row.get("clue_interval", ())
+    total = row.get("total_intervals")
+    if _is_interval_sequence(total):
+        return tuple(_coerce_clue_interval(item) for item in total)
+    nested = raw if isinstance(raw, (list, tuple)) else row.get("clue_interval", ())
     if not isinstance(nested, (list, tuple)):
         return ()
     return tuple(
@@ -397,10 +483,18 @@ def _build_case_bundles(
             errors.append(f"duplicate case id {case_id}")
             continue
         seen_case_ids.add(case_id)
-        raw_clues = row.get("clue_intervals", ())
-        if not isinstance(raw_clues, (list, tuple)):
-            errors.append(f"{case_id}: clue_intervals must be a list")
+        source_clues = row.get("clue_intervals", ())
+        try:
+            raw_clues = _global_clue_intervals(row)
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{case_id}: {exc}")
             raw_clues = ()
+        nested_count = _nested_clue_count(source_clues)
+        if nested_count is not None and nested_count != len(raw_clues):
+            errors.append(
+                f"{case_id}: total_intervals count {len(raw_clues)} does not "
+                f"match nested clue count {nested_count}"
+            )
         official_clues: list[tuple[float, float]] = []
         normalized_clues: list[tuple[float, float]] = []
         case_repairs: list[dict[str, Any]] = []
@@ -469,6 +563,7 @@ def _build_case_bundles(
                         "total_seconds": manifest.duration_sec,
                         "temporal_certificate": row.get("temporal_certificate"),
                         "total_intervals": row.get("total_intervals", ()),
+                        "source_clue_intervals": source_clues,
                         "normalized_clue_intervals": [list(item) for item in normalized_clues],
                         "clue_repairs": case_repairs,
                     },
@@ -524,6 +619,40 @@ def _coerce_clue_interval(value: Any) -> tuple[float, float]:
     if not math.isfinite(start) or not math.isfinite(end):
         raise ValueError(f"interval must be finite, got {value!r}")
     return start, end
+
+
+def _global_clue_intervals(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    raw = row.get("clue_intervals", ())
+    if _is_interval_sequence(raw):
+        return tuple(raw)
+    total = row.get("total_intervals")
+    if _is_interval_sequence(total):
+        return tuple(total)
+    if isinstance(raw, (list, tuple)) and any(
+        isinstance(value, Mapping) for value in raw
+    ):
+        raise ValueError(
+            "nested clue_intervals require global total_intervals for virtual-time mapping"
+        )
+    raise TypeError("clue_intervals must be a list of [start, end] pairs")
+
+
+def _is_interval_sequence(value: Any) -> bool:
+    return isinstance(value, (list, tuple)) and all(
+        isinstance(item, (list, tuple)) and len(item) == 2 for item in value
+    )
+
+
+def _nested_clue_count(value: Any) -> int | None:
+    if not isinstance(value, (list, tuple)) or not any(
+        isinstance(item, Mapping) for item in value
+    ):
+        return None
+    return sum(
+        len(tuple(item.get("intervals", ()) or ()))
+        for item in value
+        if isinstance(item, Mapping)
+    )
 
 
 def _normalize_clue_interval(
