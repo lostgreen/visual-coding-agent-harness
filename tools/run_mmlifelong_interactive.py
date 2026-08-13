@@ -581,6 +581,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/caption_semantic_index.py"),
         Path("src/vcah/caption_hybrid_search.py"),
         Path("src/vcah/caption_occurrence.py"),
+        Path("src/vcah/occurrence_agent.py"),
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
         Path("src/vcah/phase5.py"),
