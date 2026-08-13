@@ -275,6 +275,45 @@ def test_a2_requires_reasoner_selection_before_answer() -> None:
     ) == []
 
 
+def test_a2_selection_requirement_survives_elimination_to_one_candidate() -> None:
+    state = OccurrenceResolutionStateV1()
+    state.sync_visible(("occ_1", "occ_2"))
+    assert state.selection_required is True
+    assert state.apply_ops(
+        ({"op": "eliminate", "occurrence_id": "occ_1"},)
+    )["accepted"] is True
+    assert state.viable_occurrence_ids == ("occ_2",)
+
+    errors = _occurrence_answer_errors(
+        ReasonerDecision(action="answer", answer="answer"), state
+    )
+    assert [error["code"] for error in errors] == [
+        "occurrence_selection_required"
+    ]
+
+
+def test_a2_final_attempt_requires_answer_after_prior_selection() -> None:
+    state = OccurrenceResolutionStateV1()
+    state.sync_visible(("occ_1", "occ_2"))
+    assert state.apply_ops(
+        ({"op": "select", "occurrence_id": "occ_2"},)
+    )["accepted"] is True
+
+    errors = _occurrence_answer_errors(
+        ReasonerDecision(action="investigate"),
+        state,
+        require_answer=True,
+    )
+    assert [error["code"] for error in errors] == [
+        "occurrence_answer_required_after_selection"
+    ]
+    assert _occurrence_answer_errors(
+        ReasonerDecision(action="answer", answer="answer"),
+        state,
+        require_answer=True,
+    ) == []
+
+
 def test_a2_prompt_requires_selection_in_a_prior_decision() -> None:
     prompt = _frozen_reasoner_prompt(
         {
@@ -284,6 +323,7 @@ def test_a2_prompt_requires_selection_in_a_prior_decision() -> None:
                 "occurrence_resolution_state": {
                     "schema_version": "OccurrenceResolutionStateV1",
                     "viable_occurrence_ids": ["occ_1", "occ_2"],
+                    "selection_required": True,
                 }
             },
         }
@@ -303,6 +343,7 @@ def test_a2_prompt_requires_selection_in_a_prior_decision() -> None:
                 "occurrence_resolution_state": {
                     "schema_version": "OccurrenceResolutionStateV1",
                     "viable_occurrence_ids": ["occ_1", "occ_2"],
+                    "selection_required": True,
                 }
             },
         }

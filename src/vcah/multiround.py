@@ -699,6 +699,10 @@ class VirtualVideoMultiRoundDriver:
                             _occurrence_answer_errors(
                                 parsed_decision,
                                 occurrence_state,
+                                require_answer=(
+                                    force_finalize
+                                    and not final_retry_available
+                                ),
                             )
                         )
                     if self.evidence_state_mode == "runtime_derived":
@@ -1458,11 +1462,24 @@ def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
 def _occurrence_answer_errors(
     decision: ReasonerDecision,
     state: OccurrenceResolutionStateV1,
+    *,
+    require_answer: bool = False,
 ) -> list[dict[str, Any]]:
+    viable = set(state.viable_occurrence_ids)
+    if (
+        require_answer
+        and state.selected_occurrence_id in viable
+        and decision.action != "answer"
+    ):
+        return [
+            {
+                "code": "occurrence_answer_required_after_selection",
+                "selected_occurrence_id": state.selected_occurrence_id,
+            }
+        ]
     if decision.action != "answer" or not decision.answer:
         return []
-    viable = set(state.viable_occurrence_ids)
-    if len(viable) <= 1 or state.selected_occurrence_id in viable:
+    if not state.selection_required or state.selected_occurrence_id in viable:
         return []
     return [
         {
@@ -1968,6 +1985,10 @@ def _control_retry_feedback(
     if "occurrence_selection_required" in codes:
         repair_rules.append(
             "Do not answer in this decision. Return action=update_workspace with no answer and one top-level occurrence_ops select operation using an occurrence_id from the current visible state. The persisted selection must precede a later answer decision; Runtime validates the ID but never chooses it."
+        )
+    if "occurrence_answer_required_after_selection" in codes:
+        repair_rules.append(
+            "The occurrence selection is already persisted and investigation is closed. Return action=answer now with no tasks and no occurrence_ops; do not revise the selected occurrence."
         )
     instruction = "Preserve the semantic intent and return one corrected Decision JSON object."
     if repair_rules:

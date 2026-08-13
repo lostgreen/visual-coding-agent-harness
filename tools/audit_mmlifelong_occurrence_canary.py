@@ -46,7 +46,10 @@ def audit_roots(
                 error
                 for error in occurrence_errors
                 if str(error.get("code", ""))
-                != "occurrence_selection_required"
+                not in {
+                    "occurrence_selection_required",
+                    "occurrence_answer_required_after_selection",
+                }
             )
             terminal_occurrence_failures = tuple(
                 error
@@ -132,6 +135,11 @@ def audit_roots(
                         == "occurrence_selection_required"
                         for error in occurrence_errors
                     ),
+                    "answer_required_retries": sum(
+                        str(error.get("code", ""))
+                        == "occurrence_answer_required_after_selection"
+                        for error in occurrence_errors
+                    ),
                     "occurrence_validation_errors": len(
                         occurrence_validation_errors
                     ),
@@ -202,6 +210,9 @@ def audit_roots(
             ),
             "selection_required_retry_count": sum(
                 row["selection_required_retries"] for row in cases
+            ),
+            "answer_required_retry_count": sum(
+                row["answer_required_retries"] for row in cases
             ),
             "occurrence_validation_error_count": sum(
                 row["occurrence_validation_errors"] for row in cases

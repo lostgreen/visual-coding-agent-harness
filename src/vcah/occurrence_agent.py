@@ -37,6 +37,7 @@ class OccurrenceResolutionStateV1:
     states: dict[str, str] = field(default_factory=dict)
     current_visible_ids: tuple[str, ...] = ()
     selected_occurrence_id: str = ""
+    selection_required: bool = False
     revision: int = 0
 
     def sync_visible(self, occurrence_ids: Sequence[str]) -> bool:
@@ -49,6 +50,8 @@ class OccurrenceResolutionStateV1:
         )
         changed = visible != self.current_visible_ids
         self.current_visible_ids = visible
+        if len(visible) > 1:
+            self.selection_required = True
         for occurrence_id in visible:
             self.states.setdefault(occurrence_id, "active")
         if self.selected_occurrence_id not in set(visible):
@@ -165,6 +168,7 @@ class OccurrenceResolutionStateV1:
             ],
             "viable_occurrence_ids": list(self.viable_occurrence_ids),
             "selected_occurrence_id": self.selected_occurrence_id or None,
+            "selection_required": self.selection_required,
         }
 
     def save(self, path: Path) -> None:

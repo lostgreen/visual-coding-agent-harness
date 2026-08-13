@@ -2026,7 +2026,7 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         occurrence_state.get("viable_occurrence_ids", ()) or ()
     )
     occurrence_selection_pending = (
-        len(viable_occurrence_ids) > 1
+        bool(occurrence_state.get("selection_required"))
         and not str(occurrence_state.get("selected_occurrence_id", "") or "")
     )
     caption_query_strategy = str(
