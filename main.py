@@ -38,11 +38,19 @@ def main() -> None:
 
     mml_build = subparsers.add_parser(
         "vv-build-mmlifelong",
-        help="Build shared MM-Lifelong Day virtual-video assets and cases.",
-        description="Build the MM-Lifelong Day/game virtual timeline without creating a merged video.",
+        help="Build shared MM-Lifelong virtual-video assets and cases.",
+        description="Build an MM-Lifelong virtual timeline without creating a merged video.",
     )
-    mml_build.add_argument("--dataset-root", required=True, help="MM-Lifelong root containing day/ and videos/day/.")
-    mml_build.add_argument("--subset", choices=("game", "day"), default="game")
+    mml_build.add_argument(
+        "--dataset-root",
+        required=True,
+        help="MM-Lifelong root containing subset annotations and videos.",
+    )
+    mml_build.add_argument(
+        "--subset",
+        choices=("game", "day", "week", "month"),
+        default="game",
+    )
     mml_build.add_argument("--split", default="test")
     mml_build.add_argument("--asset-root", required=True, help="Shared timeline, frame-cache, and index directory.")
     mml_build.add_argument(

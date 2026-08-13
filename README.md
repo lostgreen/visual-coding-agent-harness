@@ -144,13 +144,18 @@ never creates a merged video:
 ```bash
 python main.py vv-build-mmlifelong \
   --dataset-root /path/to/MM-Lifelong \
-  --subset game \
+  --subset day \
   --split test \
   --asset-root data/mmlifelong/assets/game \
   --case-root data/mmlifelong/cases/game/test \
   --verify-durations \
   --verify-clues
 ```
+
+`--subset week` uses the same builder and caption pipeline for the Week split;
+`game` remains a compatibility alias for `day`. For method development, freeze
+the Day validation/test partition and Week external-validation manifest with
+`tools/prepare_mmlifelong_occurrence_splits.py` before inspecting Week results.
 
 Generate resumable shared captions, then build a real sentence-transformer
 cosine index and deterministic lexical+dense RRF index. The model revision,
