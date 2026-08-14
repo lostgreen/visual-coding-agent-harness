@@ -343,6 +343,50 @@ def test_a2_has_dedicated_repair_after_json_retry_consumes_control_budget(
     assert result.answer_present is True
 
 
+def test_a2_rejects_non_answer_immediately_after_selection(
+    tmp_path: Path,
+) -> None:
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {"op": "select", "occurrence_id": "occ_1"},
+                ),
+            ),
+            ReasonerDecision(action="investigate"),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=OccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2",
+    ).run(_workspace(tmp_path))
+
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    assert [row.get("action") for row in decisions] == [
+        "update_workspace",
+        "answer",
+    ]
+    assert any(
+        row.get("type") == "decision_schema_error"
+        and row.get("code") == "occurrence_answer_required_after_selection"
+        for row in result.trace
+    )
+    assert reasoner.calls[1]["force_finalize"] is True
+    assert reasoner.calls[2]["control_retry"] is True
+    assert result.answer_present is True
+
+
 def test_json_repair_uses_control_budget_without_advancing_semantic_round(
     tmp_path: Path,
 ) -> None:

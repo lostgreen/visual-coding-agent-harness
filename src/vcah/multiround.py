@@ -735,14 +735,8 @@ class VirtualVideoMultiRoundDriver:
                             _occurrence_answer_errors(
                                 parsed_decision,
                                 occurrence_state,
-                                require_selection=(
-                                    force_finalize
-                                    and not final_retry_available
-                                ),
-                                require_answer=(
-                                    force_finalize
-                                    and not final_retry_available
-                                ),
+                                require_selection=force_finalize,
+                                require_answer=force_finalize,
                             )
                         )
                     if self.evidence_state_mode == "runtime_derived":
