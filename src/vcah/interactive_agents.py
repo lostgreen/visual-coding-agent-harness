@@ -2025,9 +2025,16 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     viable_occurrence_ids = tuple(
         occurrence_state.get("viable_occurrence_ids", ()) or ()
     )
+    selected_occurrence_id = str(
+        occurrence_state.get("selected_occurrence_id", "") or ""
+    )
     occurrence_selection_pending = (
         bool(occurrence_state.get("selection_required"))
-        and not str(occurrence_state.get("selected_occurrence_id", "") or "")
+        and not selected_occurrence_id
+    )
+    occurrence_answer_pending = (
+        bool(occurrence_state.get("selection_required"))
+        and selected_occurrence_id in viable_occurrence_ids
     )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
@@ -2074,7 +2081,13 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
             "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
         )
-    if occurrence_selection_pending and final:
+    if occurrence_answer_pending and final:
+        action_rule = (
+            "The occurrence selection is already persisted and investigation is closed. "
+            "Return action=answer only with no tasks and no occurrence_ops; do not revise "
+            "the selected occurrence."
+        )
+    elif occurrence_selection_pending and final:
         action_rule = (
             "Do not answer in this decision. Investigation is closed; return action=update_workspace with no answer and "
             "commit exactly one currently visible occurrence using occurrence_ops select. A separate answer decision will follow."

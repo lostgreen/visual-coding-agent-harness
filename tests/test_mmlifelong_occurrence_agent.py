@@ -363,6 +363,26 @@ def test_a2_prompt_requires_selection_in_a_prior_decision() -> None:
     assert "Investigation is closed; return action=update_workspace" in final_prompt
     assert "Return action=answer only" not in final_prompt
 
+    selected_final_prompt = _frozen_reasoner_prompt(
+        {
+            "question": "q",
+            "options": {"A": "a", "B": "b"},
+            "force_finalize": True,
+            "final_attempt": 1,
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    "schema_version": "OccurrenceResolutionStateV1",
+                    "viable_occurrence_ids": ["occ_1", "occ_2"],
+                    "selection_required": True,
+                    "selected_occurrence_id": "occ_2",
+                }
+            },
+        }
+    )
+    assert "occurrence selection is already persisted" in selected_final_prompt
+    assert "Return action=answer only" in selected_final_prompt
+    assert "no tasks and no occurrence_ops" in selected_final_prompt
+
 
 def test_method_arms_cannot_be_combined_with_oracle_interventions() -> None:
     assert (
