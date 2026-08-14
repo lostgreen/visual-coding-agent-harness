@@ -187,6 +187,14 @@ def main() -> None:
             if getattr(args, "occurrence_replay_record_root", None)
             else "live"
         ),
+        "occurrence_replay_manifest": (
+            file_checksum(
+                Path(args.occurrence_replay_root) / "manifest.json"
+            )
+            if getattr(args, "occurrence_replay_root", None)
+            and (Path(args.occurrence_replay_root) / "manifest.json").is_file()
+            else None
+        ),
         "oracle_intervention_root": str(args.oracle_intervention_root or ""),
         "recorded_fixture_root": str(args.recorded_fixture_root or ""),
         "recorded_fixture_manifest": (
@@ -234,6 +242,15 @@ def main() -> None:
 
     summary_path = _write_batch_summary(out_root, selection, results)
     status_counts = Counter(result["status"] for result in results.values())
+    if (
+        status_counts.get("success", 0) == len(selected)
+        and getattr(args, "occurrence_replay_record_root", None)
+    ):
+        _write_occurrence_replay_manifest(
+            Path(args.occurrence_replay_record_root),
+            selected,
+            caption_config_digest=str(args.caption_config_digest),
+        )
     print(
         "BATCH_DONE "
         f"selected={len(selected)} status_counts={dict(status_counts)} summary={summary_path}",
@@ -484,6 +501,39 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _write_occurrence_replay_manifest(
+    root: Path,
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    caption_config_digest: str,
+) -> Path:
+    fixture_rows = []
+    for case in cases:
+        case_id = str(case["case_id"])
+        path = Path(root) / "cases" / f"{case_id}.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"missing recorded occurrence fixture: {path}")
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+        fixture_rows.append(
+            {
+                "case_id": case_id,
+                "sha256": file_checksum(path)["sha256"],
+                "packet_count": len(tuple(fixture.get("packets", ()) or ())),
+            }
+        )
+    manifest_path = Path(root) / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "schema_version": "MMLifelongOccurrenceReplayManifestV1",
+            "caption_config_digest": str(caption_config_digest),
+            "case_count": len(fixture_rows),
+            "cases": fixture_rows,
+        },
+    )
+    return manifest_path
 
 
 def _subprocess_env() -> dict[str, str]:

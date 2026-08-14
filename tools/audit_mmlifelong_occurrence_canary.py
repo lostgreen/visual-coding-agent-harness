@@ -222,6 +222,11 @@ def audit_roots(
                         if replay_mode == "replay"
                         else True
                     ),
+                    "replay_prefix_valid": (
+                        replay.get("consumed_prefix_valid") is True
+                        if replay_mode == "replay"
+                        else True
+                    ),
                     "replay_identity_digests": tuple(
                         replay.get("consumed_identity_digests", ())
                         if replay_mode == "replay"
@@ -306,6 +311,7 @@ def audit_roots(
                 "mode": row["replay_mode"],
                 "fixture_digest": row["replay_fixture_digest"],
                 "complete": row["replay_complete"],
+                "prefix_valid": row["replay_prefix_valid"],
                 "identity_digests": row["replay_identity_digests"],
             }
             for row in cases
@@ -659,14 +665,20 @@ def _replay_parity(
     for case_id in case_ids:
         rows = [replay_cases[arm][case_id] for arm in replay_arms]
         digests = {str(row.get("fixture_digest", "") or "") for row in rows}
-        identities = {
+        sequences = [
             tuple(row.get("identity_digests", ()) or ()) for row in rows
-        }
+        ]
+        reference = max(sequences, key=len, default=())
         if (
-            not all(row.get("complete") is True for row in rows)
+            not reference
+            or not all(
+                sequence
+                and reference[: len(sequence)] == sequence
+                and row.get("prefix_valid") is not False
+                for row, sequence in zip(rows, sequences)
+            )
             or len(digests) != 1
             or "" in digests
-            or len(identities) != 1
         ):
             return False
     return True

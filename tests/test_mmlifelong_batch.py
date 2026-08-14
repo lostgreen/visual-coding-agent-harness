@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -114,3 +115,25 @@ def test_batch_subprocess_env_includes_repository_and_src() -> None:
     repository_root = str(Path(BATCH.__file__).resolve().parents[1])
 
     assert entries[:2] == [repository_root, f"{repository_root}/src"]
+
+
+def test_occurrence_replay_manifest_binds_case_files(tmp_path: Path) -> None:
+    fixture = tmp_path / "cases" / "case-1.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        json.dumps({"packets": [{"packet": {}}, {"packet": {}}]}),
+        encoding="utf-8",
+    )
+
+    manifest_path = BATCH._write_occurrence_replay_manifest(
+        tmp_path,
+        ({"case_id": "case-1"},),
+        caption_config_digest="caption",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["case_count"] == 1
+    assert manifest["caption_config_digest"] == "caption"
+    assert manifest["cases"][0]["case_id"] == "case-1"
+    assert manifest["cases"][0]["packet_count"] == 2
+    assert len(manifest["cases"][0]["sha256"]) == 64

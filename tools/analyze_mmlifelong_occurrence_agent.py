@@ -243,6 +243,11 @@ def collect_rows(
                         if replay_mode == "replay"
                         else True
                     ),
+                    "occurrence_replay_prefix_valid": (
+                        replay.get("consumed_prefix_valid") is True
+                        if replay_mode == "replay"
+                        else True
+                    ),
                     "occurrence_replay_identity_digests": list(
                         replay.get("consumed_identity_digests", ())
                         if replay_mode == "replay"
@@ -781,19 +786,25 @@ def _frozen_replay_parity(
             str(row.get("occurrence_replay_fixture_digest", "") or "")
             for row in rows
         }
-        identity_sequences = {
+        sequences = [
             tuple(row.get("occurrence_replay_identity_digests", ()) or ())
             for row in rows
-        }
+        ]
+        reference = max(sequences, key=len, default=())
+        prefix_valid = bool(reference) and all(
+            sequence
+            and reference[: len(sequence)] == sequence
+            and row.get("occurrence_replay_prefix_valid") is not False
+            for row, sequence in zip(rows, sequences)
+        )
         row_complete = all(
             row.get("occurrence_replay_complete") is True for row in rows
         )
         complete += row_complete
         matched += bool(
-            row_complete
+            prefix_valid
             and len(digests) == 1
             and "" not in digests
-            and len(identity_sequences) == 1
         )
     passed = bool(case_ids) and matched == len(case_ids)
     return {
@@ -801,6 +812,7 @@ def _frozen_replay_parity(
         "passed": passed,
         "paired_n": len(case_ids),
         "complete_n": complete,
+        "full_consumption_rate": complete / len(case_ids) if case_ids else None,
         "matched_n": matched,
         "match_rate": matched / len(case_ids) if case_ids else None,
         "arms": list(replay_arms),

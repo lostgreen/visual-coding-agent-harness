@@ -885,6 +885,18 @@ class OccurrencePacketTransform:
                     if self._replay_packets
                     else None
                 ),
+                "consumed_prefix_valid": (
+                    bool(self._replay_consumed_identity_digests)
+                    and self._replay_consumed_identity_digests
+                    == [
+                        _retrieval_identity(packet)
+                        for packet in self._replay_packets[
+                            : len(self._replay_consumed_identity_digests)
+                        ]
+                    ]
+                    if self._replay_packets
+                    else None
+                ),
                 "request_identity_digests": list(
                     self._replay_request_identity_digests
                 ),
