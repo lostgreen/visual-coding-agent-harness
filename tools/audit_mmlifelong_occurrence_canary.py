@@ -223,7 +223,7 @@ def audit_roots(
                         else True
                     ),
                     "replay_prefix_valid": (
-                        replay.get("consumed_prefix_valid") is True
+                        replay.get("consumed_prefix_valid")
                         if replay_mode == "replay"
                         else True
                     ),

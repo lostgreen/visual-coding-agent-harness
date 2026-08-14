@@ -567,6 +567,15 @@ def test_frozen_replay_accepts_valid_consumed_prefixes() -> None:
     assert report["frozen_occurrence_replay"]["passed"] is True
     assert report["structural_gate_passed"] is True
 
+    treatment["occurrence_replay_prefix_valid"] = None
+    legacy_report = ANALYSIS.build_report(
+        (recorder, treatment),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=5,
+    )
+    assert legacy_report["frozen_occurrence_replay"]["passed"] is True
+
     treatment["occurrence_replay_identity_digests"] = ["different"]
     mismatched = ANALYSIS.build_report(
         (recorder, treatment),
@@ -592,7 +601,6 @@ def test_frozen_replay_accepts_valid_consumed_prefixes() -> None:
                     "mode": "replay",
                     "fixture_digest": "fixture",
                     "complete": False,
-                    "prefix_valid": True,
                     "identity_digests": ("packet-1",),
                 }
             },
