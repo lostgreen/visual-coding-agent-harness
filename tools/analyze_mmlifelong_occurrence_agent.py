@@ -29,6 +29,7 @@ FROZEN_CONFIG_KEYS = (
     "caption_query_policy",
     "effective_caption_query_strategy",
     "caption_config_digest",
+    "occurrence_replay_prime",
     "anchor_execution_policy",
     "embedding",
     "input_digest",
@@ -73,6 +74,28 @@ def collect_rows(
                 row
                 for row in tuple(runtime.get("trace", ()) or ())
                 if isinstance(row, Mapping)
+            )
+            replay_prime_events = tuple(
+                (index, row)
+                for index, row in enumerate(trace)
+                if row.get("type") == "occurrence_replay_primed"
+            )
+            first_reasoner_index = next(
+                (
+                    index
+                    for index, row in enumerate(trace)
+                    if row.get("type") == "reasoner_decision"
+                ),
+                len(trace),
+            )
+            replay_prime_event_completed = bool(
+                len(replay_prime_events) == 1
+                and replay_prime_events[0][1].get("completed") is True
+                and int(replay_prime_events[0][1].get("round", -1)) == 0
+            )
+            replay_prime_event_pre_reasoner = bool(
+                len(replay_prime_events) == 1
+                and replay_prime_events[0][0] < first_reasoner_index
             )
             candidates = _occurrence_candidates(observations)
             selected_ids = _selected_occurrence_ids(trace)
@@ -248,6 +271,27 @@ def collect_rows(
                         if replay_mode == "replay"
                         else True
                     ),
+                    "occurrence_replay_prime_configured": bool(
+                        config.get("occurrence_replay_prime", False)
+                    ),
+                    "occurrence_replay_prime_requested": bool(
+                        replay.get("prime_requested", False)
+                    ),
+                    "occurrence_replay_prime_consumed": bool(
+                        replay.get("prime_consumed", False)
+                    ),
+                    "occurrence_replay_prime_event_count": len(
+                        replay_prime_events
+                    ),
+                    "occurrence_replay_prime_event_completed": (
+                        replay_prime_event_completed
+                    ),
+                    "occurrence_replay_prime_event_pre_reasoner": (
+                        replay_prime_event_pre_reasoner
+                    ),
+                    "occurrence_replay_post_fixture_reuse_count": int(
+                        replay.get("post_fixture_reuse_count", 0) or 0
+                    ),
                     "occurrence_replay_identity_digests": list(
                         replay.get("consumed_identity_digests", ())
                         if replay_mode == "replay"
@@ -330,6 +374,7 @@ def build_report(
             for row in by_arm.get("a3", {}).values()
         ),
         "frozen_occurrence_replay_parity": replay_parity.get("passed"),
+        "frozen_occurrence_replay_prime": replay_parity.get("prime_passed"),
     }
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV2",
@@ -431,6 +476,28 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             row.get("visual_windows") for row in rows
         ),
         "mean_vlm_calls": _optional_mean(row.get("vlm_calls") for row in rows),
+        "frozen_replay_prime_rate": _mean_bool(
+            row.get("occurrence_replay_prime_configured") for row in rows
+        ),
+        "frozen_replay_prime_consumed_rate": _mean_bool(
+            row.get("occurrence_replay_prime_consumed")
+            for row in rows
+            if row.get("occurrence_replay_prime_configured")
+        ),
+        "frozen_replay_prime_event_completed_rate": _mean_bool(
+            row.get("occurrence_replay_prime_event_completed")
+            for row in rows
+            if row.get("occurrence_replay_prime_configured")
+        ),
+        "frozen_replay_prime_event_pre_reasoner_rate": _mean_bool(
+            row.get("occurrence_replay_prime_event_pre_reasoner")
+            for row in rows
+            if row.get("occurrence_replay_prime_configured")
+        ),
+        "frozen_replay_post_fixture_reuse_mean": _optional_mean(
+            row.get("occurrence_replay_post_fixture_reuse_count")
+            for row in rows
+        ),
     }
 
 
@@ -807,6 +874,28 @@ def _frozen_replay_parity(
             and "" not in digests
         )
     passed = bool(case_ids) and matched == len(case_ids)
+    replay_rows = [
+        row
+        for arm in replay_arms
+        for row in by_arm[arm].values()
+        if row.get("occurrence_replay_mode") == "replay"
+    ]
+    prime_applicable = any(
+        row.get("occurrence_replay_prime_configured") for row in replay_rows
+    )
+    prime_passed = (
+        all(
+            row.get("occurrence_replay_prime_configured") is True
+            and row.get("occurrence_replay_prime_requested") is True
+            and row.get("occurrence_replay_prime_consumed") is True
+            and row.get("occurrence_replay_prime_event_count") == 1
+            and row.get("occurrence_replay_prime_event_completed") is True
+            and row.get("occurrence_replay_prime_event_pre_reasoner") is True
+            for row in replay_rows
+        )
+        if prime_applicable and replay_rows
+        else None
+    )
     return {
         "applicable": True,
         "passed": passed,
@@ -815,6 +904,12 @@ def _frozen_replay_parity(
         "full_consumption_rate": complete / len(case_ids) if case_ids else None,
         "matched_n": matched,
         "match_rate": matched / len(case_ids) if case_ids else None,
+        "prime_applicable": prime_applicable,
+        "prime_passed": prime_passed,
+        "post_fixture_reuse_count": sum(
+            int(row.get("occurrence_replay_post_fixture_reuse_count", 0) or 0)
+            for row in replay_rows
+        ),
         "arms": list(replay_arms),
     }
 

@@ -529,6 +529,35 @@ class VirtualVideoMultiRoundDriver:
                     "consumes_investigation_budget": False,
                 }
             )
+            replay_prime_query_ids = {
+                task.query_id
+                for task in self.bootstrap_tasks
+                if task.query_id == "occurrence_replay_prime"
+            }
+            if replay_prime_query_ids:
+                replay_prime_reports = tuple(
+                    report
+                    for report in bootstrap_batch
+                    if report.query_id in replay_prime_query_ids
+                )
+                trace.append(
+                    {
+                        "type": "occurrence_replay_primed",
+                        "round": 0,
+                        "requested_tasks": len(replay_prime_query_ids),
+                        "completed_tasks": sum(
+                            _report_succeeded(report)
+                            for report in replay_prime_reports
+                        ),
+                        "completed": bool(replay_prime_reports)
+                        and len(replay_prime_reports) == len(replay_prime_query_ids)
+                        and all(
+                            _report_succeeded(report)
+                            for report in replay_prime_reports
+                        ),
+                        "consumes_investigation_budget": False,
+                    }
+                )
 
         for round_id in range(
             1,
@@ -4271,6 +4300,12 @@ def _report_completed(report: InvestigationReport) -> int:
     if report.status == "failed" or report.cost.get("consumes_budget") is False:
         return 0
     return int(bool(report.evidence or report.attempts))
+
+
+def _report_succeeded(report: InvestigationReport) -> int:
+    return int(
+        report.status == "completed" and bool(report.evidence or report.attempts)
+    )
 
 
 def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:

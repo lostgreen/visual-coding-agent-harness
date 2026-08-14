@@ -628,6 +628,7 @@ class OccurrencePacketTransform:
         caption_config_digest: str = "",
         replay_fixture_path: Path | None = None,
         replay_record_path: Path | None = None,
+        replay_prime: bool = False,
         candidate_limit: int = DEFAULT_CARD_CANDIDATE_LIMIT,
         excerpt_limit: int = DEFAULT_CARD_EXCERPT_LIMIT,
         excerpt_chars: int = DEFAULT_CARD_EXCERPT_CHARS,
@@ -655,10 +656,14 @@ class OccurrencePacketTransform:
         self.replay_record_path = (
             Path(replay_record_path) if replay_record_path is not None else None
         )
+        self.replay_prime = bool(replay_prime)
+        if self.replay_prime and self.replay_fixture_path is None:
+            raise ValueError("occurrence replay prime requires a replay fixture")
         self._replay_packets: tuple[dict[str, Any], ...] = ()
         self._replay_fixture_digest = ""
         self._replay_request_identity_digests: list[str] = []
         self._replay_consumed_identity_digests: list[str] = []
+        self._replay_post_fixture_reuse_count = 0
         self._recorded_packets: list[dict[str, Any]] = []
         if self.replay_fixture_path is not None:
             fixture = _load_occurrence_replay_fixture(
@@ -692,6 +697,45 @@ class OccurrencePacketTransform:
     @property
     def audit(self) -> Mapping[str, Any]:
         return self._audit_payload()
+
+    @property
+    def replay_prime_task_spec(self) -> Mapping[str, Any]:
+        if not self.replay_prime or not self._replay_packets:
+            raise ValueError("occurrence replay prime is not configured")
+        packet = self._replay_packets[0]
+        raw_range = packet.get("time_range")
+        time_range = (
+            (float(raw_range[0]), float(raw_range[1]))
+            if isinstance(raw_range, Sequence)
+            and not isinstance(raw_range, (str, bytes))
+            and len(raw_range) == 2
+            else None
+        )
+        return {
+            "queries": tuple(
+                dict.fromkeys(
+                    str(value).strip()
+                    for value in tuple(packet.get("queries", ()) or ())
+                    if str(value).strip()
+                )
+            )[:5],
+            "time_range": time_range,
+            "segment_ids": tuple(
+                str(value).strip()
+                for value in tuple(packet.get("segment_ids", ()) or ())
+                if str(value).strip()
+            ),
+            "source_video_ids": tuple(
+                str(value).strip()
+                for value in tuple(packet.get("source_video_ids", ()) or ())
+                if str(value).strip()
+            ),
+            "top_k": max(1, int(packet.get("top_k", 12) or 12)),
+            "expand_neighbors": max(
+                0, int(packet.get("expand_neighbors", 0) or 0)
+            ),
+            "index_mode": str(packet.get("index_mode", "hybrid") or "hybrid"),
+        }
 
     def validate_surface(self, packet: Mapping[str, Any], *, surface: str) -> None:
         assert_no_oracle_packet(packet, surface=surface)
@@ -803,9 +847,15 @@ class OccurrencePacketTransform:
     ) -> dict[str, Any]:
         index = len(self._replay_consumed_identity_digests)
         if index >= len(self._replay_packets):
-            raise ValueError(
-                "occurrence replay fixture exhausted before runtime Caption searches completed"
+            if not self.replay_prime:
+                raise ValueError(
+                    "occurrence replay fixture exhausted before runtime Caption searches completed"
+                )
+            self._replay_request_identity_digests.append(
+                _retrieval_identity(natural_packet)
             )
+            self._replay_post_fixture_reuse_count += 1
+            return _json_copy(self._replay_packets[-1])
         replay_packet = _json_copy(self._replay_packets[index])
         assert_no_oracle_packet(replay_packet, surface="occurrence_replay_packet")
         required = {
@@ -879,6 +929,12 @@ class OccurrencePacketTransform:
                     self._replay_consumed_identity_digests
                 ),
                 "recorded_packet_count": len(self._recorded_packets),
+                "prime_requested": self.replay_prime,
+                "prime_consumed": (
+                    self.replay_prime
+                    and bool(self._replay_consumed_identity_digests)
+                ),
+                "post_fixture_reuse_count": self._replay_post_fixture_reuse_count,
                 "consumption_complete": (
                     len(self._replay_consumed_identity_digests)
                     == len(self._replay_packets)

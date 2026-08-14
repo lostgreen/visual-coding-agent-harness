@@ -91,6 +91,7 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
         occurrence_method_arm="a1",
         occurrence_replay_root=str(fixture_root),
         occurrence_replay_record_root=None,
+        occurrence_replay_prime=False,
     )
     case = {
         "case_id": "case-0072",
@@ -107,6 +108,11 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
     assert command[command.index("--occurrence-replay-fixture") + 1] == str(
         fixture_path
     )
+
+    args.recorded_fixture_root = None
+    args.occurrence_replay_prime = True
+    primed_command = BATCH._case_command(case, args, tmp_path / "primed-out")
+    assert "--occurrence-replay-prime" in primed_command
 
 
 def test_batch_subprocess_env_includes_repository_and_src() -> None:

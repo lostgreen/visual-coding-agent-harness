@@ -19,7 +19,7 @@ from vcah.caption_schema import stable_digest
 from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
 from vcah.model_client import OpenAICompatibleClient
-from vcah.multiround import VirtualVideoMultiRoundDriver
+from vcah.multiround import InvestigationTask, VirtualVideoMultiRoundDriver
 from vcah.occurrence_agent import (
     OCCURRENCE_METHOD_ARMS,
     OccurrencePacketTransform,
@@ -54,6 +54,10 @@ def main() -> None:
         args.occurrence_replay_fixture or args.occurrence_replay_record
     ) and occurrence_method_arm == "none":
         raise ValueError("occurrence replay requires an occurrence method arm")
+    if args.occurrence_replay_prime and not args.occurrence_replay_fixture:
+        raise ValueError("occurrence replay prime requires --occurrence-replay-fixture")
+    if args.occurrence_replay_prime and args.recorded_decisions:
+        raise ValueError("occurrence replay prime is incompatible with recorded decisions")
     protocol = Phase5Protocol(
         controller_mode=args.controller_mode,
         controller_evidence_visibility=args.controller_evidence_visibility,
@@ -122,6 +126,7 @@ def main() -> None:
                 if args.occurrence_replay_record
                 else None
             ),
+            replay_prime=args.occurrence_replay_prime,
         )
         occurrence_packet_transform.validate_surface(
             runtime_case_payload,
@@ -229,6 +234,22 @@ def main() -> None:
         if protocol.controller_mode == "mger"
         else "llm_authored"
     )
+    runtime_bootstrap_tasks = list(
+        bootstrap_tasks(
+            arm=args.oracle_arm,
+            question=workspace.case.question,
+            index_mode=args.caption_index_mode,
+        )
+    )
+    if args.occurrence_replay_prime:
+        assert occurrence_packet_transform is not None
+        runtime_bootstrap_tasks.append(
+            _occurrence_replay_prime_task(
+                occurrence_packet_transform,
+                fallback_question=workspace.case.question,
+                fallback_index_mode=args.caption_index_mode,
+            )
+        )
     driver = VirtualVideoMultiRoundDriver(
         reasoner=reasoner,
         investigator=investigator,
@@ -248,11 +269,7 @@ def main() -> None:
         evidence_state_mode=effective_evidence_state_mode,
         allowed_inspection_modes=protocol.allowed_inspection_modes,
         controller_mode=protocol.controller_mode,
-        bootstrap_tasks=bootstrap_tasks(
-            arm=args.oracle_arm,
-            question=workspace.case.question,
-            index_mode=args.caption_index_mode,
-        ),
+        bootstrap_tasks=tuple(runtime_bootstrap_tasks),
         occurrence_method_arm=occurrence_method_arm,
     )
     result = driver.run(workspace)
@@ -320,6 +337,7 @@ def main() -> None:
             if occurrence_packet_transform is not None
             else None
         ),
+        "occurrence_replay_prime": bool(args.occurrence_replay_prime),
         "no_oracle_runtime_gate": (
             {
                 "schema_version": "MMLifelongNoOracleRuntimeGateV1",
@@ -585,6 +603,33 @@ def _read_jsonl(path: Path) -> tuple[Mapping[str, Any], ...]:
     )
 
 
+def _occurrence_replay_prime_task(
+    transform: OccurrencePacketTransform,
+    *,
+    fallback_question: str,
+    fallback_index_mode: str,
+) -> InvestigationTask:
+    spec = transform.replay_prime_task_spec
+    queries = tuple(str(value) for value in spec.get("queries", ()) if str(value))
+    segment_ids = tuple(
+        str(value) for value in spec.get("segment_ids", ()) if str(value)
+    )
+    return InvestigationTask(
+        query_id="occurrence_replay_prime",
+        goal=queries[0] if queries else str(fallback_question),
+        segment_id=segment_ids[0] if len(segment_ids) == 1 else "",
+        time_range=spec.get("time_range"),
+        source_video_ids=tuple(spec.get("source_video_ids", ()) or ()),
+        inspection_mode="search_caption",
+        caption_queries=queries,
+        top_k=int(spec.get("top_k", 12) or 12),
+        index_mode=str(
+            spec.get("index_mode", fallback_index_mode) or fallback_index_mode
+        ),
+        expand_neighbors=int(spec.get("expand_neighbors", 0) or 0),
+    )
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(
@@ -700,6 +745,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--occurrence-replay-fixture")
     parser.add_argument("--occurrence-replay-record")
+    parser.add_argument("--occurrence-replay-prime", action="store_true")
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")

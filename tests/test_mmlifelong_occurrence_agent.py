@@ -123,6 +123,54 @@ def test_frozen_occurrence_replay_records_and_reuses_identical_packet(
         replayer(natural)
 
 
+def test_frozen_occurrence_replay_prime_reuses_fixed_candidate_pool(
+    tmp_path,
+) -> None:
+    packet = {
+        **_packet(),
+        "config_digest": "caption-digest",
+        "top_k": 7,
+        "index_mode": "hybrid",
+    }
+    fixture_path = tmp_path / "fixture.json"
+    recorder = OccurrencePacketTransform(
+        arm="a0",
+        audit_path=tmp_path / "record-audit.json",
+        case_id="case-1",
+        caption_config_digest="caption-digest",
+        replay_record_path=fixture_path,
+    )
+    recorder(packet)
+
+    with pytest.raises(ValueError, match="requires a replay fixture"):
+        OccurrencePacketTransform(
+            arm="a3",
+            audit_path=tmp_path / "invalid-prime.json",
+            replay_prime=True,
+        )
+
+    replayer = OccurrencePacketTransform(
+        arm="a3",
+        audit_path=tmp_path / "prime-audit.json",
+        case_id="case-1",
+        caption_config_digest="caption-digest",
+        replay_fixture_path=fixture_path,
+        replay_prime=True,
+    )
+    spec = replayer.replay_prime_task_spec
+    first = replayer(packet)
+    repeated = replayer(packet)
+
+    assert spec["queries"] == tuple(packet["queries"])
+    assert spec["top_k"] == 7
+    assert first["hits"] == repeated["hits"] == packet["hits"]
+    replay_audit = replayer.audit["occurrence_replay"]
+    assert replay_audit["prime_requested"] is True
+    assert replay_audit["prime_consumed"] is True
+    assert replay_audit["post_fixture_reuse_count"] == 1
+    assert replay_audit["consumed_packet_count"] == 1
+
+
 def test_a1_adds_bounded_cards_without_changing_retrieval(tmp_path) -> None:
     packet = _packet()
     original = deepcopy(packet)

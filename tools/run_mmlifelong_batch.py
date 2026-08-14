@@ -187,6 +187,9 @@ def main() -> None:
             if getattr(args, "occurrence_replay_record_root", None)
             else "live"
         ),
+        "occurrence_replay_prime": bool(
+            getattr(args, "occurrence_replay_prime", False)
+        ),
         "occurrence_replay_manifest": (
             file_checksum(
                 Path(args.occurrence_replay_root) / "manifest.json"
@@ -449,6 +452,8 @@ def _case_command(
                 f"missing occurrence replay fixture: {replay_path}"
             )
         command.extend(("--occurrence-replay-fixture", str(replay_path)))
+        if getattr(args, "occurrence_replay_prime", False):
+            command.append("--occurrence-replay-prime")
     if getattr(args, "occurrence_replay_record_root", None):
         record_path = (
             Path(args.occurrence_replay_record_root)
@@ -485,6 +490,7 @@ def _write_batch_summary(
             "oracle_arm": selection.get("oracle_arm"),
             "occurrence_method_arm": selection.get("occurrence_method_arm"),
             "occurrence_replay_mode": selection.get("occurrence_replay_mode"),
+            "occurrence_replay_prime": selection.get("occurrence_replay_prime"),
             "recorded_fixture_manifest": selection.get(
                 "recorded_fixture_manifest"
             ),
@@ -566,6 +572,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--occurrence-replay-root")
     parser.add_argument("--occurrence-replay-record-root")
+    parser.add_argument("--occurrence-replay-prime", action="store_true")
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--case-ids", nargs="+")
@@ -622,6 +629,8 @@ def _parse_args() -> argparse.Namespace:
         args.occurrence_replay_root or args.occurrence_replay_record_root
     ) and args.occurrence_method_arm == "none":
         parser.error("occurrence replay requires --occurrence-method-arm")
+    if args.occurrence_replay_prime and not args.occurrence_replay_root:
+        parser.error("--occurrence-replay-prime requires --occurrence-replay-root")
     return args
 
 

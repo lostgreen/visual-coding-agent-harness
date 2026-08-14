@@ -80,6 +80,13 @@ def _row(
         "occurrence_replay_complete": True,
         "occurrence_replay_prefix_valid": True,
         "occurrence_replay_identity_digests": [],
+        "occurrence_replay_prime_configured": False,
+        "occurrence_replay_prime_requested": False,
+        "occurrence_replay_prime_consumed": False,
+        "occurrence_replay_prime_event_count": 0,
+        "occurrence_replay_prime_event_completed": False,
+        "occurrence_replay_prime_event_pre_reasoner": False,
+        "occurrence_replay_post_fixture_reuse_count": 0,
         "frozen_config": {"controller_mode": "frozen_baseline"},
     }
 
@@ -606,3 +613,71 @@ def test_frozen_replay_accepts_valid_consumed_prefixes() -> None:
             },
         }
     ) is True
+
+
+def test_frozen_replay_prime_requires_every_replay_arm_to_consume_seed() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    rows = []
+    for arm in ("a0", "a3"):
+        row = _row(arm, "c1", score=0.0, signature=signature)
+        row.update(
+            {
+                "occurrence_replay_mode": "replay",
+                "occurrence_replay_fixture_digest": "fixture",
+                "occurrence_replay_identity_digests": ["packet-1"],
+                "occurrence_replay_prime_configured": True,
+                "occurrence_replay_prime_requested": True,
+                "occurrence_replay_prime_consumed": True,
+                "occurrence_replay_prime_event_count": 1,
+                "occurrence_replay_prime_event_completed": True,
+                "occurrence_replay_prime_event_pre_reasoner": True,
+            }
+        )
+        rows.append(row)
+
+    report = ANALYSIS.build_report(
+        tuple(rows), expected_cases=1, bootstrap_samples=10, seed=7
+    )
+    assert report["frozen_occurrence_replay"]["prime_passed"] is True
+    assert report["structural_gate_passed"] is True
+
+    rows[-1]["occurrence_replay_prime_consumed"] = False
+    failed = ANALYSIS.build_report(
+        tuple(rows), expected_cases=1, bootstrap_samples=10, seed=7
+    )
+    assert failed["frozen_occurrence_replay"]["prime_passed"] is False
+    assert failed["structural_gate_passed"] is False
+    assert AUDIT._replay_prime_gate(
+        {
+            "a0": {
+                "c1": {
+                    "mode": "replay",
+                    "prime_configured": True,
+                    "prime_requested": True,
+                    "prime_consumed": True,
+                    "prime_event_count": 1,
+                    "prime_event_completed": True,
+                    "prime_event_pre_reasoner": True,
+                }
+            },
+            "a3": {
+                "c1": {
+                    "mode": "replay",
+                    "prime_configured": True,
+                    "prime_requested": True,
+                    "prime_consumed": False,
+                    "prime_event_count": 1,
+                    "prime_event_completed": True,
+                    "prime_event_pre_reasoner": True,
+                }
+            },
+        }
+    ) is False
+
+    rows[-1]["occurrence_replay_prime_consumed"] = True
+    rows[-1]["occurrence_replay_prime_event_pre_reasoner"] = False
+    late = ANALYSIS.build_report(
+        tuple(rows), expected_cases=1, bootstrap_samples=10, seed=7
+    )
+    assert late["frozen_occurrence_replay"]["prime_passed"] is False
+    assert late["structural_gate_passed"] is False

@@ -587,6 +587,38 @@ def test_driver_records_bootstrap_before_first_reasoner_decision(tmp_path: Path)
     assert rows[0]["round_id"] == "bootstrap"
 
 
+def test_driver_records_replay_prime_completion_before_reasoner(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    events: list[str] = []
+    driver = VirtualVideoMultiRoundDriver(
+        reasoner=_ImmediateReasoner(events),
+        investigator=_BootstrapInvestigator(events),
+        max_rounds=1,
+        answer_policy="benchmark_best_effort",
+        evidence_control_mode="shadow",
+        controller_mode="frozen_baseline",
+        bootstrap_tasks=(
+            InvestigationTask(
+                query_id="occurrence_replay_prime",
+                goal="frozen retrieval seed",
+                inspection_mode="search_caption",
+                caption_queries=("frozen retrieval seed",),
+            ),
+        ),
+    )
+
+    result = driver.run(workspace)
+
+    trace_types = [row["type"] for row in result.trace]
+    prime_index = trace_types.index("occurrence_replay_primed")
+    decision_index = trace_types.index("reasoner_decision")
+    assert result.trace[prime_index]["round"] == 0
+    assert result.trace[prime_index]["completed"] is True
+    assert prime_index < decision_index
+
+
 def _numeric_leaves(value: Any) -> tuple[float, ...]:
     if isinstance(value, dict):
         return tuple(number for item in value.values() for number in _numeric_leaves(item))

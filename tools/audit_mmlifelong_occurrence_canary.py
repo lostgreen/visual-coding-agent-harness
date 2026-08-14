@@ -53,6 +53,28 @@ def audit_roots(
             decisions = tuple(
                 row for row in trace if row.get("type") == "reasoner_decision"
             )
+            replay_prime_events = tuple(
+                (index, row)
+                for index, row in enumerate(trace)
+                if row.get("type") == "occurrence_replay_primed"
+            )
+            first_reasoner_index = next(
+                (
+                    index
+                    for index, row in enumerate(trace)
+                    if row.get("type") == "reasoner_decision"
+                ),
+                len(trace),
+            )
+            replay_prime_event_completed = bool(
+                len(replay_prime_events) == 1
+                and replay_prime_events[0][1].get("completed") is True
+                and int(replay_prime_events[0][1].get("round", -1)) == 0
+            )
+            replay_prime_event_pre_reasoner = bool(
+                len(replay_prime_events) == 1
+                and replay_prime_events[0][0] < first_reasoner_index
+            )
             arm = str(config.get("occurrence_method_arm", "none") or "none")
             state = _read_json(run_dir / "occurrence_resolution_state.json")
             observations = _read_jsonl(run_dir / "observation_log.jsonl")
@@ -227,6 +249,25 @@ def audit_roots(
                         if replay_mode == "replay"
                         else True
                     ),
+                    "replay_prime_configured": bool(
+                        config.get("occurrence_replay_prime", False)
+                    ),
+                    "replay_prime_requested": bool(
+                        replay.get("prime_requested", False)
+                    ),
+                    "replay_prime_consumed": bool(
+                        replay.get("prime_consumed", False)
+                    ),
+                    "replay_prime_event_count": len(replay_prime_events),
+                    "replay_prime_event_completed": (
+                        replay_prime_event_completed
+                    ),
+                    "replay_prime_event_pre_reasoner": (
+                        replay_prime_event_pre_reasoner
+                    ),
+                    "replay_post_fixture_reuse_count": int(
+                        replay.get("post_fixture_reuse_count", 0) or 0
+                    ),
                     "replay_identity_digests": tuple(
                         replay.get("consumed_identity_digests", ())
                         if replay_mode == "replay"
@@ -313,6 +354,16 @@ def audit_roots(
                 "complete": row["replay_complete"],
                 "prefix_valid": row["replay_prefix_valid"],
                 "identity_digests": row["replay_identity_digests"],
+                "prime_configured": row["replay_prime_configured"],
+                "prime_requested": row["replay_prime_requested"],
+                "prime_consumed": row["replay_prime_consumed"],
+                "prime_event_count": row["replay_prime_event_count"],
+                "prime_event_completed": row[
+                    "replay_prime_event_completed"
+                ],
+                "prime_event_pre_reasoner": row[
+                    "replay_prime_event_pre_reasoner"
+                ],
             }
             for row in cases
         }
@@ -455,6 +506,21 @@ def audit_roots(
             "occurrence_replay_complete": all(
                 row["replay_complete"] for row in cases
             ),
+            "occurrence_replay_prime_configured": all(
+                row["replay_prime_configured"] for row in cases
+            ),
+            "occurrence_replay_prime_consumed": all(
+                row["replay_prime_consumed"] for row in cases
+            ),
+            "occurrence_replay_prime_event_completed": all(
+                row["replay_prime_event_completed"] for row in cases
+            ),
+            "occurrence_replay_prime_event_pre_reasoner": all(
+                row["replay_prime_event_pre_reasoner"] for row in cases
+            ),
+            "occurrence_replay_post_fixture_reuse_count": sum(
+                row["replay_post_fixture_reuse_count"] for row in cases
+            ),
         }
     common = set.intersection(*case_sets.values()) if case_sets else set()
     treatment_arms = tuple(arm for arm in bindings if arm != "a0")
@@ -543,6 +609,7 @@ def audit_roots(
             row["premature_commit_count"] == 0 for row in per_arm.values()
         ),
         "frozen_occurrence_replay_parity": _replay_parity(replay_cases),
+        "frozen_occurrence_replay_prime": _replay_prime_gate(replay_cases),
         "no_unrecovered_occurrence_validation_errors": sum(
             row["unrecovered_occurrence_validation_error_case_count"]
             for row in per_arm.values()
@@ -682,6 +749,28 @@ def _replay_parity(
         ):
             return False
     return True
+
+
+def _replay_prime_gate(
+    replay_cases: Mapping[str, Mapping[str, Mapping[str, Any]]]
+) -> bool:
+    replay_rows = [
+        row
+        for cases in replay_cases.values()
+        for row in cases.values()
+        if row.get("mode") == "replay"
+    ]
+    if not any(row.get("prime_configured") for row in replay_rows):
+        return True
+    return bool(replay_rows) and all(
+        row.get("prime_configured") is True
+        and row.get("prime_requested") is True
+        and row.get("prime_consumed") is True
+        and row.get("prime_event_count") == 1
+        and row.get("prime_event_completed") is True
+        and row.get("prime_event_pre_reasoner") is True
+        for row in replay_rows
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
