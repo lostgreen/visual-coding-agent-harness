@@ -1294,7 +1294,7 @@ def _query_strings(value: Any, *, limit: int, char_limit: int) -> list[str]:
     return queries
 
 
-def _retrieval_identity(packet: Mapping[str, Any]) -> str:
+def occurrence_replay_identity(packet: Mapping[str, Any]) -> str:
     occurrence_set = packet.get("occurrence_set")
     candidates = (
         occurrence_set.get("candidates")
@@ -1315,6 +1315,10 @@ def _retrieval_identity(packet: Mapping[str, Any]) -> str:
             "rendered": packet.get("rendered"),
         }
     )
+
+
+def _retrieval_identity(packet: Mapping[str, Any]) -> str:
+    return occurrence_replay_identity(packet)
 
 
 def _forbidden_key_paths(value: Any, *, prefix: str = "$") -> list[str]:
