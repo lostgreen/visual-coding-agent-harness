@@ -9,6 +9,21 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+SUPPORTED_ARMS = {"a0", "a1-flat", "a1", "a2", "a2-clean", "a3"}
+SCOPED_ARMS = {"a2-clean", "a3"}
+EXPECTED_LIFECYCLE_RETRY_CODES = {
+    "occurrence_selection_required",
+    "occurrence_answer_required_after_selection",
+    "occurrence_resolution_required",
+    "occurrence_search_required",
+    "occurrence_no_match_required_at_finalization",
+    "occurrence_answer_required_after_resolution",
+    "occurrence_locator_inspection_required",
+    "occurrence_locator_binding_required",
+    "occurrence_locator_unbound_window_forbidden",
+}
+
+
 def audit_roots(
     bindings: Mapping[str, Path], *, expected_cases: int
 ) -> dict[str, Any]:
@@ -34,6 +49,9 @@ def audit_roots(
             decisions = tuple(
                 row for row in trace if row.get("type") == "reasoner_decision"
             )
+            arm = str(config.get("occurrence_method_arm", "none") or "none")
+            state = _read_json(run_dir / "occurrence_resolution_state.json")
+            observations = _read_jsonl(run_dir / "observation_log.jsonl")
             occurrence_errors = tuple(
                 error
                 for row in trace
@@ -46,10 +64,7 @@ def audit_roots(
                 error
                 for error in occurrence_errors
                 if str(error.get("code", ""))
-                not in {
-                    "occurrence_selection_required",
-                    "occurrence_answer_required_after_selection",
-                }
+                not in EXPECTED_LIFECYCLE_RETRY_CODES
             )
             terminal_occurrence_failures = tuple(
                 error
@@ -64,6 +79,13 @@ def audit_roots(
                 .casefold()
                 == "select"
                 for row in decisions
+                for operation in tuple(row.get("occurrence_ops", ()) or ())
+                if isinstance(operation, Mapping)
+            )
+            accepted_ops = tuple(
+                (index, dict(operation))
+                for index, row in enumerate(decisions)
+                if row.get("occurrence_ops_accepted") is not False
                 for operation in tuple(row.get("occurrence_ops", ()) or ())
                 if isinstance(operation, Mapping)
             )
@@ -87,19 +109,90 @@ def audit_roots(
                 and index > prior_selection_indices[0]
                 for index, row in enumerate(decisions)
             ) if prior_selection_indices else False
-            selection_required = any(
-                row.get("type") == "occurrence_treatment_eligible"
-                and int(row.get("visible_occurrence_count", 0) or 0) > 1
+            activation_events = tuple(
+                row
                 for row in trace
+                if row.get("type") == "occurrence_arbitration_activated"
+            )
+            activation_round = (
+                min(int(row.get("round", 0) or 0) for row in activation_events)
+                if activation_events
+                else None
+            )
+            state_exposure_before_activation = sum(
+                bool(row.get("occurrence_resolution_state_exposed"))
+                and (
+                    activation_round is None
+                    or int(row.get("round", 0) or 0) < activation_round
+                )
+                for row in decisions
+            )
+            selection_required = (
+                bool(activation_events)
+                if arm in SCOPED_ARMS
+                else any(
+                    row.get("type") == "occurrence_treatment_eligible"
+                    and int(row.get("visible_occurrence_count", 0) or 0) > 1
+                    for row in trace
+                )
+            )
+            resolution_indices = tuple(
+                index
+                for index, operation in accepted_ops
+                if _operation_name(operation) in {"select", "no_match"}
+            )
+            answer_indices = tuple(
+                index
+                for index, row in enumerate(decisions)
+                if row.get("action") == "answer"
+            )
+            resolution_before_answer = bool(
+                resolution_indices
+                and any(index > resolution_indices[0] for index in answer_indices)
+            )
+            final_active_resolution = str(
+                state.get("active_resolution", "") or ""
             )
             lifecycle_complete = bool(
                 not selection_required
-                or (selection_before_answer and answer_after_selection)
+                or (
+                    resolution_before_answer
+                    and (
+                        arm not in SCOPED_ARMS
+                        or final_active_resolution in {"selected", "no_match"}
+                    )
+                )
+            )
+            scoped_sets = _scoped_state_sets(state)
+            scoped_ops_have_set_id = all(
+                bool(_operation_set_id(operation))
+                for _, operation in accepted_ops
+            )
+            scoped_candidate_integrity = all(
+                _scoped_operation_valid(operation, scoped_sets)
+                for _, operation in accepted_ops
+            )
+            final_selected_pairs = _final_selected_pairs(state)
+            task_pairs_before_answer = {
+                (
+                    str(task.get("locator_attempt_id", "") or ""),
+                    str(task.get("occurrence_id", "") or ""),
+                )
+                for index, row in enumerate(decisions)
+                if not answer_indices or index < answer_indices[-1]
+                for task in tuple(row.get("tasks", ()) or ())
+                if isinstance(task, Mapping)
+                and task.get("locator_attempt_id")
+                and task.get("occurrence_id")
+            }
+            executed_binding_pairs = _executed_binding_pairs(observations)
+            selected_locators_inspected = bool(
+                final_selected_pairs.issubset(task_pairs_before_answer)
+                and final_selected_pairs.issubset(executed_binding_pairs)
             )
             rejected_occurrence_op_attempts = sum(
                 row.get("occurrence_ops_accepted") is False for row in decisions
             )
-            arm = str(config.get("occurrence_method_arm", "none") or "none")
             case_id = str(_read_json(prediction_path).get("case_id", run_dir.name))
             cases.append(
                 {
@@ -113,7 +206,7 @@ def audit_roots(
                     ),
                     "text_budget_parity": (
                         bool(no_oracle_audit.get("text_budget_parity_passed"))
-                        if arm in {"a1-flat", "a1"}
+                        if arm != "a0"
                         else None
                     ),
                     "eligible_events": sum(
@@ -132,7 +225,28 @@ def audit_roots(
                     "selection_required": selection_required,
                     "selection_before_answer": selection_before_answer,
                     "answer_after_selection": answer_after_selection,
+                    "resolution_before_answer": resolution_before_answer,
                     "lifecycle_complete": lifecycle_complete,
+                    "arbitration_activation_events": len(activation_events),
+                    "state_exposure_before_activation": (
+                        state_exposure_before_activation
+                    ),
+                    "scoped_ops_have_set_id": scoped_ops_have_set_id,
+                    "scoped_candidate_integrity": scoped_candidate_integrity,
+                    "defer_ops": sum(
+                        _operation_name(operation) == "defer"
+                        for _, operation in accepted_ops
+                    ),
+                    "no_match_ops": sum(
+                        _operation_name(operation) == "no_match"
+                        for _, operation in accepted_ops
+                    ),
+                    "multi_selection_sets": sum(
+                        len(value["selected_occurrence_ids"]) > 1
+                        for value in scoped_sets.values()
+                    ),
+                    "selected_locator_count": len(final_selected_pairs),
+                    "selected_locators_inspected": selected_locators_inspected,
                     "ops_accepted": all(
                         row.get("occurrence_ops_accepted") is not False
                         for row in decisions
@@ -184,7 +298,7 @@ def audit_roots(
             "text_budget_parity_passed": all(
                 row["text_budget_parity"] is True
                 for row in cases
-                if row["arm"] in {"a1-flat", "a1"}
+                if row["arm"] != "a0"
             ),
             "eligible_event_count": sum(
                 row["eligible_events"] for row in cases
@@ -197,6 +311,15 @@ def audit_roots(
             ),
             "duplicate_exposure_event_case_count": sum(
                 row["exposure_events"] > 1 for row in cases
+            ),
+            "arbitration_activation_case_count": sum(
+                row["arbitration_activation_events"] > 0 for row in cases
+            ),
+            "duplicate_arbitration_activation_case_count": sum(
+                row["arbitration_activation_events"] > 1 for row in cases
+            ),
+            "pre_activation_state_exposure_count": sum(
+                row["state_exposure_before_activation"] for row in cases
             ),
             "eligible_without_exposure_case_count": sum(
                 row["eligible_events"] > 0 and row["exposure_events"] == 0
@@ -225,6 +348,30 @@ def audit_roots(
             "answer_missing_after_selection_case_count": sum(
                 row["selection_required"]
                 and not row["answer_after_selection"]
+                for row in cases
+            ),
+            "resolution_missing_before_answer_case_count": sum(
+                row["selection_required"]
+                and not row["resolution_before_answer"]
+                for row in cases
+            ),
+            "scoped_set_id_failure_case_count": sum(
+                not row["scoped_ops_have_set_id"] for row in cases
+            ),
+            "scoped_candidate_integrity_failure_case_count": sum(
+                not row["scoped_candidate_integrity"] for row in cases
+            ),
+            "defer_op_count": sum(row["defer_ops"] for row in cases),
+            "no_match_op_count": sum(row["no_match_ops"] for row in cases),
+            "multi_selection_set_count": sum(
+                row["multi_selection_sets"] for row in cases
+            ),
+            "selected_locator_count": sum(
+                row["selected_locator_count"] for row in cases
+            ),
+            "selected_locator_inspection_failure_case_count": sum(
+                row["selected_locator_count"] > 0
+                and not row["selected_locators_inspected"]
                 for row in cases
             ),
             "all_occurrence_ops_accepted": all(
@@ -269,8 +416,11 @@ def audit_roots(
             ),
         }
     common = set.intersection(*case_sets.values()) if case_sets else set()
+    treatment_arms = tuple(arm for arm in bindings if arm != "a0")
+    scoped_arms = tuple(arm for arm in bindings if arm in SCOPED_ARMS)
     checks = {
-        "expected_arms_present": set(bindings) == {"a0", "a1-flat", "a1", "a2"},
+        "expected_arms_present": bool(bindings)
+        and set(bindings).issubset(SUPPORTED_ARMS),
         "case_sets_aligned": bool(case_sets)
         and all(case_set == common for case_set in case_sets.values()),
         "expected_case_count": len(common) == int(expected_cases),
@@ -289,30 +439,67 @@ def audit_roots(
             per_arm[arm]["eligible_without_exposure_case_count"] == 0
             and per_arm[arm]["exposure_without_eligibility_case_count"] == 0
             and per_arm[arm]["duplicate_exposure_event_case_count"] == 0
-            for arm in ("a1-flat", "a1", "a2")
+            for arm in treatment_arms
         ),
         "a1_flat_same_packet_text_budget_parity": all(
             per_arm[arm]["text_budget_parity_passed"]
             for arm in ("a1-flat", "a1")
+            if arm in per_arm
         ),
-        "a0_has_no_treatment_exposure": per_arm.get("a0", {}).get(
-            "exposure_event_count"
-        )
-        == 0,
-        "a2_state_files_complete": per_arm.get("a2", {}).get(
-            "state_file_count"
-        )
-        == int(expected_cases),
+        "a0_has_no_treatment_exposure": (
+            "a0" not in per_arm
+            or per_arm["a0"].get("exposure_event_count") == 0
+        ),
+        "a2_state_files_complete": (
+            "a2" not in per_arm
+            or per_arm["a2"].get("state_file_count") == int(expected_cases)
+        ),
         "a2_selection_complete": (
-            per_arm.get("a2", {}).get("selection_required_case_count", 0)
-            > 0
-            and per_arm.get("a2", {}).get("selection_missing_case_count") == 0
-            and per_arm.get("a2", {}).get("selection_not_prior_case_count")
-            == 0
-            and per_arm.get("a2", {}).get(
-                "answer_missing_after_selection_case_count"
+            "a2" not in per_arm
+            or (
+                per_arm["a2"].get("selection_required_case_count", 0) > 0
+                and per_arm["a2"].get("selection_missing_case_count") == 0
+                and per_arm["a2"].get("selection_not_prior_case_count") == 0
+                and per_arm["a2"].get(
+                    "answer_missing_after_selection_case_count"
+                )
+                == 0
             )
+        ),
+        "scoped_arbitration_activated": all(
+            per_arm[arm]["arbitration_activation_case_count"] > 0
+            for arm in scoped_arms
+        ),
+        "scoped_activation_unique": all(
+            per_arm[arm]["duplicate_arbitration_activation_case_count"] == 0
+            for arm in scoped_arms
+        ),
+        "no_pre_activation_state_exposure": all(
+            per_arm[arm]["pre_activation_state_exposure_count"] == 0
+            for arm in scoped_arms
+        ),
+        "scoped_set_integrity": all(
+            per_arm[arm]["scoped_set_id_failure_case_count"] == 0
+            and per_arm[arm]["scoped_candidate_integrity_failure_case_count"]
             == 0
+            for arm in scoped_arms
+        ),
+        "scoped_resolution_complete": all(
+            per_arm[arm]["resolution_missing_before_answer_case_count"] == 0
+            for arm in scoped_arms
+        ),
+        "a3_selected_locators_inspected": (
+            "a3" not in per_arm
+            or (
+                per_arm["a3"]["selected_locator_count"] > 0
+                and per_arm["a3"][
+                    "selected_locator_inspection_failure_case_count"
+                ]
+                == 0
+            )
+        ),
+        "no_premature_occurrence_commits": all(
+            row["premature_commit_count"] == 0 for row in per_arm.values()
         ),
         "no_unrecovered_occurrence_validation_errors": sum(
             row["unrecovered_occurrence_validation_error_case_count"]
@@ -331,16 +518,109 @@ def audit_roots(
         == 0,
     }
     return {
-        "schema_version": "MMLifelongOccurrenceCanaryAuditV3",
+        "schema_version": "MMLifelongOccurrenceCanaryAuditV4",
         "per_arm": per_arm,
         "checks": checks,
         "structural_gate_passed": all(checks.values()),
     }
 
 
+def _operation_name(operation: Mapping[str, Any]) -> str:
+    return str(operation.get("op", operation.get("type", "")) or "").casefold()
+
+
+def _operation_set_id(operation: Mapping[str, Any]) -> str:
+    return str(
+        operation.get("set_id", operation.get("locator_attempt_id", "")) or ""
+    )
+
+
+def _scoped_state_sets(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    values: dict[str, dict[str, Any]] = {}
+    for raw_set in tuple(state.get("sets", ()) or ()):
+        if not isinstance(raw_set, Mapping):
+            continue
+        set_id = str(raw_set.get("set_id", "") or "")
+        if not set_id:
+            continue
+        candidates = {
+            str(candidate.get("occurrence_id", "") or "")
+            for candidate in tuple(raw_set.get("candidates", ()) or ())
+            if isinstance(candidate, Mapping)
+            and str(candidate.get("occurrence_id", "") or "")
+        }
+        selected = tuple(
+            str(value)
+            for value in tuple(raw_set.get("selected_occurrence_ids", ()) or ())
+            if str(value)
+        )
+        values[set_id] = {
+            "candidate_ids": candidates,
+            "selected_occurrence_ids": selected,
+            "resolution": str(raw_set.get("resolution", "") or ""),
+        }
+    return values
+
+
+def _scoped_operation_valid(
+    operation: Mapping[str, Any],
+    scoped_sets: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    set_id = _operation_set_id(operation)
+    if not set_id or set_id not in scoped_sets:
+        return False
+    op = _operation_name(operation)
+    occurrence_id = str(operation.get("occurrence_id", "") or "")
+    if op in {"defer", "no_match"}:
+        return not occurrence_id
+    return bool(
+        occurrence_id
+        and occurrence_id in scoped_sets[set_id].get("candidate_ids", set())
+    )
+
+
+def _final_selected_pairs(state: Mapping[str, Any]) -> set[tuple[str, str]]:
+    return {
+        (set_id, occurrence_id)
+        for set_id, value in _scoped_state_sets(state).items()
+        for occurrence_id in value["selected_occurrence_ids"]
+    }
+
+
+def _executed_binding_pairs(
+    observations: tuple[dict[str, Any], ...],
+) -> set[tuple[str, str]]:
+    pairs = set()
+    for row in observations:
+        config = row.get("sampling_config")
+        binding = config.get("candidate_binding") if isinstance(config, Mapping) else None
+        if not isinstance(binding, Mapping):
+            continue
+        locator_attempt_id = str(binding.get("locator_attempt_id", "") or "")
+        occurrence_id = str(binding.get("occurrence_id", "") or "")
+        if locator_attempt_id and occurrence_id:
+            pairs.add((locator_attempt_id, occurrence_id))
+    return pairs
+
+
 def _read_json(path: Path) -> dict[str, Any]:
+    if not Path(path).is_file():
+        return {}
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _read_jsonl(path: Path) -> tuple[dict[str, Any], ...]:
+    if not Path(path).is_file():
+        return ()
+    rows = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        value = json.loads(line)
+        if isinstance(value, Mapping):
+            rows.append(dict(value))
+    return tuple(rows)
 
 
 def main() -> None:

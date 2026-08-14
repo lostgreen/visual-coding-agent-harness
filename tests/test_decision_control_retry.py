@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from vcah.interactive_agents import WorkspaceReasoner
-from vcah.investigator import InvestigationReport
+from vcah.investigator import InvestigationReport, ObservationAttempt
 from vcah.multiround import (
     InvestigationTask,
     ReasonerDecision,
@@ -19,6 +19,7 @@ from vcah.virtual_video import (
     VirtualVideoSegment,
     VirtualVideoWorkspace,
 )
+from vcah.workspace import stable_attempt_id
 
 
 class ScriptedReasoner:
@@ -69,6 +70,82 @@ class OccurrenceInvestigator(RecordingInvestigator):
                 }
             ]
         }
+
+
+class ScopedOccurrenceInvestigator(RecordingInvestigator):
+    locator_attempt_id = stable_attempt_id(
+        source_video_ids=(),
+        frame_refs=(),
+        frame_times=(),
+        inspected_ranges=(),
+        sampling_fps=0.0,
+        modality="caption_search",
+    )
+    occurrence_set = {
+        "status": "competing_candidates",
+        "occurrence_ambiguous": True,
+        "candidates": [
+            {
+                "occurrence_id": "occ_1",
+                "time_range": [2.0, 4.0],
+                "source_video_ids": ["video-a"],
+                "segment_ids": ["seg_0001"],
+            },
+            {
+                "occurrence_id": "occ_2",
+                "time_range": [8.0, 10.0],
+                "source_video_ids": ["video-a"],
+                "segment_ids": ["seg_0001"],
+            },
+        ],
+    }
+
+    def run_batch(
+        self,
+        tasks: Sequence[InvestigationTask],
+    ) -> tuple[InvestigationReport, ...]:
+        self.tasks.extend(tasks)
+        reports = []
+        for task in tasks:
+            if task.inspection_mode == "search_caption":
+                attempt = ObservationAttempt(
+                    attempt_id=self.locator_attempt_id,
+                    task_id=task.query_id,
+                    sampling_config={
+                        "mode": "search_caption",
+                        "queries": ["target event"],
+                        "occurrence_set": self.occurrence_set,
+                        "hits": [],
+                    },
+                    modality="caption_search",
+                    evidence_role="candidate",
+                    parse_status="deterministic",
+                )
+            else:
+                attempt = ObservationAttempt(
+                    attempt_id="",
+                    task_id=task.query_id,
+                    requested_range=task.time_range,
+                    inspected_ranges=(task.time_range,) if task.time_range else (),
+                    sampling_config={
+                        "mode": "window",
+                        "candidate_binding": {
+                            "locator_attempt_id": task.locator_attempt_id,
+                            "occurrence_id": task.occurrence_id,
+                        },
+                    },
+                    modality="visual",
+                    parse_status="parsed",
+                )
+            reports.append(
+                InvestigationReport(
+                    query_id=task.query_id,
+                    status="completed",
+                    attempts=(attempt,),
+                    cost={"consumes_budget": True},
+                )
+            )
+        return tuple(reports)
 
 
 class MetadataScriptedReasoner(ScriptedReasoner):
@@ -425,6 +502,139 @@ def test_a2_rejects_non_answer_immediately_after_selection(
     )
     assert reasoner.calls[1]["force_finalize"] is True
     assert reasoner.calls[2]["control_retry"] is True
+    assert result.answer_present is True
+
+
+def test_a2_clean_is_identical_before_ambiguous_set_exposure(
+    tmp_path: Path,
+) -> None:
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="locate",
+                        goal="locate target event",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {
+                        "op": "select",
+                        "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+                        "occurrence_id": "occ_2",
+                    },
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=ScopedOccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2-clean",
+    ).run(_workspace(tmp_path))
+
+    assert "occurrence_resolution_state" not in reasoner.calls[0][
+        "mechanical_status"
+    ]
+    assert reasoner.calls[1]["mechanical_status"][
+        "occurrence_resolution_state"
+    ]["schema_version"] == "OccurrenceResolutionStateV2"
+    activation = [
+        row
+        for row in result.trace
+        if row.get("type") == "occurrence_arbitration_activated"
+    ]
+    assert len(activation) == 1
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    assert decisions[1]["selected_occurrence_ids"] == ["occ_2"]
+    assert result.answer_present is True
+
+
+def test_a3_rejects_answer_until_selected_locator_is_inspected(
+    tmp_path: Path,
+) -> None:
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="locate",
+                        goal="locate target event",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {
+                        "op": "select",
+                        "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+                        "occurrence_id": "occ_2",
+                    },
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="too early"),
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="inspect_selected",
+                        goal="inspect selected target",
+                        occurrence_id="occ_2",
+                        locator_attempt_id=ScopedOccurrenceInvestigator.locator_attempt_id,
+                    ),
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+    investigator = ScopedOccurrenceInvestigator()
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a3",
+    ).run(_workspace(tmp_path))
+
+    assert any(
+        row.get("type") == "decision_schema_error"
+        and row.get("code") == "occurrence_locator_inspection_required"
+        for row in result.trace
+    )
+    bound = [
+        task
+        for task in investigator.tasks
+        if task.locator_attempt_id and task.occurrence_id
+    ]
+    assert len(bound) == 1
+    assert (
+        bound[0].locator_attempt_id
+        == ScopedOccurrenceInvestigator.locator_attempt_id
+    )
+    assert bound[0].occurrence_id == "occ_2"
     assert result.answer_present is True
 
 

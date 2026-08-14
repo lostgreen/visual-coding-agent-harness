@@ -8,7 +8,15 @@ from typing import Any, Mapping, Sequence
 from vcah.caption_schema import stable_digest
 
 
-OCCURRENCE_METHOD_ARMS = ("none", "a0", "a1", "a1-flat", "a2")
+OCCURRENCE_METHOD_ARMS = (
+    "none",
+    "a0",
+    "a1",
+    "a1-flat",
+    "a2",
+    "a2-clean",
+    "a3",
+)
 FORBIDDEN_AGENT_VISIBLE_KEYS = frozenset(
     {
         "clue_intervals",
@@ -28,6 +36,9 @@ DEFAULT_CARD_EXCERPT_CHARS = 240
 DEFAULT_CARD_QUERY_LIMIT = 4
 DEFAULT_CARD_QUERY_CHARS = 160
 OCCURRENCE_RESOLUTION_OPS = frozenset({"keep", "eliminate", "select", "reopen"})
+SCOPED_OCCURRENCE_RESOLUTION_OPS = frozenset(
+    {"keep", "eliminate", "select", "reopen", "defer", "no_match"}
+)
 
 
 @dataclass
@@ -184,6 +195,373 @@ class OccurrenceResolutionStateV1:
             encoding="utf-8",
         )
         temporary.replace(target)
+
+
+@dataclass
+class OccurrenceSetStateV2:
+    """One semantically scoped candidate set produced by one locator attempt."""
+
+    set_id: str
+    semantic_target: tuple[str, ...] = ()
+    candidates: dict[str, dict[str, Any]] = field(default_factory=dict)
+    states: dict[str, str] = field(default_factory=dict)
+    selected_occurrence_ids: tuple[str, ...] = ()
+    resolution: str = "unresolved"
+    revision: int = 0
+
+    @property
+    def viable_occurrence_ids(self) -> tuple[str, ...]:
+        return tuple(
+            occurrence_id
+            for occurrence_id in self.candidates
+            if self.states.get(occurrence_id, "active") != "eliminated"
+        )
+
+    def sync(
+        self,
+        *,
+        semantic_target: Sequence[str],
+        candidates: Sequence[Mapping[str, Any]],
+    ) -> bool:
+        target = tuple(
+            dict.fromkeys(
+                str(value or "").strip()
+                for value in semantic_target
+                if str(value or "").strip()
+            )
+        )
+        normalized: dict[str, dict[str, Any]] = {}
+        for raw_candidate in candidates:
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            occurrence_id = str(raw_candidate.get("occurrence_id", "") or "").strip()
+            if occurrence_id:
+                normalized[occurrence_id] = dict(raw_candidate)
+        changed = target != self.semantic_target or normalized != self.candidates
+        self.semantic_target = target
+        self.candidates = normalized
+        for occurrence_id in normalized:
+            self.states.setdefault(occurrence_id, "active")
+        stale = set(self.states) - set(normalized)
+        for occurrence_id in stale:
+            self.states.pop(occurrence_id, None)
+        selected = tuple(
+            occurrence_id
+            for occurrence_id in self.selected_occurrence_ids
+            if occurrence_id in normalized
+        )
+        if selected != self.selected_occurrence_ids:
+            self.selected_occurrence_ids = selected
+            if not selected and self.resolution == "selected":
+                self.resolution = "unresolved"
+            changed = True
+        if changed:
+            self.revision += 1
+        return changed
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "set_id": self.set_id,
+            "locator_attempt_id": self.set_id,
+            "semantic_target": list(self.semantic_target),
+            "revision": self.revision,
+            "resolution": self.resolution,
+            "candidates": [
+                {
+                    "occurrence_id": occurrence_id,
+                    "status": self.states.get(occurrence_id, "active"),
+                    "time_range": list(
+                        self.candidates[occurrence_id].get("time_range", ()) or ()
+                    ),
+                }
+                for occurrence_id in self.candidates
+            ],
+            "viable_occurrence_ids": list(self.viable_occurrence_ids),
+            "selected_occurrence_ids": list(self.selected_occurrence_ids),
+        }
+
+
+@dataclass
+class OccurrenceResolutionStateV2:
+    """Scoped, abstainable occurrence arbitration owned mechanically by Runtime."""
+
+    sets: dict[str, OccurrenceSetStateV2] = field(default_factory=dict)
+    active_set_id: str = ""
+    revision: int = 0
+
+    @property
+    def activated(self) -> bool:
+        return bool(self.sets)
+
+    @property
+    def active_set(self) -> OccurrenceSetStateV2 | None:
+        return self.sets.get(self.active_set_id)
+
+    @property
+    def selection_required(self) -> bool:
+        active = self.active_set
+        return bool(active is not None and active.resolution == "unresolved")
+
+    @property
+    def search_required(self) -> bool:
+        active = self.active_set
+        return bool(active is not None and active.resolution == "deferred")
+
+    @property
+    def selected_occurrence_ids(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                occurrence_id
+                for occurrence_set in self.sets.values()
+                for occurrence_id in occurrence_set.selected_occurrence_ids
+            )
+        )
+
+    def sync_sets(self, occurrence_sets: Sequence[Mapping[str, Any]]) -> bool:
+        changed = False
+        for raw_set in occurrence_sets:
+            if not isinstance(raw_set, Mapping):
+                continue
+            candidates = tuple(
+                candidate
+                for candidate in tuple(raw_set.get("candidates", ()) or ())
+                if isinstance(candidate, Mapping)
+                and str(candidate.get("occurrence_id", "") or "").strip()
+            )
+            if len(candidates) < 2:
+                continue
+            set_id = str(
+                raw_set.get("attempt_id", raw_set.get("set_id", "")) or ""
+            ).strip()
+            if not set_id:
+                set_id = "set_" + stable_digest(
+                    sorted(
+                        str(candidate.get("occurrence_id", "") or "")
+                        for candidate in candidates
+                    )
+                )[:20]
+            semantic_target = tuple(raw_set.get("semantic_target", ()) or ())
+            occurrence_set = self.sets.get(set_id)
+            is_new = occurrence_set is None
+            if occurrence_set is None:
+                occurrence_set = OccurrenceSetStateV2(set_id=set_id)
+                self.sets[set_id] = occurrence_set
+            if occurrence_set.sync(
+                semantic_target=semantic_target,
+                candidates=candidates,
+            ):
+                changed = True
+            if is_new:
+                previous = self.active_set
+                if previous is not None and previous.resolution == "unresolved":
+                    previous.resolution = "deferred"
+                    previous.revision += 1
+                self.active_set_id = set_id
+                changed = True
+        if changed:
+            self.revision += 1
+        return changed
+
+    def validate_ops(
+        self, operations: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        shadow = self._clone()
+        errors: list[dict[str, Any]] = []
+        for index, operation in enumerate(operations):
+            error = shadow._apply_one(operation, index=index)
+            if error is not None:
+                errors.append(error)
+        return errors
+
+    def apply_ops(
+        self, operations: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        normalized = tuple(
+            dict(item) for item in operations if isinstance(item, Mapping)
+        )
+        errors = self.validate_ops(normalized)
+        if errors:
+            return {"accepted": False, "errors": errors, "applied": []}
+        applied: list[dict[str, Any]] = []
+        for index, operation in enumerate(normalized):
+            error = self._apply_one(operation, index=index)
+            assert error is None
+            applied.append(_normalized_scoped_occurrence_op(operation))
+        if applied:
+            self.revision += 1
+        return {"accepted": True, "errors": [], "applied": applied}
+
+    def active_locators(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            {
+                "set_id": occurrence_set.set_id,
+                "locator_attempt_id": occurrence_set.set_id,
+                "occurrence_id": occurrence_id,
+                "time_range": list(
+                    occurrence_set.candidates[occurrence_id].get("time_range", ())
+                    or ()
+                ),
+                "status": "authoritative_for_current_hypothesis",
+            }
+            for occurrence_set in self.sets.values()
+            for occurrence_id in occurrence_set.selected_occurrence_ids
+            if occurrence_id in occurrence_set.candidates
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        active = self.active_set
+        return {
+            "schema_version": "OccurrenceResolutionStateV2",
+            "revision": self.revision,
+            "active_set_id": self.active_set_id or None,
+            "selection_required": self.selection_required,
+            "search_required": self.search_required,
+            "active_resolution": active.resolution if active is not None else None,
+            "selected_occurrence_ids": list(self.selected_occurrence_ids),
+            "sets": [occurrence_set.to_dict() for occurrence_set in self.sets.values()],
+        }
+
+    def save(self, path: Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.tmp")
+        temporary.write_text(
+            json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+
+    def _clone(self) -> OccurrenceResolutionStateV2:
+        return OccurrenceResolutionStateV2(
+            sets={
+                set_id: OccurrenceSetStateV2(
+                    set_id=value.set_id,
+                    semantic_target=value.semantic_target,
+                    candidates={
+                        occurrence_id: dict(candidate)
+                        for occurrence_id, candidate in value.candidates.items()
+                    },
+                    states=dict(value.states),
+                    selected_occurrence_ids=value.selected_occurrence_ids,
+                    resolution=value.resolution,
+                    revision=value.revision,
+                )
+                for set_id, value in self.sets.items()
+            },
+            active_set_id=self.active_set_id,
+            revision=self.revision,
+        )
+
+    def _apply_one(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        index: int,
+    ) -> dict[str, Any] | None:
+        if not isinstance(operation, Mapping):
+            return {
+                "code": "occurrence_op_must_be_object",
+                "occurrence_op_index": index,
+            }
+        normalized = _normalized_scoped_occurrence_op(operation)
+        op = str(normalized["op"])
+        set_id = str(normalized["set_id"])
+        occurrence_id = str(normalized.get("occurrence_id", ""))
+        if op not in SCOPED_OCCURRENCE_RESOLUTION_OPS:
+            return {
+                "code": "unsupported_occurrence_op",
+                "occurrence_op_index": index,
+                "op": op,
+            }
+        occurrence_set = self.sets.get(set_id)
+        if occurrence_set is None:
+            return {
+                "code": "occurrence_set_not_visible",
+                "occurrence_op_index": index,
+                "set_id": set_id,
+            }
+        if op in {"defer", "no_match"}:
+            if occurrence_id:
+                return {
+                    "code": "set_resolution_op_forbids_occurrence_id",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                    "op": op,
+                }
+            occurrence_set.selected_occurrence_ids = ()
+            for candidate_id, status in tuple(occurrence_set.states.items()):
+                if status == "selected":
+                    occurrence_set.states[candidate_id] = "active"
+            occurrence_set.resolution = "deferred" if op == "defer" else "no_match"
+            occurrence_set.revision += 1
+            self.active_set_id = set_id
+            return None
+        if not occurrence_id or occurrence_id not in occurrence_set.candidates:
+            return {
+                "code": "occurrence_id_not_in_set",
+                "occurrence_op_index": index,
+                "set_id": set_id,
+                "occurrence_id": occurrence_id,
+            }
+        current = occurrence_set.states.get(occurrence_id, "active")
+        if op in {"keep", "select"} and current == "eliminated":
+            return {
+                "code": "eliminated_occurrence_requires_reopen",
+                "occurrence_op_index": index,
+                "set_id": set_id,
+                "occurrence_id": occurrence_id,
+            }
+        selected = list(occurrence_set.selected_occurrence_ids)
+        if op == "select":
+            if occurrence_set.resolution == "no_match":
+                return {
+                    "code": "no_match_set_requires_reopen",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                }
+            occurrence_set.states[occurrence_id] = "selected"
+            if occurrence_id not in selected:
+                selected.append(occurrence_id)
+            occurrence_set.selected_occurrence_ids = tuple(selected)
+            occurrence_set.resolution = "selected"
+        elif op == "eliminate":
+            occurrence_set.states[occurrence_id] = "eliminated"
+            occurrence_set.selected_occurrence_ids = tuple(
+                value for value in selected if value != occurrence_id
+            )
+            if not occurrence_set.selected_occurrence_ids:
+                occurrence_set.resolution = "unresolved"
+        elif op == "reopen":
+            occurrence_set.states[occurrence_id] = "active"
+            occurrence_set.selected_occurrence_ids = tuple(
+                value for value in selected if value != occurrence_id
+            )
+            occurrence_set.resolution = "unresolved"
+        else:
+            if current != "selected":
+                occurrence_set.states[occurrence_id] = "active"
+            if occurrence_set.resolution in {"deferred", "no_match"}:
+                occurrence_set.resolution = "unresolved"
+        occurrence_set.revision += 1
+        self.active_set_id = set_id
+        return None
+
+
+def _normalized_scoped_occurrence_op(
+    operation: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = {
+        "op": str(operation.get("op", operation.get("type", "")) or "")
+        .strip()
+        .casefold(),
+        "set_id": str(
+            operation.get("set_id", operation.get("locator_attempt_id", "")) or ""
+        ).strip(),
+    }
+    occurrence_id = str(operation.get("occurrence_id", "") or "").strip()
+    if occurrence_id:
+        normalized["occurrence_id"] = occurrence_id
+    return normalized
 
 
 def _apply_occurrence_op(

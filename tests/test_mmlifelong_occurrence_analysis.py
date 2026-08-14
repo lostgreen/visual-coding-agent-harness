@@ -45,14 +45,26 @@ def _row(
         "parse_status": "parsed",
         "judge_model": "judge",
         "candidate_recall": True,
+        "candidate_clue_recall": 1.0,
         "osa_eligible": arm == "a2",
         "osa_correct": arm == "a2",
+        "selected_occurrence_count": 1 if arm == "a2" else 0,
+        "selected_clue_recall": 1.0 if arm == "a2" else None,
+        "abstention_eligible": False,
+        "abstention_correct": None,
+        "false_abstention": False,
+        "deferred_occurrence_set": False,
         "occurrence_handle_usage_rate": 1.0,
+        "selected_locator_usage_rate": None,
+        "bound_visual_clue_recall": None,
+        "arbitration_activation_round": None,
         "premature_occurrence_commit": False,
         "visual_frames": 3,
         "visual_windows": 1,
         "vlm_calls": 1,
         "pre_treatment_signature": signature,
+        "pre_treatment_prompt_digests": ["prompt"],
+        "pre_activation_state_exposure": False,
         "treatment_exposure": {
             "visible_excerpt_digest": digest,
             "visible_text_digest": digest,
@@ -322,3 +334,198 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     assert ineligible_report["structural_gate_passed"] is True
     assert ineligible_report["per_arm"]["a1"]["eligible_event_count"] == 0
     assert ineligible_report["per_arm"]["a1"]["exposure_event_count"] == 0
+
+
+def test_clean_and_actionable_arms_report_full_mechanism_chain() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    rows = []
+    for case_id in ("c1", "c2"):
+        rows.append(_row("a1", case_id, score=0.0, signature=signature))
+        clean = _row(
+            "a2-clean", case_id, score=1.0, signature=signature
+        )
+        clean.update(
+            {
+                "osa_eligible": case_id == "c1",
+                "osa_correct": True if case_id == "c1" else None,
+                "candidate_recall": case_id == "c1",
+                "candidate_clue_recall": 1.0 if case_id == "c1" else 0.0,
+                "selected_occurrence_count": 1 if case_id == "c1" else 0,
+                "selected_clue_recall": 1.0 if case_id == "c1" else None,
+                "abstention_eligible": case_id == "c2",
+                "abstention_correct": True if case_id == "c2" else None,
+                "arbitration_activation_round": 2,
+            }
+        )
+        rows.append(clean)
+        actionable = dict(clean)
+        actionable.update(
+            {
+                "arm": "a3",
+                "selected_locator_usage_rate": (
+                    1.0 if case_id == "c1" else None
+                ),
+                "bound_visual_clue_recall": (
+                    1.0 if case_id == "c1" else 0.0
+                ),
+            }
+        )
+        rows.append(actionable)
+
+    report = ANALYSIS.build_report(
+        tuple(rows), expected_cases=2, bootstrap_samples=50, seed=11
+    )
+
+    assert report["comparisons"]["a2-clean-a1"]["paired_n"] == 2
+    assert report["comparisons"]["a3-a2-clean"][
+        "pre_treatment_prompt_divergence_rate"
+    ] == 0.0
+    assert report["arms"]["a2-clean"]["occurrence_selection_accuracy"] == 1.0
+    assert report["arms"]["a2-clean"]["abstention_accuracy"] == 1.0
+    assert report["arms"]["a3"]["selected_locator_usage_rate"] == 1.0
+    assert report["arms"]["a3"]["bound_visual_clue_recall"] == 0.5
+    assert report["structural_gate_passed"] is True
+
+
+def test_scoped_canary_audit_requires_actionable_locator_execution(
+    tmp_path: Path,
+) -> None:
+    bindings = {}
+    for arm in ("a1", "a2-clean", "a3"):
+        root = tmp_path / arm
+        case = root / "cases" / "case-1"
+        case.mkdir(parents=True)
+        (case / "prediction.json").write_text(
+            json.dumps({"case_id": "case-1"}), encoding="utf-8"
+        )
+        (case / "run_config.json").write_text(
+            json.dumps(
+                {
+                    "occurrence_method_arm": arm,
+                    "models": {
+                        "reasoner": "pa/gmn-2.5-pr",
+                        "investigator": "pa/gmn-2.5-pr",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        trace = [
+            {
+                "type": "occurrence_treatment_eligible",
+                "round": 2,
+                "visible_occurrence_count": 2,
+            },
+            {"type": "occurrence_treatment_exposed", "round": 2},
+        ]
+        if arm in {"a2-clean", "a3"}:
+            trace.extend(
+                [
+                    {
+                        "type": "reasoner_decision",
+                        "round": 1,
+                        "action": "investigate",
+                        "occurrence_ops": [],
+                        "occurrence_resolution_state_exposed": False,
+                    },
+                    {
+                        "type": "occurrence_arbitration_activated",
+                        "round": 2,
+                        "active_set_id": "locator_1",
+                    },
+                    {
+                        "type": "reasoner_decision",
+                        "round": 2,
+                        "action": "update_workspace",
+                        "occurrence_ops": [
+                            {
+                                "op": "select",
+                                "set_id": "locator_1",
+                                "occurrence_id": "occ_1",
+                            }
+                        ],
+                        "occurrence_ops_accepted": True,
+                        "occurrence_resolution_state_exposed": True,
+                    },
+                ]
+            )
+            if arm == "a3":
+                trace.append(
+                    {
+                        "type": "reasoner_decision",
+                        "round": 3,
+                        "action": "investigate",
+                        "tasks": [
+                            {
+                                "inspection_mode": "window",
+                                "locator_attempt_id": "locator_1",
+                                "occurrence_id": "occ_1",
+                            }
+                        ],
+                        "occurrence_ops": [],
+                        "occurrence_ops_accepted": True,
+                    }
+                )
+                (case / "observation_log.jsonl").write_text(
+                    json.dumps(
+                        {
+                            "sampling_config": {
+                                "candidate_binding": {
+                                    "locator_attempt_id": "locator_1",
+                                    "occurrence_id": "occ_1",
+                                }
+                            }
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            trace.append(
+                {
+                    "type": "reasoner_decision",
+                    "round": 4,
+                    "action": "answer",
+                    "occurrence_ops": [],
+                    "occurrence_ops_accepted": True,
+                }
+            )
+            (case / "occurrence_resolution_state.json").write_text(
+                json.dumps(
+                    {
+                        "active_resolution": "selected",
+                        "sets": [
+                            {
+                                "set_id": "locator_1",
+                                "resolution": "selected",
+                                "selected_occurrence_ids": ["occ_1"],
+                                "candidates": [
+                                    {"occurrence_id": "occ_1"},
+                                    {"occurrence_id": "occ_2"},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        (case / "runtime_summary.json").write_text(
+            json.dumps(
+                {
+                    "no_oracle_runtime_gate": {
+                        "no_oracle_runtime_gate_passed": True,
+                        "text_budget_parity_passed": True,
+                    },
+                    "trace": trace,
+                }
+            ),
+            encoding="utf-8",
+        )
+        bindings[arm] = root
+
+    report = AUDIT.audit_roots(bindings, expected_cases=1)
+
+    assert report["structural_gate_passed"] is True
+    assert report["checks"]["no_pre_activation_state_exposure"] is True
+    assert report["checks"]["scoped_set_integrity"] is True
+    assert report["checks"]["a3_selected_locators_inspected"] is True
+    assert report["per_arm"]["a3"]["selected_locator_count"] == 1

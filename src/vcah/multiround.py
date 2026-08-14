@@ -22,6 +22,7 @@ from vcah.memory import EvidenceStore
 from vcah.occurrence_agent import (
     OCCURRENCE_METHOD_ARMS,
     OccurrenceResolutionStateV1,
+    OccurrenceResolutionStateV2,
     candidate_cards_by_occurrence,
     occurrence_excerpt_digest,
     occurrence_visible_text_digest,
@@ -41,6 +42,7 @@ from vcah.workspace import (
     WorkingDocument,
     append_workspace_history,
     evidence_attempt_id,
+    prompt_digest,
     render_frozen_working_view,
     render_working_view,
 )
@@ -429,15 +431,18 @@ class VirtualVideoMultiRoundDriver:
         closure_repair_pending = False
         closure_repair_count = 0
         runtime_catalog = RuntimeEvidenceCatalog.build(document, observation_log)
-        occurrence_state = (
-            OccurrenceResolutionStateV1()
-            if self.occurrence_method_arm == "a2"
-            else None
-        )
+        occurrence_state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2 | None
+        if self.occurrence_method_arm == "a2":
+            occurrence_state = OccurrenceResolutionStateV1()
+        elif self.occurrence_method_arm in {"a2-clean", "a3"}:
+            occurrence_state = OccurrenceResolutionStateV2()
+        else:
+            occurrence_state = None
         occurrence_state_path = workspace.root_dir / "occurrence_resolution_state.json"
         treatment_eligible_recorded = False
         treatment_exposed_recorded = False
-        if occurrence_state is not None:
+        arbitration_activated_recorded = False
+        if isinstance(occurrence_state, OccurrenceResolutionStateV1):
             occurrence_state.save(occurrence_state_path)
 
         if self.evidence_state_mode == "runtime_derived":
@@ -469,6 +474,9 @@ class VirtualVideoMultiRoundDriver:
                     "compilation": compilation,
                     "prompt_char_count": int(
                         plan_metadata.get("prompt_char_count", 0) or 0
+                    ),
+                    "prompt_digest": str(
+                        plan_metadata.get("prompt_digest", "") or ""
                     ),
                     "prompt_schema_token_cost": int(
                         plan_metadata.get("prompt_schema_token_cost", 0) or 0
@@ -591,31 +599,68 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
                 treatment_exposed_recorded = True
-            if occurrence_state is not None:
+            if isinstance(occurrence_state, OccurrenceResolutionStateV1):
                 occurrence_state.sync_visible(visible_occurrence_ids)
                 occurrence_state.save(occurrence_state_path)
                 status["occurrence_resolution_state"] = occurrence_state.to_dict()
+            elif isinstance(occurrence_state, OccurrenceResolutionStateV2):
+                occurrence_state.sync_sets(_ambiguous_occurrence_sets(status))
+                if occurrence_state.activated:
+                    if not arbitration_activated_recorded:
+                        active = occurrence_state.active_set
+                        trace.append(
+                            {
+                                "type": "occurrence_arbitration_activated",
+                                "round": round_id,
+                                "method_arm": self.occurrence_method_arm,
+                                "active_set_id": occurrence_state.active_set_id,
+                                "candidate_count": (
+                                    len(active.candidates) if active is not None else 0
+                                ),
+                            }
+                        )
+                        arbitration_activated_recorded = True
+                    occurrence_state.save(occurrence_state_path)
+                    status["occurrence_resolution_state"] = occurrence_state.to_dict()
+                    if self.occurrence_method_arm == "a3":
+                        locator_statuses = _occurrence_locator_statuses(
+                            occurrence_state,
+                            observation_log.rows,
+                        )
+                        status["selected_occurrence_locators"] = list(
+                            locator_statuses
+                        )
+                        status["active_occurrence_locators"] = [
+                            row for row in locator_statuses if not row["inspected"]
+                        ]
+            a3_locator_inspection_pending = bool(
+                status.get("active_occurrence_locators")
+            )
             force_finalize = (
                 round_id > self.semantic_round_budget
                 or remaining <= 0
                 or occurrence_recovery_pending
-            ) and not closure_repair_active
+            ) and not closure_repair_active and not (
+                self.occurrence_method_arm == "a3"
+                and a3_locator_inspection_pending
+                and remaining > 0
+            )
             if self.controller_mode != "frozen_baseline":
                 status["closure_repair_active"] = closure_repair_active
                 status["closure_repair_count"] = closure_repair_count
             if force_finalize:
                 forced_decision_calls += 1
-                if occurrence_state is not None and occurrence_state.selection_required:
-                    if occurrence_state.selected_occurrence_id in set(
-                        occurrence_state.viable_occurrence_ids
-                    ):
+                if occurrence_state is not None and _occurrence_lifecycle_active(
+                    occurrence_state
+                ):
+                    if _occurrence_resolution_complete(occurrence_state):
                         occurrence_answer_final_calls += 1
                     else:
                         occurrence_selection_final_calls += 1
-            if occurrence_state is not None and occurrence_state.selection_required:
-                if occurrence_state.selected_occurrence_id in set(
-                    occurrence_state.viable_occurrence_ids
-                ):
+            if occurrence_state is not None and _occurrence_lifecycle_active(
+                occurrence_state
+            ):
+                if _occurrence_resolution_complete(occurrence_state):
                     final_retry_available = (
                         force_finalize
                         and occurrence_answer_final_calls
@@ -737,6 +782,24 @@ class VirtualVideoMultiRoundDriver:
                                 occurrence_state,
                                 require_selection=force_finalize,
                                 require_answer=force_finalize,
+                            )
+                        )
+                    if (
+                        self.occurrence_method_arm == "a3"
+                        and isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                    ):
+                        schema_errors.extend(
+                            _actionable_locator_errors(
+                                parsed_decision,
+                                tuple(
+                                    row
+                                    for row in tuple(
+                                        status.get("active_occurrence_locators", ())
+                                        or ()
+                                    )
+                                    if isinstance(row, Mapping)
+                                ),
+                                investigation_budget_remaining=remaining,
                             )
                         )
                     if self.evidence_state_mode == "runtime_derived":
@@ -937,14 +1000,20 @@ class VirtualVideoMultiRoundDriver:
                         if isinstance(operation, Mapping)
                     )
                 )
-                if occurrence_selection_committed:
+                if occurrence_selection_committed and (
+                    isinstance(occurrence_state, OccurrenceResolutionStateV1)
+                    or (
+                        isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                        and self.occurrence_method_arm == "a2-clean"
+                        and force_finalize
+                    )
+                ):
                     occurrence_recovery_pending = True
                 premature_occurrence_commit = bool(
                     occurrence_state is not None
                     and decision.action == "answer"
                     and decision.answer
-                    and len(occurrence_state.viable_occurrence_ids) > 1
-                    and not occurrence_state.selected_occurrence_id
+                    and _occurrence_answer_is_premature(occurrence_state)
                 )
                 trace.append(
                     {
@@ -976,10 +1045,24 @@ class VirtualVideoMultiRoundDriver:
                             if occurrence_state is not None
                             else None
                         ),
-                        "selected_occurrence_id": (
-                            occurrence_state.selected_occurrence_id
-                            if occurrence_state is not None
+                        "selected_occurrence_id": _selected_occurrence_id(
+                            occurrence_state
+                        ),
+                        "selected_occurrence_ids": list(
+                            _selected_occurrence_ids(occurrence_state)
+                        ),
+                        "active_occurrence_set_id": (
+                            occurrence_state.active_set_id
+                            if isinstance(
+                                occurrence_state, OccurrenceResolutionStateV2
+                            )
                             else ""
+                        ),
+                        "active_occurrence_locator_count": len(
+                            tuple(status.get("active_occurrence_locators", ()) or ())
+                        ),
+                        "occurrence_resolution_state_exposed": bool(
+                            "occurrence_resolution_state" in status
                         ),
                         "premature_occurrence_commit": premature_occurrence_commit,
                         "supporting_claim_ids": list(decision.supporting_claim_ids),
@@ -997,6 +1080,16 @@ class VirtualVideoMultiRoundDriver:
                         ),
                         "prompt_char_count": int(
                             decision_metadata.get("prompt_char_count", 0) or 0
+                        ),
+                        "prompt_digest": str(
+                            decision_metadata.get("prompt_digest", "") or ""
+                        ),
+                        "mechanical_status_digest": prompt_digest(
+                            json.dumps(
+                                to_jsonable(status),
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
                         ),
                         "prompt_schema_token_cost": int(
                             decision_metadata.get("prompt_schema_token_cost", 0) or 0
@@ -1543,13 +1636,203 @@ def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _ambiguous_occurrence_sets(
+    status: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    values: list[dict[str, Any]] = []
+    for raw_set in tuple(status.get("caption_occurrence_sets", ()) or ()):
+        if not isinstance(raw_set, Mapping):
+            continue
+        candidates = tuple(
+            candidate
+            for candidate in tuple(raw_set.get("candidates", ()) or ())
+            if isinstance(candidate, Mapping)
+            and str(candidate.get("occurrence_id", "") or "")
+        )
+        if len(candidates) < 2:
+            continue
+        values.append(
+            {
+                **dict(raw_set),
+                "semantic_target": list(raw_set.get("semantic_target", ()) or ()),
+                "candidates": [dict(candidate) for candidate in candidates],
+            }
+        )
+    return tuple(values)
+
+
+def _occurrence_lifecycle_active(
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2,
+) -> bool:
+    if isinstance(state, OccurrenceResolutionStateV1):
+        return state.selection_required
+    return state.activated
+
+
+def _occurrence_selection_required(
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2,
+) -> bool:
+    return state.selection_required or (
+        isinstance(state, OccurrenceResolutionStateV2) and state.search_required
+    )
+
+
+def _occurrence_resolution_complete(
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2,
+) -> bool:
+    if isinstance(state, OccurrenceResolutionStateV1):
+        return state.selected_occurrence_id in set(state.viable_occurrence_ids)
+    active = state.active_set
+    return bool(active is not None and active.resolution in {"selected", "no_match"})
+
+
+def _selected_occurrence_ids(
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2 | None,
+) -> tuple[str, ...]:
+    if isinstance(state, OccurrenceResolutionStateV1):
+        return (state.selected_occurrence_id,) if state.selected_occurrence_id else ()
+    if isinstance(state, OccurrenceResolutionStateV2):
+        return state.selected_occurrence_ids
+    return ()
+
+
+def _selected_occurrence_id(
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2 | None,
+) -> str:
+    selected = _selected_occurrence_ids(state)
+    return selected[-1] if selected else ""
+
+
+def _occurrence_answer_is_premature(
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2,
+) -> bool:
+    if isinstance(state, OccurrenceResolutionStateV1):
+        return bool(
+            len(state.viable_occurrence_ids) > 1
+            and not state.selected_occurrence_id
+        )
+    return state.selection_required or state.search_required
+
+
+def _occurrence_locator_statuses(
+    state: OccurrenceResolutionStateV2,
+    observation_rows: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    inspected = {
+        (
+            str(binding.get("locator_attempt_id", "") or ""),
+            str(binding.get("occurrence_id", "") or ""),
+        )
+        for row in observation_rows
+        if isinstance(row, Mapping)
+        for config in (row.get("sampling_config"),)
+        if isinstance(config, Mapping)
+        for binding in (config.get("candidate_binding"),)
+        if isinstance(binding, Mapping)
+    }
+    return tuple(
+        {
+            **locator,
+            "inspected": (
+                str(locator["locator_attempt_id"]),
+                str(locator["occurrence_id"]),
+            )
+            in inspected,
+            "status": (
+                "inspected"
+                if (
+                    str(locator["locator_attempt_id"]),
+                    str(locator["occurrence_id"]),
+                )
+                in inspected
+                else "selected_pending_inspection"
+            ),
+        }
+        for locator in state.active_locators()
+    )
+
+
+def _actionable_locator_errors(
+    decision: ReasonerDecision,
+    pending_locators: Sequence[Mapping[str, Any]],
+    *,
+    investigation_budget_remaining: int,
+) -> list[dict[str, Any]]:
+    if not pending_locators:
+        return []
+    pending = {
+        (
+            str(locator.get("locator_attempt_id", "") or ""),
+            str(locator.get("occurrence_id", "") or ""),
+        )
+        for locator in pending_locators
+    }
+    revises_resolution = any(
+        str(operation.get("op", operation.get("type", "")) or "").casefold()
+        in {"eliminate", "reopen", "defer", "no_match"}
+        for operation in decision.occurrence_ops
+        if isinstance(operation, Mapping)
+    )
+    if revises_resolution:
+        return []
+    if investigation_budget_remaining <= 0:
+        return [
+            {
+                "code": "occurrence_locator_budget_exhausted",
+                "pending_locator_count": len(pending),
+            }
+        ]
+    if decision.action != "investigate":
+        return [
+            {
+                "code": "occurrence_locator_inspection_required",
+                "pending_locator_count": len(pending),
+            }
+        ]
+    task_bindings = {
+        (task.locator_attempt_id, task.occurrence_id)
+        for task in decision.tasks
+        if task.inspection_mode == "window"
+        and task.locator_attempt_id
+        and task.occurrence_id
+    }
+    if not (task_bindings & pending):
+        return [
+            {
+                "code": "occurrence_locator_binding_required",
+                "pending_locator_count": len(pending),
+            }
+        ]
+    unbound_windows = [
+        task.query_id
+        for task in decision.tasks
+        if task.inspection_mode == "window"
+        and not (task.locator_attempt_id and task.occurrence_id)
+    ]
+    if unbound_windows:
+        return [
+            {
+                "code": "occurrence_locator_unbound_window_forbidden",
+                "requested_task_ids": unbound_windows,
+            }
+        ]
+    return []
+
+
 def _occurrence_answer_errors(
     decision: ReasonerDecision,
-    state: OccurrenceResolutionStateV1,
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2,
     *,
     require_selection: bool = False,
     require_answer: bool = False,
 ) -> list[dict[str, Any]]:
+    if isinstance(state, OccurrenceResolutionStateV2):
+        return _scoped_occurrence_answer_errors(
+            decision,
+            state,
+            require_resolution=require_selection,
+            require_answer=require_answer,
+        )
     viable = set(state.viable_occurrence_ids)
     submits_selection = any(
         str(operation.get("op", operation.get("type", "")) or "").casefold()
@@ -1594,15 +1877,74 @@ def _occurrence_answer_errors(
     ]
 
 
+def _scoped_occurrence_answer_errors(
+    decision: ReasonerDecision,
+    state: OccurrenceResolutionStateV2,
+    *,
+    require_resolution: bool,
+    require_answer: bool,
+) -> list[dict[str, Any]]:
+    active = state.active_set
+    if active is None:
+        return []
+    operation_names = {
+        str(operation.get("op", operation.get("type", "")) or "").casefold()
+        for operation in decision.occurrence_ops
+        if isinstance(operation, Mapping)
+    }
+    submits_resolution = bool(operation_names & {"select", "no_match"})
+    if active.resolution == "deferred":
+        if decision.action == "answer" and decision.answer:
+            return [
+                {
+                    "code": "occurrence_search_required",
+                    "set_id": active.set_id,
+                    "no_match_allowed": True,
+                }
+            ]
+        if require_resolution and "no_match" not in operation_names:
+            return [
+                {
+                    "code": "occurrence_no_match_required_at_finalization",
+                    "set_id": active.set_id,
+                }
+            ]
+        return []
+    if active.resolution == "unresolved":
+        if (
+            require_resolution
+            and not submits_resolution
+        ) or (decision.action == "answer" and decision.answer):
+            return [
+                {
+                    "code": "occurrence_resolution_required",
+                    "set_id": active.set_id,
+                    "viable_occurrence_count": len(active.viable_occurrence_ids),
+                    "selection_must_precede_answer": True,
+                    "no_match_allowed": True,
+                }
+            ]
+        return []
+    if require_answer and decision.action != "answer":
+        return [
+            {
+                "code": "occurrence_answer_required_after_resolution",
+                "set_id": active.set_id,
+                "resolution": active.resolution,
+            }
+        ]
+    return []
+
+
 def _occurrence_repair_available(
-    state: OccurrenceResolutionStateV1,
+    state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2,
     *,
     selection_final_calls: int,
     answer_final_calls: int,
 ) -> bool:
-    if not state.selection_required:
+    if not _occurrence_lifecycle_active(state):
         return False
-    if state.selected_occurrence_id in set(state.viable_occurrence_ids):
+    if _occurrence_resolution_complete(state):
         return answer_final_calls < _OCCURRENCE_ANSWER_FINAL_CALL_BUDGET
     return selection_final_calls < _OCCURRENCE_SELECTION_FINAL_CALL_BUDGET
 
@@ -2107,6 +2449,34 @@ def _control_retry_feedback(
         repair_rules.append(
             "The occurrence selection is already persisted and investigation is closed. Return action=answer now with no tasks and no occurrence_ops; do not revise the selected occurrence."
         )
+    if "occurrence_resolution_required" in codes:
+        repair_rules.append(
+            "Do not answer. Resolve only the active scoped occurrence set: return action=update_workspace with one or more select operations, or one no_match operation when none of that set's candidates fit. Every operation must copy the active set_id and visible occurrence_id exactly."
+        )
+    if "occurrence_search_required" in codes:
+        repair_rules.append(
+            "The active scoped set was deferred. Do not answer; issue a refined search_caption investigation, or persist no_match for that exact set_id when further search cannot resolve it."
+        )
+    if "occurrence_no_match_required_at_finalization" in codes:
+        repair_rules.append(
+            "Investigation is closing with a deferred set. Return action=update_workspace with a no_match occurrence operation for the active set_id, then answer in a later decision."
+        )
+    if "occurrence_answer_required_after_resolution" in codes:
+        repair_rules.append(
+            "The active scoped occurrence set is resolved. Return action=answer with no occurrence_ops; selected occurrences remain persisted."
+        )
+    if any(
+        code
+        in {
+            "occurrence_locator_inspection_required",
+            "occurrence_locator_binding_required",
+            "occurrence_locator_unbound_window_forbidden",
+        }
+        for code in codes
+    ):
+        repair_rules.append(
+            "Do not answer. Return action=investigate with a window task bound to exactly one pending active_occurrence_locator, copying both locator_attempt_id and occurrence_id. Do not mix in unbound window tasks."
+        )
     instruction = "Preserve the semantic intent and return one corrected Decision JSON object."
     if repair_rules:
         instruction += " Mechanical repair rules: " + " ".join(repair_rules)
@@ -2527,6 +2897,11 @@ def _mechanical_status(
             caption_occurrence_sets.append(
                 {
                     "attempt_id": str(row.get("attempt_id", "")),
+                    "semantic_target": [
+                        str(value)
+                        for value in tuple(config.get("queries", ()) or ())
+                        if str(value)
+                    ],
                     "status": str(occurrence_set.get("status", "") or ""),
                     "occurrence_ambiguous": bool(
                         occurrence_set.get("occurrence_ambiguous", False)
@@ -3118,17 +3493,6 @@ def _resolve_tasks(
             )
             continue
         task = cue_task or requested_task
-        task_error = _task_executability_error(task)
-        if task_error:
-            resolution_errors.append(_task_resolution_error(task, task_error))
-            groups.append(
-                {
-                    "requested_task": requested_task,
-                    "tasks": (),
-                    "error_start": error_start,
-                }
-            )
-            continue
         binding_error = validate_occurrence_material_binding(
             task,
             observation_rows,
@@ -3137,6 +3501,18 @@ def _resolve_tasks(
         )
         if binding_error is not None:
             resolution_errors.append(binding_error)
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
+            continue
+        task = _materialize_occurrence_bound_task(task, observation_rows)
+        task_error = _task_executability_error(task)
+        if task_error:
+            resolution_errors.append(_task_resolution_error(task, task_error))
             groups.append(
                 {
                     "requested_task": requested_task,
@@ -3524,6 +3900,60 @@ def validate_occurrence_material_binding(
                 neighborhood_tolerance_sec=float(neighborhood_tolerance_sec),
             )
     return None
+
+
+def _materialize_occurrence_bound_task(
+    task: InvestigationTask,
+    observation_rows: Sequence[Mapping[str, Any]],
+) -> InvestigationTask:
+    """Resolve a validated occurrence handle into an executable visual target."""
+    if not task.locator_attempt_id or not task.occurrence_id:
+        return task
+    locator = next(
+        (
+            row
+            for row in observation_rows
+            if str(row.get("attempt_id", "") or "") == task.locator_attempt_id
+        ),
+        None,
+    )
+    config = locator.get("sampling_config") if isinstance(locator, Mapping) else None
+    occurrence_set = config.get("occurrence_set") if isinstance(config, Mapping) else None
+    candidate = next(
+        (
+            value
+            for value in tuple(
+                occurrence_set.get("candidates", ())
+                if isinstance(occurrence_set, Mapping)
+                else ()
+            )
+            if isinstance(value, Mapping)
+            and str(value.get("occurrence_id", "") or "") == task.occurrence_id
+        ),
+        None,
+    )
+    if candidate is None:
+        return task
+    candidate_range = _time_range(candidate.get("time_range"))
+    candidate_segments = tuple(
+        str(value)
+        for value in tuple(candidate.get("segment_ids", ()) or ())
+        if str(value)
+    )
+    candidate_sources = tuple(
+        str(value)
+        for value in tuple(candidate.get("source_video_ids", ()) or ())
+        if str(value)
+    )
+    return replace(
+        task,
+        segment_id=(
+            task.segment_id
+            or (candidate_segments[0] if len(candidate_segments) == 1 else "")
+        ),
+        time_range=task.time_range or candidate_range,
+        source_video_ids=task.source_video_ids or candidate_sources,
+    )
 
 
 def _task_executability_error(task: InvestigationTask) -> str:

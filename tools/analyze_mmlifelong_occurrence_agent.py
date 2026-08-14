@@ -75,17 +75,45 @@ def collect_rows(
                 if isinstance(row, Mapping)
             )
             candidates = _occurrence_candidates(observations)
-            selected_id = _selected_occurrence_id(trace)
-            selected_range = candidates.get(selected_id)
+            selected_ids = _selected_occurrence_ids(trace)
+            selected_ranges = tuple(
+                candidates[occurrence_id]
+                for occurrence_id in selected_ids
+                if occurrence_id in candidates
+            )
             candidate_recall = bool(clues) and any(
                 _overlap(candidate_range, clue)
                 for candidate_range in candidates.values()
                 for clue in clues
             )
             selected_correct = bool(
-                selected_range
-                and any(_overlap(selected_range, clue) for clue in clues)
+                selected_ranges
+                and any(
+                    _overlap(selected_range, clue)
+                    for selected_range in selected_ranges
+                    for clue in clues
+                )
             )
+            candidate_clue_recall = _interval_recall(
+                tuple(candidates.values()), clues
+            )
+            selected_clue_recall = _interval_recall(selected_ranges, clues)
+            state = _read_json(run_dir / "occurrence_resolution_state.json")
+            final_selected_pairs = _final_selected_pairs(state)
+            executed_binding_pairs, bound_visual_ranges = _bound_visual_evidence(
+                observations
+            )
+            selected_locator_usage_rate = (
+                len(final_selected_pairs & executed_binding_pairs)
+                / len(final_selected_pairs)
+                if final_selected_pairs
+                else None
+            )
+            abstained = bool(
+                state.get("active_resolution") == "no_match"
+                or _accepted_occurrence_op(trace, "no_match")
+            )
+            deferred = _accepted_occurrence_op(trace, "defer")
             answer_eval = evaluation.get("answer", {})
             grounding = evaluation.get("reference_grounding", {})
             metrics = runtime.get("runtime_metrics", {})
@@ -93,6 +121,14 @@ def collect_rows(
             ref_300 = grounding.get("ref_300")
             eligibility_round = _event_round(
                 trace, "occurrence_treatment_eligible"
+            )
+            activation_round = _event_round(
+                trace, "occurrence_arbitration_activated"
+            )
+            treatment_cutoff_round = (
+                activation_round
+                if arm in {"a2-clean", "a3"}
+                else eligibility_round
             )
             exposure = _event(trace, "occurrence_treatment_exposed")
             raw_no_oracle_audit = runtime.get("no_oracle_runtime_gate", {})
@@ -122,17 +158,40 @@ def collect_rows(
                     "visual_windows": _visual_window_count(observations),
                     "candidate_count": len(candidates),
                     "candidate_recall": candidate_recall,
-                    "selected_occurrence_id": selected_id or None,
+                    "candidate_clue_recall": candidate_clue_recall,
+                    "selected_occurrence_ids": list(selected_ids),
+                    "selected_occurrence_count": len(selected_ids),
                     "selected_occurrence_correct": selected_correct,
-                    "osa_eligible": arm == "a2" and candidate_recall,
+                    "selected_clue_recall": selected_clue_recall,
+                    "osa_eligible": arm in {"a2", "a2-clean", "a3"}
+                    and candidate_recall,
                     "osa_correct": (
                         selected_correct
-                        if arm == "a2" and candidate_recall
+                        if arm in {"a2", "a2-clean", "a3"}
+                        and candidate_recall
                         else None
                     ),
+                    "candidate_absent": bool(clues) and not candidate_recall,
+                    "abstained_no_match": abstained,
+                    "deferred_occurrence_set": deferred,
+                    "abstention_eligible": arm in {"a2-clean", "a3"}
+                    and bool(clues)
+                    and not candidate_recall,
+                    "abstention_correct": (
+                        abstained
+                        if arm in {"a2-clean", "a3"}
+                        and bool(clues)
+                        and not candidate_recall
+                        else None
+                    ),
+                    "false_abstention": bool(candidate_recall and abstained),
                     "clue_count": len(clues),
                     "occurrence_handle_usage_rate": _handle_usage_rate(
-                        trace, eligibility_round
+                        trace, treatment_cutoff_round
+                    ),
+                    "selected_locator_usage_rate": selected_locator_usage_rate,
+                    "bound_visual_clue_recall": _interval_recall(
+                        bound_visual_ranges, clues
                     ),
                     "premature_occurrence_commit": any(
                         bool(row.get("premature_occurrence_commit"))
@@ -140,8 +199,22 @@ def collect_rows(
                         if row.get("type") == "reasoner_decision"
                     ),
                     "treatment_eligible_round": eligibility_round,
+                    "arbitration_activation_round": activation_round,
                     "pre_treatment_signature": _pre_treatment_signature(
-                        trace, eligibility_round
+                        trace, treatment_cutoff_round
+                    ),
+                    "pre_treatment_prompt_digests": _pre_treatment_prompt_digests(
+                        trace, treatment_cutoff_round
+                    ),
+                    "pre_activation_state_exposure": any(
+                        row.get("type") == "reasoner_decision"
+                        and row.get("occurrence_resolution_state_exposed")
+                        and (
+                            activation_round is None
+                            or int(row.get("round", 0) or 0)
+                            < activation_round
+                        )
+                        for row in trace
                     ),
                     "treatment_exposure": dict(exposure) if exposure else None,
                     "treatment_retrieval_identity_digest": (
@@ -185,49 +258,22 @@ def build_report(
         arm: _aggregate_arm(tuple(by_arm[arm].values())) for arm in arms
     }
     comparisons = {}
+    comparison_pairs: list[tuple[str, str]] = []
     if "a0" in by_arm:
         for arm in arms:
             if arm == "a0":
                 continue
-            paired_ids = sorted(set(by_arm["a0"]) & set(by_arm[arm]))
-            comparable_ids = [
-                case_id
-                for case_id in paired_ids
-                if by_arm["a0"][case_id].get("pre_treatment_signature")
-                is not None
-                and by_arm[arm][case_id].get("pre_treatment_signature")
-                is not None
-            ]
-            matched_ids = [
-                case_id
-                for case_id in comparable_ids
-                if by_arm["a0"][case_id]["pre_treatment_signature"]
-                == by_arm[arm][case_id]["pre_treatment_signature"]
-            ]
-            comparisons[f"{arm}-a0"] = {
-                **_paired_score_delta(
-                    by_arm[arm],
-                    by_arm["a0"],
-                    paired_ids,
-                    bootstrap_samples=bootstrap_samples,
-                    seed=seed,
-                ),
-                "pre_treatment_comparable_count": len(comparable_ids),
-                "pre_treatment_divergence_count": len(comparable_ids)
-                - len(matched_ids),
-                "pre_treatment_divergence_rate": (
-                    (len(comparable_ids) - len(matched_ids)) / len(comparable_ids)
-                    if comparable_ids
-                    else None
-                ),
-                "matched_pre_treatment_subset": _paired_score_delta(
-                    by_arm[arm],
-                    by_arm["a0"],
-                    matched_ids,
-                    bootstrap_samples=bootstrap_samples,
-                    seed=seed + 1,
-                ),
-            }
+            comparison_pairs.append((arm, "a0"))
+    for left, right in (("a2-clean", "a1"), ("a3", "a2-clean")):
+        if left in by_arm and right in by_arm:
+            comparison_pairs.append((left, right))
+    for index, (left, right) in enumerate(dict.fromkeys(comparison_pairs)):
+        comparisons[f"{left}-{right}"] = _paired_comparison(
+            by_arm[left],
+            by_arm[right],
+            bootstrap_samples=bootstrap_samples,
+            seed=seed + index * 7,
+        )
     text_parity = _text_parity(by_arm)
     structural_checks = {
         "arms_present": bool(arms),
@@ -249,15 +295,27 @@ def build_report(
             for arm in ("a1-flat", "a1")
             for row in by_arm.get(arm, {}).values()
         ),
+        "no_pre_activation_occurrence_state": all(
+            not row.get("pre_activation_state_exposure")
+            for arm in ("a2-clean", "a3")
+            for row in by_arm.get(arm, {}).values()
+        ),
+        "a3_selected_locators_executed": all(
+            row.get("selected_locator_usage_rate") in {None, 1.0}
+            for row in by_arm.get("a3", {}).values()
+        ),
     }
     return {
-        "schema_version": "MMLifelongOccurrenceAgentReportV1",
+        "schema_version": "MMLifelongOccurrenceAgentReportV2",
         "definitions": {
             "verified_correct": "judge score == 1 and runtime verification_status == verified",
             "correct_and_ref_300": "judge score == 1 and reference_grounding.ref_300 is true",
             "pre_treatment_divergence": "A0 and treatment action/task-query signatures differ before each run first exposes an occurrence candidate set",
             "occurrence_selection_accuracy": "selected occurrence overlaps at least one gold clue, conditioned on any natural candidate overlapping a clue",
             "occurrence_handle_usage_rate": "post-eligibility visual-window tasks with occurrence_id divided by all post-eligibility visual-window tasks",
+            "abstention_accuracy": "no_match rate conditioned on no retrieved candidate overlapping any gold clue",
+            "selected_locator_usage_rate": "final selected (locator_attempt_id, occurrence_id) pairs with executed candidate-bound visual observations",
+            "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
         },
         "arms": arm_metrics,
         "comparisons": comparisons,
@@ -292,12 +350,49 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             row.get("correct_and_ref_300") for row in scored
         ),
         "candidate_recall": _mean_bool(row.get("candidate_recall") for row in rows),
+        "candidate_clue_recall": _optional_mean(
+            row.get("candidate_clue_recall") for row in rows
+        ),
         "occurrence_selection_accuracy": _mean_bool(
             row.get("osa_correct") for row in osa
         ),
         "osa_eligible_count": len(osa),
+        "selected_clue_recall": _optional_mean(
+            row.get("selected_clue_recall") for row in osa
+        ),
+        "multi_selection_rate": _mean_bool(
+            int(row.get("selected_occurrence_count", 0) or 0) > 1
+            for row in rows
+            if int(row.get("selected_occurrence_count", 0) or 0) > 0
+        ),
+        "abstention_accuracy": _mean_bool(
+            row.get("abstention_correct")
+            for row in rows
+            if row.get("abstention_eligible")
+        ),
+        "abstention_eligible_count": sum(
+            bool(row.get("abstention_eligible")) for row in rows
+        ),
+        "false_abstention_rate": _mean_bool(
+            row.get("false_abstention")
+            for row in rows
+            if row.get("osa_eligible")
+        ),
+        "defer_rate": _mean_bool(
+            row.get("deferred_occurrence_set") for row in rows
+        ),
         "occurrence_handle_usage_rate": _optional_mean(
             row.get("occurrence_handle_usage_rate") for row in rows
+        ),
+        "selected_locator_usage_rate": _optional_mean(
+            row.get("selected_locator_usage_rate") for row in rows
+        ),
+        "bound_visual_clue_recall": _optional_mean(
+            row.get("bound_visual_clue_recall") for row in rows
+        ),
+        "arbitration_activation_rate": _mean_bool(
+            row.get("arbitration_activation_round") is not None
+            for row in rows
         ),
         "premature_commit_rate": _mean_bool(
             row.get("premature_occurrence_commit") for row in rows
@@ -350,6 +445,73 @@ def _paired_score_delta(
     }
 
 
+def _paired_comparison(
+    left: Mapping[str, Mapping[str, Any]],
+    right: Mapping[str, Mapping[str, Any]],
+    *,
+    bootstrap_samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    paired_ids = sorted(set(left) & set(right))
+    comparable_ids = [
+        case_id
+        for case_id in paired_ids
+        if left[case_id].get("pre_treatment_signature") is not None
+        and right[case_id].get("pre_treatment_signature") is not None
+    ]
+    matched_ids = [
+        case_id
+        for case_id in comparable_ids
+        if left[case_id]["pre_treatment_signature"]
+        == right[case_id]["pre_treatment_signature"]
+    ]
+    prompt_comparable_ids = [
+        case_id
+        for case_id in paired_ids
+        if left[case_id].get("pre_treatment_prompt_digests") is not None
+        and right[case_id].get("pre_treatment_prompt_digests") is not None
+    ]
+    prompt_matched_ids = [
+        case_id
+        for case_id in prompt_comparable_ids
+        if left[case_id]["pre_treatment_prompt_digests"]
+        == right[case_id]["pre_treatment_prompt_digests"]
+    ]
+    return {
+        **_paired_score_delta(
+            left,
+            right,
+            paired_ids,
+            bootstrap_samples=bootstrap_samples,
+            seed=seed,
+        ),
+        "pre_treatment_comparable_count": len(comparable_ids),
+        "pre_treatment_divergence_count": len(comparable_ids) - len(matched_ids),
+        "pre_treatment_divergence_rate": (
+            (len(comparable_ids) - len(matched_ids)) / len(comparable_ids)
+            if comparable_ids
+            else None
+        ),
+        "pre_treatment_prompt_comparable_count": len(prompt_comparable_ids),
+        "pre_treatment_prompt_divergence_count": (
+            len(prompt_comparable_ids) - len(prompt_matched_ids)
+        ),
+        "pre_treatment_prompt_divergence_rate": (
+            (len(prompt_comparable_ids) - len(prompt_matched_ids))
+            / len(prompt_comparable_ids)
+            if prompt_comparable_ids
+            else None
+        ),
+        "matched_pre_treatment_subset": _paired_score_delta(
+            left,
+            right,
+            matched_ids,
+            bootstrap_samples=bootstrap_samples,
+            seed=seed + 1,
+        ),
+    }
+
+
 def _pre_treatment_signature(
     trace: Sequence[Mapping[str, Any]], cutoff_round: int | None
 ) -> list[dict[str, Any]] | None:
@@ -370,6 +532,19 @@ def _pre_treatment_signature(
                 if isinstance(task, Mapping)
             ],
         }
+        for row in trace
+        if row.get("type") == "reasoner_decision"
+        and int(row.get("round", 0) or 0) < cutoff_round
+    ]
+
+
+def _pre_treatment_prompt_digests(
+    trace: Sequence[Mapping[str, Any]], cutoff_round: int | None
+) -> list[str] | None:
+    if cutoff_round is None:
+        return None
+    return [
+        str(row.get("prompt_digest", "") or "")
         for row in trace
         if row.get("type") == "reasoner_decision"
         and int(row.get("round", 0) or 0) < cutoff_round
@@ -422,14 +597,75 @@ def _occurrence_candidates(
     return candidates
 
 
-def _selected_occurrence_id(trace: Sequence[Mapping[str, Any]]) -> str:
-    selected = ""
+def _selected_occurrence_ids(
+    trace: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    selected: tuple[str, ...] = ()
     for row in trace:
-        if row.get("type") == "reasoner_decision" and (
-            "selected_occurrence_id" in row
+        if row.get("type") != "reasoner_decision":
+            continue
+        raw_selected = row.get("selected_occurrence_ids")
+        if isinstance(raw_selected, Sequence) and not isinstance(
+            raw_selected, (str, bytes)
         ):
-            selected = str(row.get("selected_occurrence_id", "") or "")
+            selected = tuple(
+                dict.fromkeys(str(value) for value in raw_selected if str(value))
+            )
+        elif "selected_occurrence_id" in row:
+            value = str(row.get("selected_occurrence_id", "") or "")
+            selected = (value,) if value else ()
     return selected
+
+
+def _accepted_occurrence_op(
+    trace: Sequence[Mapping[str, Any]], op_name: str
+) -> bool:
+    expected = str(op_name).casefold()
+    return any(
+        row.get("type") == "reasoner_decision"
+        and row.get("occurrence_ops_accepted") is not False
+        and any(
+            str(operation.get("op", operation.get("type", "")) or "").casefold()
+            == expected
+            for operation in tuple(row.get("occurrence_ops", ()) or ())
+            if isinstance(operation, Mapping)
+        )
+        for row in trace
+    )
+
+
+def _final_selected_pairs(state: Mapping[str, Any]) -> set[tuple[str, str]]:
+    return {
+        (str(raw_set.get("set_id", "") or ""), str(occurrence_id))
+        for raw_set in tuple(state.get("sets", ()) or ())
+        if isinstance(raw_set, Mapping) and raw_set.get("set_id")
+        for occurrence_id in tuple(raw_set.get("selected_occurrence_ids", ()) or ())
+        if str(occurrence_id)
+    }
+
+
+def _bound_visual_evidence(
+    observations: Sequence[Mapping[str, Any]],
+) -> tuple[set[tuple[str, str]], tuple[tuple[float, float], ...]]:
+    pairs: set[tuple[str, str]] = set()
+    ranges: list[tuple[float, float]] = []
+    for row in observations:
+        config = row.get("sampling_config")
+        binding = config.get("candidate_binding") if isinstance(config, Mapping) else None
+        if not isinstance(binding, Mapping):
+            continue
+        locator_attempt_id = str(binding.get("locator_attempt_id", "") or "")
+        occurrence_id = str(binding.get("occurrence_id", "") or "")
+        if locator_attempt_id and occurrence_id:
+            pairs.add((locator_attempt_id, occurrence_id))
+        raw_range = binding.get("candidate_range", ())
+        if (
+            isinstance(raw_range, Sequence)
+            and not isinstance(raw_range, (str, bytes))
+            and len(raw_range) == 2
+        ):
+            ranges.append((float(raw_range[0]), float(raw_range[1])))
+    return pairs, tuple(ranges)
 
 
 def _first_exposed_retrieval_identity(
@@ -543,6 +779,18 @@ def _overlap(
     return left[0] <= right[1] and right[0] <= left[1]
 
 
+def _interval_recall(
+    predictions: Sequence[tuple[float, float]],
+    targets: Sequence[tuple[float, float]],
+) -> float | None:
+    if not targets:
+        return None
+    return sum(
+        any(_overlap(prediction, target) for prediction in predictions)
+        for target in targets
+    ) / len(targets)
+
+
 def _optional_mean(values: Iterable[Any]) -> float | None:
     normalized = [float(value) for value in values if isinstance(value, (int, float))]
     return mean(normalized) if normalized else None
@@ -567,7 +815,14 @@ def _bootstrap_mean_ci(
 
 
 def _arm_sort_key(arm: str) -> tuple[int, str]:
-    order = {"a0": 0, "a1-flat": 1, "a1": 2, "a2": 3}
+    order = {
+        "a0": 0,
+        "a1-flat": 1,
+        "a1": 2,
+        "a2": 3,
+        "a2-clean": 4,
+        "a3": 5,
+    }
     return order.get(arm, 99), arm
 
 
@@ -577,8 +832,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         f"Structural gate: **{'PASS' if report['structural_gate_passed'] else 'FAIL'}**",
         "",
-        "| Arm | N | Mean | Exact | Verified | Correct & Ref@300 | Candidate recall | OSA | Handle use | Premature | Frames | VLM calls |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Arm | N | Mean | Exact | Verified | Candidate recall | OSA | Abstain | Locator use | Bound visual recall | Premature | Frames | VLM calls |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm, metrics in report["arms"].items():
         lines.append(
@@ -590,10 +845,11 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                     _fmt(metrics["mean_score"]),
                     _fmt(metrics["exact_correct_rate"]),
                     _fmt(metrics["verified_correct_rate"]),
-                    _fmt(metrics["correct_and_ref_300_rate"]),
                     _fmt(metrics["candidate_recall"]),
                     _fmt(metrics["occurrence_selection_accuracy"]),
-                    _fmt(metrics["occurrence_handle_usage_rate"]),
+                    _fmt(metrics["abstention_accuracy"]),
+                    _fmt(metrics["selected_locator_usage_rate"]),
+                    _fmt(metrics["bound_visual_clue_recall"]),
                     _fmt(metrics["premature_commit_rate"]),
                     _fmt(metrics["mean_visual_frames"]),
                     _fmt(metrics["mean_vlm_calls"]),
@@ -607,7 +863,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"- {name}: delta {_fmt(comparison['mean_score_delta'])}, "
             f"95% CI [{_fmt(comparison['ci95_low'])}, {_fmt(comparison['ci95_high'])}], "
             f"W/T/L {comparison['wins']}/{comparison['ties']}/{comparison['losses']}; "
-            f"pre-treatment divergence {_fmt(comparison['pre_treatment_divergence_rate'])}."
+            f"pre-treatment action divergence {_fmt(comparison['pre_treatment_divergence_rate'])}, "
+            f"prompt divergence {_fmt(comparison['pre_treatment_prompt_divergence_rate'])}."
         )
     lines.extend(["", "## Gates", ""])
     for name, value in report["structural_checks"].items():

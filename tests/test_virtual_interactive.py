@@ -216,6 +216,7 @@ def test_runtime_derived_prompt_uses_semantic_handles_without_state_transactions
     assert len(prompt) < 6000
     metadata = reasoner.consume_decision_metadata()
     assert 0 < metadata["prompt_schema_token_cost"] < 1000
+    assert len(metadata["prompt_digest"]) == 20
 
 
 def test_runtime_reasoner_accepts_occurrence_only_window_task(tmp_path: Path) -> None:

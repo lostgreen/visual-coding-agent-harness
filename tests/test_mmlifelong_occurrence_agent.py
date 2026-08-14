@@ -9,14 +9,18 @@ from vcah.caption_schema import stable_digest
 from vcah.occurrence_agent import (
     OccurrencePacketTransform,
     OccurrenceResolutionStateV1,
+    OccurrenceResolutionStateV2,
     assert_no_oracle_packet,
     candidate_card_excerpt_digest,
     validate_occurrence_method_configuration,
 )
 from vcah.interactive_agents import _frozen_reasoner_prompt
 from vcah.multiround import (
+    InvestigationTask,
     ReasonerDecision,
+    _actionable_locator_errors,
     _occurrence_answer_errors,
+    _occurrence_locator_statuses,
     _occurrence_treatment_surface,
     _visible_occurrence_ids,
 )
@@ -188,6 +192,277 @@ def test_a2_occurrence_state_preserves_previously_exposed_ids() -> None:
         ({"op": "select", "occurrence_id": "occ_1"},)
     )["accepted"] is True
     assert state.selected_occurrence_id == "occ_1"
+
+
+def test_a2_clean_activates_only_for_ambiguous_scoped_sets() -> None:
+    state = OccurrenceResolutionStateV2()
+    assert state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_single",
+                "semantic_target": ["single target"],
+                "candidates": [{"occurrence_id": "occ_1"}],
+            },
+        )
+    ) is False
+    assert state.activated is False
+
+    assert state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_ambiguous",
+                "semantic_target": ["ambiguous target"],
+                "candidates": [
+                    {"occurrence_id": "occ_2", "time_range": [10, 20]},
+                    {"occurrence_id": "occ_3", "time_range": [30, 40]},
+                ],
+            },
+        )
+    ) is True
+    assert state.activated is True
+    assert state.active_set_id == "attempt_ambiguous"
+    assert state.selection_required is True
+
+
+def test_a2_clean_keeps_locator_attempt_sets_separate() -> None:
+    state = OccurrenceResolutionStateV2()
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_tiger",
+                "semantic_target": ["tiger encounter"],
+                "candidates": [
+                    {"occurrence_id": "tiger_1"},
+                    {"occurrence_id": "tiger_2"},
+                ],
+            },
+        )
+    )
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_item",
+                "semantic_target": ["item acquisition"],
+                "candidates": [
+                    {"occurrence_id": "item_1"},
+                    {"occurrence_id": "item_2"},
+                ],
+            },
+        )
+    )
+
+    assert set(state.sets) == {"attempt_tiger", "attempt_item"}
+    assert state.sets["attempt_tiger"].resolution == "deferred"
+    assert state.sets["attempt_tiger"].viable_occurrence_ids == (
+        "tiger_1",
+        "tiger_2",
+    )
+    assert state.sets["attempt_item"].viable_occurrence_ids == (
+        "item_1",
+        "item_2",
+    )
+    rejected = state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_item",
+                "occurrence_id": "tiger_1",
+            },
+        )
+    )
+    assert rejected["accepted"] is False
+    assert rejected["errors"][0]["code"] == "occurrence_id_not_in_set"
+
+
+def test_a2_clean_supports_abstention_and_multiple_selections() -> None:
+    state = OccurrenceResolutionStateV2()
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_order",
+                "semantic_target": ["boss order"],
+                "candidates": [
+                    {"occurrence_id": "boss_1", "time_range": [1, 2]},
+                    {"occurrence_id": "boss_2", "time_range": [3, 4]},
+                    {"occurrence_id": "boss_3", "time_range": [5, 6]},
+                ],
+            },
+        )
+    )
+    assert state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_order",
+                "occurrence_id": "boss_1",
+            },
+            {
+                "op": "select",
+                "set_id": "attempt_order",
+                "occurrence_id": "boss_3",
+            },
+        )
+    )["accepted"] is True
+    assert state.selected_occurrence_ids == ("boss_1", "boss_3")
+    assert len(state.active_locators()) == 2
+
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_missing",
+                "semantic_target": ["missing event"],
+                "candidates": [
+                    {"occurrence_id": "wrong_1"},
+                    {"occurrence_id": "wrong_2"},
+                ],
+            },
+        )
+    )
+    assert state.apply_ops(
+        ({"op": "defer", "set_id": "attempt_missing"},)
+    )["accepted"] is True
+    assert state.search_required is True
+    errors = _occurrence_answer_errors(
+        ReasonerDecision(action="answer", answer="answer"), state
+    )
+    assert [error["code"] for error in errors] == ["occurrence_search_required"]
+    assert state.apply_ops(
+        ({"op": "no_match", "set_id": "attempt_missing"},)
+    )["accepted"] is True
+    assert _occurrence_answer_errors(
+        ReasonerDecision(action="answer", answer="answer"), state
+    ) == []
+
+
+def test_a3_requires_selected_locator_binding_before_answer() -> None:
+    state = OccurrenceResolutionStateV2()
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_locator",
+                "semantic_target": ["target event"],
+                "candidates": [
+                    {"occurrence_id": "occ_1", "time_range": [10, 20]},
+                    {"occurrence_id": "occ_2", "time_range": [30, 40]},
+                ],
+            },
+        )
+    )
+    state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_locator",
+                "occurrence_id": "occ_2",
+            },
+        )
+    )
+    pending = _occurrence_locator_statuses(state, ())
+    assert pending[0]["status"] == "selected_pending_inspection"
+    assert [
+        error["code"]
+        for error in _actionable_locator_errors(
+            ReasonerDecision(action="answer", answer="answer"),
+            pending,
+            investigation_budget_remaining=1,
+        )
+    ] == ["occurrence_locator_inspection_required"]
+    unbound = ReasonerDecision(
+        action="investigate",
+        tasks=(
+            InvestigationTask(
+                query_id="inspect",
+                goal="inspect target",
+                time_range=(30, 40),
+            ),
+        ),
+    )
+    assert [
+        error["code"]
+        for error in _actionable_locator_errors(
+            unbound,
+            pending,
+            investigation_budget_remaining=1,
+        )
+    ] == ["occurrence_locator_binding_required"]
+    bound = ReasonerDecision(
+        action="investigate",
+        tasks=(
+            InvestigationTask(
+                query_id="inspect",
+                goal="inspect target",
+                occurrence_id="occ_2",
+                locator_attempt_id="attempt_locator",
+            ),
+        ),
+    )
+    assert _actionable_locator_errors(
+        bound,
+        pending,
+        investigation_budget_remaining=1,
+    ) == []
+
+    inspected = _occurrence_locator_statuses(
+        state,
+        (
+            {
+                "sampling_config": {
+                    "candidate_binding": {
+                        "locator_attempt_id": "attempt_locator",
+                        "occurrence_id": "occ_2",
+                    }
+                }
+            },
+        ),
+    )
+    assert inspected[0]["status"] == "inspected"
+    assert inspected[0]["inspected"] is True
+
+
+def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
+    base = {"question": "q", "options": {}, "mechanical_status": {}}
+    baseline_prompt = _frozen_reasoner_prompt(base)
+    assert "Scoped occurrence arbitration" not in baseline_prompt
+
+    scoped_state = {
+        "schema_version": "OccurrenceResolutionStateV2",
+        "active_set_id": "attempt_locator",
+        "selection_required": True,
+        "search_required": False,
+        "active_resolution": "unresolved",
+        "selected_occurrence_ids": [],
+        "sets": [],
+    }
+    scoped_prompt = _frozen_reasoner_prompt(
+        {
+            **base,
+            "mechanical_status": {"occurrence_resolution_state": scoped_state},
+        }
+    )
+    assert "Scoped occurrence arbitration is enabled" in scoped_prompt
+    assert '"set_id":"attempt_visible_id"' in scoped_prompt
+    assert "no_match" in scoped_prompt
+
+    actionable_prompt = _frozen_reasoner_prompt(
+        {
+            **base,
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    **scoped_state,
+                    "selection_required": False,
+                    "active_resolution": "selected",
+                    "selected_occurrence_ids": ["occ_2"],
+                },
+                "active_occurrence_locators": [
+                    {
+                        "locator_attempt_id": "attempt_locator",
+                        "occurrence_id": "occ_2",
+                    }
+                ],
+            },
+        }
+    )
+    assert "copy both locator_attempt_id and occurrence_id" in actionable_prompt
 
 
 def test_grouped_and_flat_treatment_surfaces_have_text_parity(tmp_path) -> None:

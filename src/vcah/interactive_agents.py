@@ -400,6 +400,7 @@ class WorkspaceReasoner:
         if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes)):
             payload = {}
         self._last_plan_metadata = {
+            "prompt_digest": prompt_digest(prompt),
             "prompt_char_count": len(prompt),
             "prompt_schema_token_cost": _prompt_schema_token_estimate(prompt),
             "plan_payload_valid": bool(payload),
@@ -488,6 +489,7 @@ class WorkspaceReasoner:
         if not payload:
             decision_errors.append({"code": "invalid_json_or_missing_action"})
         self._last_decision_metadata = {
+            "prompt_digest": prompt_digest(prompt),
             "decision_payload_valid": bool(payload),
             "decision_schema_errors": decision_errors,
             "task_resolution_errors": task_errors,
@@ -1995,6 +1997,21 @@ def _occurrence_resolution_prompt_rule(
     state = mechanical_status.get("occurrence_resolution_state")
     if not isinstance(state, Mapping):
         return ""
+    if str(state.get("schema_version", "")) == "OccurrenceResolutionStateV2":
+        return (
+            "Scoped occurrence arbitration is enabled because an ambiguous candidate set is now exposed. Each set_id "
+            "is one Caption locator attempt for one semantic target; never compare, eliminate, or select candidates "
+            "across different sets. Use top-level occurrence_ops with an explicit set_id. Candidate operations are "
+            '[{"op":"keep|eliminate|select|reopen","set_id":"attempt_...",'
+            '"occurrence_id":"occ_..."}]. '
+            "You may select more than one occurrence in a set when the question genuinely requires multiple events. "
+            "If the current candidates are insufficient, use defer for NEED_MORE_SEARCH, then issue a new Caption search; "
+            "defer does not permit answering. Use no_match only when you judge that no candidate in this set is suitable: "
+            '[{"op":"defer|no_match","set_id":"attempt_..."}]. '
+            "A selection or no_match resolution is a separate committed step before a later answer. Runtime validates "
+            "only scoped foreign keys and lifecycle transitions; it never chooses an occurrence or evaluates semantic "
+            "correctness. The state is locator-only and never answer support.\n"
+        )
     return (
         "Explicit occurrence arbitration is enabled. Use top-level occurrence_ops with only currently visible IDs: "
         '[{"op":"keep|eliminate|select|reopen","occurrence_id":"occ_..."}]. '
@@ -2022,19 +2039,41 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     occurrence_state = (
         occurrence_state if isinstance(occurrence_state, Mapping) else {}
     )
-    viable_occurrence_ids = tuple(
-        occurrence_state.get("viable_occurrence_ids", ()) or ()
+    occurrence_state_version = str(
+        occurrence_state.get("schema_version", "") or ""
     )
-    selected_occurrence_id = str(
-        occurrence_state.get("selected_occurrence_id", "") or ""
-    )
-    occurrence_selection_pending = (
-        bool(occurrence_state.get("selection_required"))
-        and not selected_occurrence_id
-    )
-    occurrence_answer_pending = (
-        bool(occurrence_state.get("selection_required"))
-        and selected_occurrence_id in viable_occurrence_ids
+    if occurrence_state_version == "OccurrenceResolutionStateV2":
+        selected_occurrence_ids = tuple(
+            occurrence_state.get("selected_occurrence_ids", ()) or ()
+        )
+        occurrence_selection_pending = bool(
+            occurrence_state.get("selection_required")
+        )
+        occurrence_search_pending = bool(occurrence_state.get("search_required"))
+        occurrence_answer_pending = str(
+            occurrence_state.get("active_resolution", "") or ""
+        ) in {"selected", "no_match"}
+    else:
+        viable_occurrence_ids = tuple(
+            occurrence_state.get("viable_occurrence_ids", ()) or ()
+        )
+        selected_occurrence_id = str(
+            occurrence_state.get("selected_occurrence_id", "") or ""
+        )
+        selected_occurrence_ids = (
+            (selected_occurrence_id,) if selected_occurrence_id else ()
+        )
+        occurrence_selection_pending = (
+            bool(occurrence_state.get("selection_required"))
+            and not selected_occurrence_id
+        )
+        occurrence_search_pending = False
+        occurrence_answer_pending = (
+            bool(occurrence_state.get("selection_required"))
+            and selected_occurrence_id in viable_occurrence_ids
+        )
+    active_occurrence_locators = tuple(
+        mechanical_status.get("active_occurrence_locators", ()) or ()
     )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
@@ -2081,22 +2120,57 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
             "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
         )
-    if occurrence_answer_pending and final:
+    if active_occurrence_locators:
         action_rule = (
-            "The occurrence selection is already persisted and investigation is closed. "
-            "Return action=answer only with no tasks and no occurrence_ops; do not revise "
-            "the selected occurrence."
+            "Before answering, inspect at least one pending active occurrence locator with action=investigate and a "
+            "window task; copy both locator_attempt_id and occurrence_id exactly from active_occurrence_locators. "
+            "Do not replace it with an unbound timestamp or an unrelated search."
         )
+    elif occurrence_search_pending and final:
+        action_rule = (
+            "Investigation is closed. Resolve the deferred active set with occurrence_ops no_match and no answer; a "
+            "separate answer decision will follow."
+        )
+    elif occurrence_search_pending:
+        action_rule = (
+            "The active occurrence set was deferred. Continue with a refined search_caption task, or commit no_match "
+            "for that set if no listed candidate is suitable. Do not answer while NEED_MORE_SEARCH is active."
+        )
+    elif occurrence_answer_pending and final:
+        if occurrence_state_version == "OccurrenceResolutionStateV2":
+            action_rule = (
+                "The occurrence resolution is already persisted and investigation is closed. "
+                "Return action=answer only with no tasks and no occurrence_ops; do not revise "
+                "the resolved occurrence set."
+            )
+        else:
+            action_rule = (
+                "The occurrence selection is already persisted and investigation is closed. "
+                "Return action=answer only with no tasks and no occurrence_ops; do not revise "
+                "the selected occurrence."
+            )
     elif occurrence_selection_pending and final:
-        action_rule = (
-            "Do not answer in this decision. Investigation is closed; return action=update_workspace with no answer and "
-            "commit exactly one currently visible occurrence using occurrence_ops select. A separate answer decision will follow."
-        )
+        if occurrence_state_version == "OccurrenceResolutionStateV2":
+            action_rule = (
+                "Do not answer in this decision. Investigation is closed; resolve the active set with one or more scoped "
+                "occurrence_ops select operations, or no_match when none is suitable. A separate answer decision will follow."
+            )
+        else:
+            action_rule = (
+                "Do not answer in this decision. Investigation is closed; return action=update_workspace with no answer and "
+                "commit exactly one currently visible occurrence using occurrence_ops select. A separate answer decision will follow."
+            )
     elif occurrence_selection_pending:
-        action_rule = (
-            "Do not answer while multiple viable occurrences remain unselected. Investigate/read evidence to discriminate them, "
-            "or return action=update_workspace with no answer and commit one currently visible occurrence using occurrence_ops select."
-        )
+        if occurrence_state_version == "OccurrenceResolutionStateV2":
+            action_rule = (
+                "Do not answer while the active occurrence set is unresolved. Investigate evidence to discriminate it, "
+                "select one or more candidates in that set, defer for a refined Caption search, or commit no_match."
+            )
+        else:
+            action_rule = (
+                "Do not answer while multiple viable occurrences remain unselected. Investigate/read evidence to discriminate them, "
+                "or return action=update_workspace with no answer and commit one currently visible occurrence using occurrence_ops select."
+            )
     elif not final:
         action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
     elif final_attempt <= 1:
@@ -2110,12 +2184,19 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Return action=answer only. Tool use, observation reads, and workspace-only updates are closed. "
             "Provide the best evidence-grounded answer available and list supporting_claim_ids when valid."
         )
-    occurrence_selection_schema = (
-        'Selection commit schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
-        '"occurrence_ops":[{"op":"select","occurrence_id":"occ_visible_id"}]}.\n'
-        if occurrence_resolution_rule
-        else ""
-    )
+    if occurrence_state_version == "OccurrenceResolutionStateV2":
+        occurrence_selection_schema = (
+            'Scoped resolution schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
+            '"occurrence_ops":[{"op":"select","set_id":"attempt_visible_id",'
+            '"occurrence_id":"occ_visible_id"}]}.\n'
+        )
+    else:
+        occurrence_selection_schema = (
+            'Selection commit schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
+            '"occurrence_ops":[{"op":"select","occurrence_id":"occ_visible_id"}]}.\n'
+            if occurrence_resolution_rule
+            else ""
+        )
     return (
         f"You are the sole semantic decision maker for {task_description}. The framework only stores observations, "
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
@@ -2158,7 +2239,8 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         '"coordinate_space":"virtual|segment_local","source_video_ids":[],'
         '"inspection_mode":"window|search_asr|search_caption|arbitrate_observation",'
         '"search_terms":[],"caption_queries":[],"top_k":12,"index_mode":"lexical|dense|hybrid",'
-        '"expand_neighbors":0,"arbitration_attempt_id":"","force_reinspect":false,'
+        '"expand_neighbors":0,"locator_attempt_id":"","occurrence_id":"",'
+        '"arbitration_attempt_id":"","force_reinspect":false,'
         '"expected_evidence":"direct observation","sampling_floor_fps":0.5}],"workspace_ops":[]}. '
         "time_range defaults to virtual workspace seconds. segment_local requires a known segment_id and is converted with "
         "an explicit trace; a virtual range outside its named segment is rejected rather than remapped. Use 0.5 fps for "
