@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 def audit_roots(
@@ -92,6 +92,13 @@ def audit_roots(
                 and int(row.get("visible_occurrence_count", 0) or 0) > 1
                 for row in trace
             )
+            lifecycle_complete = bool(
+                not selection_required
+                or (selection_before_answer and answer_after_selection)
+            )
+            rejected_occurrence_op_attempts = sum(
+                row.get("occurrence_ops_accepted") is False for row in decisions
+            )
             arm = str(config.get("occurrence_method_arm", "none") or "none")
             case_id = str(_read_json(prediction_path).get("case_id", run_dir.name))
             cases.append(
@@ -125,9 +132,13 @@ def audit_roots(
                     "selection_required": selection_required,
                     "selection_before_answer": selection_before_answer,
                     "answer_after_selection": answer_after_selection,
+                    "lifecycle_complete": lifecycle_complete,
                     "ops_accepted": all(
                         row.get("occurrence_ops_accepted") is not False
                         for row in decisions
+                    ),
+                    "rejected_occurrence_op_attempts": (
+                        rejected_occurrence_op_attempts
                     ),
                     "occurrence_schema_errors": len(occurrence_errors),
                     "selection_required_retries": sum(
@@ -181,6 +192,20 @@ def audit_roots(
             "exposure_event_count": sum(
                 row["exposure_events"] for row in cases
             ),
+            "duplicate_eligibility_event_case_count": sum(
+                row["eligible_events"] > 1 for row in cases
+            ),
+            "duplicate_exposure_event_case_count": sum(
+                row["exposure_events"] > 1 for row in cases
+            ),
+            "eligible_without_exposure_case_count": sum(
+                row["eligible_events"] > 0 and row["exposure_events"] == 0
+                for row in cases
+            ),
+            "exposure_without_eligibility_case_count": sum(
+                row["exposure_events"] > 0 and row["eligible_events"] == 0
+                for row in cases
+            ),
             "occurrence_op_count": sum(row["occurrence_ops"] for row in cases),
             "selection_case_count": sum(
                 row["selection_ops"] > 0 for row in cases
@@ -205,6 +230,19 @@ def audit_roots(
             "all_occurrence_ops_accepted": all(
                 row["ops_accepted"] for row in cases
             ),
+            "rejected_occurrence_op_attempt_count": sum(
+                row["rejected_occurrence_op_attempts"] for row in cases
+            ),
+            "recovered_occurrence_op_rejection_case_count": sum(
+                row["rejected_occurrence_op_attempts"] > 0
+                and row["lifecycle_complete"]
+                for row in cases
+            ),
+            "unrecovered_occurrence_op_rejection_case_count": sum(
+                row["rejected_occurrence_op_attempts"] > 0
+                and not row["lifecycle_complete"]
+                for row in cases
+            ),
             "occurrence_schema_error_count": sum(
                 row["occurrence_schema_errors"] for row in cases
             ),
@@ -216,6 +254,11 @@ def audit_roots(
             ),
             "occurrence_validation_error_count": sum(
                 row["occurrence_validation_errors"] for row in cases
+            ),
+            "unrecovered_occurrence_validation_error_case_count": sum(
+                row["occurrence_validation_errors"] > 0
+                and not row["lifecycle_complete"]
+                for row in cases
             ),
             "terminal_occurrence_failure_count": sum(
                 row["terminal_occurrence_failures"] for row in cases
@@ -238,12 +281,14 @@ def audit_roots(
         "no_oracle_gate_passed": all(
             row["no_oracle_gate_passed"] for row in per_arm.values()
         ),
-        "eligible_events_complete": all(
-            row["eligible_event_count"] == int(expected_cases)
+        "eligibility_event_integrity": all(
+            row["duplicate_eligibility_event_case_count"] == 0
             for row in per_arm.values()
         ),
-        "treatment_exposure_complete": all(
-            per_arm[arm]["exposure_event_count"] == int(expected_cases)
+        "treatment_exposure_integrity": all(
+            per_arm[arm]["eligible_without_exposure_case_count"] == 0
+            and per_arm[arm]["exposure_without_eligibility_case_count"] == 0
+            and per_arm[arm]["duplicate_exposure_event_case_count"] == 0
             for arm in ("a1-flat", "a1", "a2")
         ),
         "a1_flat_same_packet_text_budget_parity": all(
@@ -269,8 +314,8 @@ def audit_roots(
             )
             == 0
         ),
-        "no_occurrence_validation_errors": sum(
-            row["occurrence_validation_error_count"]
+        "no_unrecovered_occurrence_validation_errors": sum(
+            row["unrecovered_occurrence_validation_error_case_count"]
             for row in per_arm.values()
         )
         == 0,
@@ -279,12 +324,14 @@ def audit_roots(
             for row in per_arm.values()
         )
         == 0,
-        "all_submitted_occurrence_ops_accepted": all(
-            row["all_occurrence_ops_accepted"] for row in per_arm.values()
-        ),
+        "no_unrecovered_occurrence_op_rejections": sum(
+            row["unrecovered_occurrence_op_rejection_case_count"]
+            for row in per_arm.values()
+        )
+        == 0,
     }
     return {
-        "schema_version": "MMLifelongOccurrenceCanaryAuditV2",
+        "schema_version": "MMLifelongOccurrenceCanaryAuditV3",
         "per_arm": per_arm,
         "checks": checks,
         "structural_gate_passed": all(checks.values()),

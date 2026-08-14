@@ -41,13 +41,17 @@ class OccurrenceResolutionStateV1:
     revision: int = 0
 
     def sync_visible(self, occurrence_ids: Sequence[str]) -> bool:
-        visible = tuple(
+        newly_visible = tuple(
             dict.fromkeys(
                 str(value or "").strip()
                 for value in occurrence_ids
                 if str(value or "").strip()
             )
         )
+        # An occurrence handle remains agent-visible after first exposure. Retrieval
+        # packets can change between rounds, but invalidating an earlier handle makes
+        # a semantically valid later selection fail for purely mechanical reasons.
+        visible = tuple(dict.fromkeys((*self.current_visible_ids, *newly_visible)))
         changed = visible != self.current_visible_ids
         self.current_visible_ids = visible
         if len(visible) > 1:

@@ -223,6 +223,26 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
             trace.insert(
                 1,
                 {
+                    "type": "reasoner_decision",
+                    "action": "update_workspace",
+                    "occurrence_ops": [
+                        {"op": "select", "occurrence_id": "stale_occ"}
+                    ],
+                    "occurrence_ops_accepted": False,
+                },
+            )
+            trace.insert(
+                2,
+                {
+                    "type": "decision_schema_error",
+                    "errors": [
+                        {"code": "occurrence_id_not_currently_visible"}
+                    ],
+                },
+            )
+            trace.insert(
+                3,
+                {
                     "type": "decision_schema_error",
                     "errors": [
                         {"code": "occurrence_selection_required"}
@@ -270,7 +290,7 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     report = AUDIT.audit_roots(bindings, expected_cases=1)
 
     assert report["structural_gate_passed"] is True
-    assert report["per_arm"]["a2"]["occurrence_op_count"] == 1
+    assert report["per_arm"]["a2"]["occurrence_op_count"] == 2
     assert report["per_arm"]["a2"]["selection_case_count"] == 1
     assert report["per_arm"]["a2"]["selection_required_case_count"] == 1
     assert report["per_arm"]["a2"]["selection_missing_case_count"] == 0
@@ -278,5 +298,27 @@ def test_canary_audit_checks_structured_protocol_artifacts(tmp_path) -> None:
     assert report["per_arm"]["a2"]["answer_missing_after_selection_case_count"] == 0
     assert report["per_arm"]["a2"]["selection_required_retry_count"] == 1
     assert report["per_arm"]["a2"]["answer_required_retry_count"] == 1
-    assert report["per_arm"]["a2"]["occurrence_validation_error_count"] == 0
+    assert report["per_arm"]["a2"]["occurrence_validation_error_count"] == 1
+    assert report["per_arm"]["a2"]["rejected_occurrence_op_attempt_count"] == 1
+    assert report["per_arm"]["a2"][
+        "recovered_occurrence_op_rejection_case_count"
+    ] == 1
+    assert report["per_arm"]["a2"][
+        "unrecovered_occurrence_op_rejection_case_count"
+    ] == 0
     assert report["per_arm"]["a2"]["state_file_count"] == 1
+
+    a1_runtime = bindings["a1"] / "cases" / "case-1" / "runtime_summary.json"
+    a1_payload = json.loads(a1_runtime.read_text(encoding="utf-8"))
+    a1_payload["trace"] = [
+        row
+        for row in a1_payload["trace"]
+        if row.get("type")
+        not in {"occurrence_treatment_eligible", "occurrence_treatment_exposed"}
+    ]
+    a1_runtime.write_text(json.dumps(a1_payload), encoding="utf-8")
+
+    ineligible_report = AUDIT.audit_roots(bindings, expected_cases=1)
+    assert ineligible_report["structural_gate_passed"] is True
+    assert ineligible_report["per_arm"]["a1"]["eligible_event_count"] == 0
+    assert ineligible_report["per_arm"]["a1"]["exposure_event_count"] == 0

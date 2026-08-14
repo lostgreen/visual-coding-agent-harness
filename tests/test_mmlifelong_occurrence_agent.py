@@ -178,6 +178,18 @@ def test_a2_occurrence_state_rejects_hidden_ids_transactionally() -> None:
     )["accepted"] is True
 
 
+def test_a2_occurrence_state_preserves_previously_exposed_ids() -> None:
+    state = OccurrenceResolutionStateV1()
+    state.sync_visible(("occ_1", "occ_2"))
+    state.sync_visible(("occ_2", "occ_3"))
+
+    assert state.current_visible_ids == ("occ_1", "occ_2", "occ_3")
+    assert state.apply_ops(
+        ({"op": "select", "occurrence_id": "occ_1"},)
+    )["accepted"] is True
+    assert state.selected_occurrence_id == "occ_1"
+
+
 def test_grouped_and_flat_treatment_surfaces_have_text_parity(tmp_path) -> None:
     packet = _packet()
     grouped_packet = OccurrencePacketTransform(

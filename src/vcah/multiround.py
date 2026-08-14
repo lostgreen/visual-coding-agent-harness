@@ -48,6 +48,8 @@ from vcah.workspace import (
 
 _INSPECTION_MODES = {"window", "search_asr", "search_caption", "arbitrate_observation"}
 _TIME_BOUNDARY_TOLERANCE_SEC = 1.0
+_OCCURRENCE_SELECTION_FINAL_CALL_BUDGET = 3
+_OCCURRENCE_ANSWER_FINAL_CALL_BUDGET = 3
 RUN_ARTIFACT_NAMES = (
     "evidence.jsonl",
     "observation_log.jsonl",
@@ -419,6 +421,9 @@ class VirtualVideoMultiRoundDriver:
         final_answer: ReasonerDecision | None = None
         latest_answer_candidate: ReasonerDecision | None = None
         forced_decision_calls = 0
+        occurrence_selection_final_calls = 0
+        occurrence_answer_final_calls = 0
+        occurrence_recovery_pending = False
         protocol_exhausted = False
         surfaced_observation_ids: set[str] = set()
         closure_repair_pending = False
@@ -522,7 +527,12 @@ class VirtualVideoMultiRoundDriver:
             self.semantic_round_budget
             + self.closure_repair_budget
             + 3
-            + (1 if occurrence_state is not None else 0),
+            + (
+                _OCCURRENCE_SELECTION_FINAL_CALL_BUDGET
+                + _OCCURRENCE_ANSWER_FINAL_CALL_BUDGET
+                if occurrence_state is not None
+                else 0
+            ),
         ):
             remaining = max(0, self.max_investigations - completed_investigations)
             closure_repair_active = bool(
@@ -586,17 +596,43 @@ class VirtualVideoMultiRoundDriver:
                 occurrence_state.save(occurrence_state_path)
                 status["occurrence_resolution_state"] = occurrence_state.to_dict()
             force_finalize = (
-                round_id > self.semantic_round_budget or remaining <= 0
+                round_id > self.semantic_round_budget
+                or remaining <= 0
+                or occurrence_recovery_pending
             ) and not closure_repair_active
             if self.controller_mode != "frozen_baseline":
                 status["closure_repair_active"] = closure_repair_active
                 status["closure_repair_count"] = closure_repair_count
             if force_finalize:
                 forced_decision_calls += 1
-            final_retry_available = force_finalize and forced_decision_calls < 2
+                if occurrence_state is not None and occurrence_state.selection_required:
+                    if occurrence_state.selected_occurrence_id in set(
+                        occurrence_state.viable_occurrence_ids
+                    ):
+                        occurrence_answer_final_calls += 1
+                    else:
+                        occurrence_selection_final_calls += 1
+            if occurrence_state is not None and occurrence_state.selection_required:
+                if occurrence_state.selected_occurrence_id in set(
+                    occurrence_state.viable_occurrence_ids
+                ):
+                    final_retry_available = (
+                        force_finalize
+                        and occurrence_answer_final_calls
+                        < _OCCURRENCE_ANSWER_FINAL_CALL_BUDGET
+                    )
+                else:
+                    final_retry_available = (
+                        force_finalize
+                        and occurrence_selection_final_calls
+                        < _OCCURRENCE_SELECTION_FINAL_CALL_BUDGET
+                    )
+            else:
+                final_retry_available = force_finalize and forced_decision_calls < 2
             control_attempt = 0
             control_retries_used = 0
             decision_had_control_retry = False
+            retry_occurrence_next_round = False
             decision: ReasonerDecision | None = None
             requested_rows: tuple[Mapping[str, Any], ...] = ()
             while True:
@@ -699,6 +735,10 @@ class VirtualVideoMultiRoundDriver:
                             _occurrence_answer_errors(
                                 parsed_decision,
                                 occurrence_state,
+                                require_selection=(
+                                    force_finalize
+                                    and not final_retry_available
+                                ),
                                 require_answer=(
                                     force_finalize
                                     and not final_retry_available
@@ -800,6 +840,27 @@ class VirtualVideoMultiRoundDriver:
                         rounds_run = round_id
                         break
                     if control_retries_used >= self.control_retry_budget:
+                        if occurrence_state is not None and _occurrence_repair_available(
+                            occurrence_state,
+                            selection_final_calls=occurrence_selection_final_calls,
+                            answer_final_calls=occurrence_answer_final_calls,
+                        ):
+                            trace.append(
+                                {
+                                    "type": "occurrence_lifecycle_repair_scheduled",
+                                    "round": round_id,
+                                    "stage": "decision_preflight",
+                                    "errors": schema_errors,
+                                }
+                            )
+                            feedback = _control_retry_feedback(
+                                schema_errors,
+                                revision=document.revision,
+                                previous_feedback=feedback,
+                            )
+                            occurrence_recovery_pending = True
+                            retry_occurrence_next_round = True
+                            break
                         trace.append(
                             {
                                 "type": "decision_control_exhausted",
@@ -879,6 +940,8 @@ class VirtualVideoMultiRoundDriver:
                         if isinstance(operation, Mapping)
                     )
                 )
+                if occurrence_selection_committed:
+                    occurrence_recovery_pending = True
                 premature_occurrence_commit = bool(
                     occurrence_state is not None
                     and decision.action == "answer"
@@ -992,6 +1055,28 @@ class VirtualVideoMultiRoundDriver:
                 )
                 requested_observations = requested_rows
                 if control_retries_used >= self.control_retry_budget:
+                    if occurrence_state is not None and _occurrence_repair_available(
+                        occurrence_state,
+                        selection_final_calls=occurrence_selection_final_calls,
+                        answer_final_calls=occurrence_answer_final_calls,
+                    ):
+                        trace.append(
+                            {
+                                "type": "occurrence_lifecycle_repair_scheduled",
+                                "round": round_id,
+                                "stage": "workspace_transaction",
+                                "errors": workspace_errors,
+                            }
+                        )
+                        feedback = _control_retry_feedback(
+                            workspace_errors,
+                            revision=document.revision,
+                            previous_feedback=feedback,
+                        )
+                        occurrence_recovery_pending = True
+                        retry_occurrence_next_round = True
+                        decision = None
+                        break
                     trace.append(
                         {
                             "type": "decision_control_exhausted",
@@ -1021,6 +1106,8 @@ class VirtualVideoMultiRoundDriver:
                     previous_feedback=feedback,
                 )
 
+            if retry_occurrence_next_round:
+                continue
             if protocol_exhausted:
                 break
             if decision is None:
@@ -1463,9 +1550,29 @@ def _occurrence_answer_errors(
     decision: ReasonerDecision,
     state: OccurrenceResolutionStateV1,
     *,
+    require_selection: bool = False,
     require_answer: bool = False,
 ) -> list[dict[str, Any]]:
     viable = set(state.viable_occurrence_ids)
+    submits_selection = any(
+        str(operation.get("op", operation.get("type", "")) or "").casefold()
+        == "select"
+        for operation in decision.occurrence_ops
+        if isinstance(operation, Mapping)
+    )
+    if (
+        require_selection
+        and state.selection_required
+        and state.selected_occurrence_id not in viable
+        and not submits_selection
+    ):
+        return [
+            {
+                "code": "occurrence_selection_required",
+                "viable_occurrence_count": len(viable),
+                "selection_must_precede_answer": True,
+            }
+        ]
     if (
         require_answer
         and state.selected_occurrence_id in viable
@@ -1488,6 +1595,19 @@ def _occurrence_answer_errors(
             "selection_must_precede_answer": True,
         }
     ]
+
+
+def _occurrence_repair_available(
+    state: OccurrenceResolutionStateV1,
+    *,
+    selection_final_calls: int,
+    answer_final_calls: int,
+) -> bool:
+    if not state.selection_required:
+        return False
+    if state.selected_occurrence_id in set(state.viable_occurrence_ids):
+        return answer_final_calls < _OCCURRENCE_ANSWER_FINAL_CALL_BUDGET
+    return selection_final_calls < _OCCURRENCE_SELECTION_FINAL_CALL_BUDGET
 
 
 def _occurrence_treatment_surface(

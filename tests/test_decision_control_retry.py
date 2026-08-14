@@ -57,6 +57,41 @@ class RecordingInvestigator:
         )
 
 
+class OccurrenceInvestigator(RecordingInvestigator):
+    def mechanical_status(self) -> dict[str, Any]:
+        return {
+            "caption_occurrence_sets": [
+                {
+                    "candidates": [
+                        {"occurrence_id": "occ_1"},
+                        {"occurrence_id": "occ_2"},
+                    ]
+                }
+            ]
+        }
+
+
+class MetadataScriptedReasoner(ScriptedReasoner):
+    def __init__(
+        self,
+        decisions: Sequence[ReasonerDecision],
+        metadata: Sequence[dict[str, Any]],
+    ) -> None:
+        super().__init__(decisions)
+        self.metadata = list(metadata)
+        self.last_metadata: dict[str, Any] = {}
+
+    def decide(self, **kwargs: Any) -> ReasonerDecision:
+        decision = super().decide(**kwargs)
+        self.last_metadata = self.metadata.pop(0) if self.metadata else {}
+        return decision
+
+    def consume_decision_metadata(self) -> dict[str, Any]:
+        value = self.last_metadata
+        self.last_metadata = {}
+        return value
+
+
 class FakeAPI:
     model = "fake-model"
 
@@ -195,6 +230,117 @@ def test_workspace_retry_feedback_names_mechanical_repairs() -> None:
     assert "Omit add operations for IDs that already exist" in instruction
     assert "supporting_attempt_ids" in instruction
     assert "supporting claim derives from the dependency" in instruction
+
+
+def test_a2_recovers_from_workspace_exhaustion_before_selection(
+    tmp_path: Path,
+) -> None:
+    rejected = ReasonerDecision(
+        action="update_workspace",
+        workspace_ops=({"op": "unsupported_test_operation"},),
+    )
+    reasoner = ScriptedReasoner(
+        (
+            rejected,
+            rejected,
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {"op": "select", "occurrence_id": "occ_2"},
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=OccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2",
+    ).run(_workspace(tmp_path))
+
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    selection_index = next(
+        index
+        for index, row in enumerate(decisions)
+        if row.get("occurrence_selection_committed")
+    )
+    answer_index = next(
+        index
+        for index, row in enumerate(decisions)
+        if row.get("action") == "answer"
+    )
+    assert selection_index < answer_index
+    assert any(
+        row.get("type") == "occurrence_lifecycle_repair_scheduled"
+        and row.get("stage") == "workspace_transaction"
+        for row in result.trace
+    )
+    assert result.answer_present is True
+
+
+def test_a2_has_dedicated_repair_after_json_retry_consumes_control_budget(
+    tmp_path: Path,
+) -> None:
+    reasoner = MetadataScriptedReasoner(
+        (
+            ReasonerDecision(action="answer", answer="premature"),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {"op": "select", "occurrence_id": "occ_1"},
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        ),
+        (
+            {"internal_control_retry_count": 1, "format_repaired": True},
+            {},
+            {},
+        ),
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=OccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2",
+    ).run(_workspace(tmp_path))
+
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    assert [row.get("action") for row in decisions] == [
+        "update_workspace",
+        "answer",
+    ]
+    assert decisions[0]["occurrence_selection_committed"] is True
+    assert any(
+        row.get("type") == "occurrence_lifecycle_repair_scheduled"
+        and row.get("stage") == "decision_preflight"
+        for row in result.trace
+    )
+    assert not any(
+        row.get("type") == "decision_control_exhausted"
+        and any(
+            str(error.get("code", "")).startswith("occurrence_")
+            for error in row.get("errors", ())
+            if isinstance(error, dict)
+        )
+        for row in result.trace
+    )
+    assert result.answer_present is True
 
 
 def test_json_repair_uses_control_budget_without_advancing_semantic_round(
