@@ -286,6 +286,47 @@ def test_a2_recovers_from_workspace_exhaustion_before_selection(
     assert result.answer_present is True
 
 
+def test_a2_commits_valid_selection_when_workspace_transaction_fails(
+    tmp_path: Path,
+) -> None:
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="update_workspace",
+                workspace_ops=({"op": "unsupported_test_operation"},),
+                occurrence_ops=(
+                    {"op": "select", "occurrence_id": "occ_2"},
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=OccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2",
+    ).run(_workspace(tmp_path))
+
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    assert [row.get("action") for row in decisions] == [
+        "update_workspace",
+        "answer",
+    ]
+    assert decisions[0]["workspace_ops_accepted"] is False
+    assert decisions[0]["occurrence_ops_accepted"] is True
+    assert decisions[0]["occurrence_selection_committed"] is True
+    assert decisions[0]["selected_occurrence_id"] == "occ_2"
+    assert result.answer_present is True
+
+
 def test_a2_has_dedicated_repair_after_json_retry_consumes_control_budget(
     tmp_path: Path,
 ) -> None:

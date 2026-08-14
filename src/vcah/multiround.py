@@ -917,7 +917,10 @@ class VirtualVideoMultiRoundDriver:
                     "errors": [],
                     "applied": [],
                 }
-                if occurrence_state is not None and apply_result.accepted:
+                # Occurrence state is a separate runtime-owned transaction. A valid
+                # selection must survive an unrelated working-document rejection so
+                # the following forced call can complete the answer-only phase.
+                if occurrence_state is not None:
                     occurrence_apply_result = occurrence_state.apply_ops(
                         decision.occurrence_ops
                     )
