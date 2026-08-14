@@ -137,6 +137,9 @@ def collect_rows(
                 if isinstance(raw_no_oracle_audit, Mapping)
                 else {}
             )
+            raw_replay = no_oracle_audit.get("occurrence_replay", {})
+            replay = raw_replay if isinstance(raw_replay, Mapping) else {}
+            replay_mode = str(replay.get("mode", "live") or "live")
             rows.append(
                 {
                     "arm": arm,
@@ -231,6 +234,22 @@ def collect_rows(
                             "no_oracle_runtime_gate_passed", False
                         )
                     ),
+                    "occurrence_replay_mode": replay_mode,
+                    "occurrence_replay_fixture_digest": replay.get(
+                        "fixture_digest"
+                    ),
+                    "occurrence_replay_complete": (
+                        replay.get("consumption_complete")
+                        if replay_mode == "replay"
+                        else True
+                    ),
+                    "occurrence_replay_identity_digests": list(
+                        replay.get("consumed_identity_digests", ())
+                        if replay_mode == "replay"
+                        else no_oracle_audit.get(
+                            "retrieval_identity_digests", ()
+                        )
+                    ),
                     "frozen_config": _frozen_config(config),
                 }
             )
@@ -275,6 +294,7 @@ def build_report(
             seed=seed + index * 7,
         )
     text_parity = _text_parity(by_arm)
+    replay_parity = _frozen_replay_parity(by_arm)
     structural_checks = {
         "arms_present": bool(arms),
         "case_sets_aligned": bool(case_sets)
@@ -304,6 +324,7 @@ def build_report(
             row.get("selected_locator_usage_rate") in {None, 1.0}
             for row in by_arm.get("a3", {}).values()
         ),
+        "frozen_occurrence_replay_parity": replay_parity.get("passed"),
     }
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV2",
@@ -320,6 +341,7 @@ def build_report(
         "arms": arm_metrics,
         "comparisons": comparisons,
         "text_budget_parity": text_parity,
+        "frozen_occurrence_replay": replay_parity,
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
             value is not False for value in structural_checks.values()
@@ -733,6 +755,55 @@ def _text_parity(
         "comparable_n": comparable,
         "matched_n": matched,
         "match_rate": matched / comparable if comparable else None,
+    }
+
+
+def _frozen_replay_parity(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]]
+) -> dict[str, Any]:
+    replay_arms = tuple(
+        arm
+        for arm, rows in by_arm.items()
+        if any(
+            row.get("occurrence_replay_mode") in {"record", "replay"}
+            for row in rows.values()
+        )
+    )
+    if not replay_arms:
+        return {"applicable": False, "passed": None, "paired_n": 0}
+    case_sets = [set(by_arm[arm]) for arm in replay_arms]
+    case_ids = sorted(set.intersection(*case_sets)) if case_sets else []
+    matched = 0
+    complete = 0
+    for case_id in case_ids:
+        rows = [by_arm[arm][case_id] for arm in replay_arms]
+        digests = {
+            str(row.get("occurrence_replay_fixture_digest", "") or "")
+            for row in rows
+        }
+        identity_sequences = {
+            tuple(row.get("occurrence_replay_identity_digests", ()) or ())
+            for row in rows
+        }
+        row_complete = all(
+            row.get("occurrence_replay_complete") is True for row in rows
+        )
+        complete += row_complete
+        matched += bool(
+            row_complete
+            and len(digests) == 1
+            and "" not in digests
+            and len(identity_sequences) == 1
+        )
+    passed = bool(case_ids) and matched == len(case_ids)
+    return {
+        "applicable": True,
+        "passed": passed,
+        "paired_n": len(case_ids),
+        "complete_n": complete,
+        "matched_n": matched,
+        "match_rate": matched / len(case_ids) if case_ids else None,
+        "arms": list(replay_arms),
     }
 
 

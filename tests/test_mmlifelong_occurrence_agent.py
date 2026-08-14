@@ -83,6 +83,46 @@ def test_a0_is_an_identity_transform_with_no_oracle_audit(tmp_path) -> None:
     assert transform.audit["candidate_card_counts"] == [0]
 
 
+def test_frozen_occurrence_replay_records_and_reuses_identical_packet(
+    tmp_path,
+) -> None:
+    packet = {**_packet(), "config_digest": "caption-digest"}
+    fixture_path = tmp_path / "fixture.json"
+    recorder = OccurrencePacketTransform(
+        arm="a0",
+        audit_path=tmp_path / "record-audit.json",
+        case_id="case-1",
+        caption_config_digest="caption-digest",
+        replay_record_path=fixture_path,
+    )
+
+    recorder(packet)
+
+    natural = deepcopy(packet)
+    natural["queries"] = ["different stochastic query"]
+    natural["query_fingerprint"] = "different-query-digest"
+    replayer = OccurrencePacketTransform(
+        arm="a3",
+        audit_path=tmp_path / "replay-audit.json",
+        case_id="case-1",
+        caption_config_digest="caption-digest",
+        replay_fixture_path=fixture_path,
+    )
+    transformed = replayer(natural)
+
+    assert transformed["queries"] == packet["queries"]
+    assert transformed["hits"] == packet["hits"]
+    assert transformed["occurrence_set"]["candidate_cards"]
+    assert replayer.audit["occurrence_replay"]["mode"] == "replay"
+    assert replayer.audit["occurrence_replay"]["consumption_complete"] is True
+    assert (
+        replayer.audit["retrieval_identity_digests"]
+        == recorder.audit["retrieval_identity_digests"]
+    )
+    with pytest.raises(ValueError, match="exhausted"):
+        replayer(natural)
+
+
 def test_a1_adds_bounded_cards_without_changing_retrieval(tmp_path) -> None:
     packet = _packet()
     original = deepcopy(packet)

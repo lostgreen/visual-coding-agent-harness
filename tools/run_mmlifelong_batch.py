@@ -180,6 +180,13 @@ def main() -> None:
         },
         "oracle_arm": args.oracle_arm,
         "occurrence_method_arm": occurrence_method_arm,
+        "occurrence_replay_mode": (
+            "replay"
+            if getattr(args, "occurrence_replay_root", None)
+            else "record"
+            if getattr(args, "occurrence_replay_record_root", None)
+            else "live"
+        ),
         "oracle_intervention_root": str(args.oracle_intervention_root or ""),
         "recorded_fixture_root": str(args.recorded_fixture_root or ""),
         "recorded_fixture_manifest": (
@@ -414,6 +421,24 @@ def _case_command(
         if not fixture_path.is_file():
             raise FileNotFoundError(f"missing recorded fixture: {fixture_path}")
         command.extend(("--recorded-decisions", str(fixture_path)))
+    if getattr(args, "occurrence_replay_root", None):
+        replay_path = (
+            Path(args.occurrence_replay_root)
+            / "cases"
+            / f"{case['case_id']}.json"
+        )
+        if not replay_path.is_file():
+            raise FileNotFoundError(
+                f"missing occurrence replay fixture: {replay_path}"
+            )
+        command.extend(("--occurrence-replay-fixture", str(replay_path)))
+    if getattr(args, "occurrence_replay_record_root", None):
+        record_path = (
+            Path(args.occurrence_replay_record_root)
+            / "cases"
+            / f"{case['case_id']}.json"
+        )
+        command.extend(("--occurrence-replay-record", str(record_path)))
     return command
 
 
@@ -442,6 +467,7 @@ def _write_batch_summary(
             "phase5r_mode": selection.get("phase5r_mode"),
             "oracle_arm": selection.get("oracle_arm"),
             "occurrence_method_arm": selection.get("occurrence_method_arm"),
+            "occurrence_replay_mode": selection.get("occurrence_replay_mode"),
             "recorded_fixture_manifest": selection.get(
                 "recorded_fixture_manifest"
             ),
@@ -488,6 +514,8 @@ def _parse_args() -> argparse.Namespace:
         choices=OCCURRENCE_METHOD_ARMS,
         default="none",
     )
+    parser.add_argument("--occurrence-replay-root")
+    parser.add_argument("--occurrence-replay-record-root")
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--case-ids", nargs="+")
@@ -536,6 +564,14 @@ def _parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.case_ids and args.case_manifest:
         parser.error("--case-ids and --case-manifest are mutually exclusive")
+    if args.occurrence_replay_root and args.occurrence_replay_record_root:
+        parser.error(
+            "--occurrence-replay-root and --occurrence-replay-record-root are mutually exclusive"
+        )
+    if (
+        args.occurrence_replay_root or args.occurrence_replay_record_root
+    ) and args.occurrence_method_arm == "none":
+        parser.error("occurrence replay requires --occurrence-method-arm")
     return args
 
 

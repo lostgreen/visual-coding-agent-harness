@@ -624,6 +624,10 @@ class OccurrencePacketTransform:
         *,
         arm: str,
         audit_path: Path,
+        case_id: str = "",
+        caption_config_digest: str = "",
+        replay_fixture_path: Path | None = None,
+        replay_record_path: Path | None = None,
         candidate_limit: int = DEFAULT_CARD_CANDIDATE_LIMIT,
         excerpt_limit: int = DEFAULT_CARD_EXCERPT_LIMIT,
         excerpt_chars: int = DEFAULT_CARD_EXCERPT_CHARS,
@@ -639,6 +643,37 @@ class OccurrencePacketTransform:
             raise ValueError("OccurrencePacketTransform requires a method arm")
         self.arm = normalized
         self.audit_path = Path(audit_path)
+        self.case_id = str(case_id or "")
+        self.caption_config_digest = str(caption_config_digest or "")
+        if replay_fixture_path is not None and replay_record_path is not None:
+            raise ValueError(
+                "occurrence replay fixture and record paths are mutually exclusive"
+            )
+        self.replay_fixture_path = (
+            Path(replay_fixture_path) if replay_fixture_path is not None else None
+        )
+        self.replay_record_path = (
+            Path(replay_record_path) if replay_record_path is not None else None
+        )
+        self._replay_packets: tuple[dict[str, Any], ...] = ()
+        self._replay_fixture_digest = ""
+        self._replay_request_identity_digests: list[str] = []
+        self._replay_consumed_identity_digests: list[str] = []
+        self._recorded_packets: list[dict[str, Any]] = []
+        if self.replay_fixture_path is not None:
+            fixture = _load_occurrence_replay_fixture(
+                self.replay_fixture_path,
+                case_id=self.case_id,
+                caption_config_digest=self.caption_config_digest,
+            )
+            self._replay_packets = tuple(
+                dict(row["packet"])
+                for row in tuple(fixture.get("packets", ()) or ())
+                if isinstance(row, Mapping) and isinstance(row.get("packet"), Mapping)
+            )
+            if not self._replay_packets:
+                raise ValueError("occurrence replay fixture contains no packets")
+            self._replay_fixture_digest = stable_digest(fixture)
         self.candidate_limit = max(1, int(candidate_limit))
         self.excerpt_limit = max(1, int(excerpt_limit))
         self.excerpt_chars = max(1, int(excerpt_chars))
@@ -665,6 +700,11 @@ class OccurrencePacketTransform:
 
     def __call__(self, packet: Mapping[str, Any]) -> Mapping[str, Any]:
         assert_no_oracle_packet(packet, surface="caption_packet_before_transform")
+        natural_packet = dict(packet)
+        if self.replay_record_path is not None:
+            self._record_packet(natural_packet)
+        if self._replay_packets:
+            packet = self._consume_replay_packet(natural_packet)
         retrieval_before = _retrieval_identity(packet)
         representation = "identity"
         visible_excerpt_digest = stable_digest([])
@@ -737,6 +777,61 @@ class OccurrencePacketTransform:
         self._write_audit()
         return transformed
 
+    def _record_packet(self, packet: Mapping[str, Any]) -> None:
+        packet_copy = _json_copy(packet)
+        assert_no_oracle_packet(packet_copy, surface="occurrence_replay_record")
+        self._recorded_packets.append(
+            {
+                "ordinal": len(self._recorded_packets) + 1,
+                "retrieval_identity_digest": _retrieval_identity(packet_copy),
+                "packet": packet_copy,
+            }
+        )
+        fixture = {
+            "schema_version": "MMLifelongOccurrenceReplayV1",
+            "case_id": self.case_id,
+            "caption_config_digest": self.caption_config_digest,
+            "source_method_arm": self.arm,
+            "packets": list(self._recorded_packets),
+        }
+        assert self.replay_record_path is not None
+        _write_json_atomic(self.replay_record_path, fixture)
+        self._replay_fixture_digest = stable_digest(fixture)
+
+    def _consume_replay_packet(
+        self, natural_packet: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        index = len(self._replay_consumed_identity_digests)
+        if index >= len(self._replay_packets):
+            raise ValueError(
+                "occurrence replay fixture exhausted before runtime Caption searches completed"
+            )
+        replay_packet = _json_copy(self._replay_packets[index])
+        assert_no_oracle_packet(replay_packet, surface="occurrence_replay_packet")
+        required = {
+            "config_digest",
+            "hits",
+            "index_digest",
+            "occurrence_set",
+            "query_fingerprint",
+            "rendered",
+        }
+        missing = sorted(required - set(replay_packet))
+        if missing:
+            raise ValueError(
+                "occurrence replay packet missing required fields: "
+                + ", ".join(missing)
+            )
+        if str(replay_packet.get("config_digest", "") or "") != self.caption_config_digest:
+            raise ValueError("occurrence replay packet Caption digest mismatch")
+        self._replay_request_identity_digests.append(
+            _retrieval_identity(natural_packet)
+        )
+        self._replay_consumed_identity_digests.append(
+            _retrieval_identity(replay_packet)
+        )
+        return replay_packet
+
     def _card_budget(self) -> dict[str, int]:
         return {
             "candidate_limit": self.candidate_limit,
@@ -748,7 +843,7 @@ class OccurrencePacketTransform:
 
     def _audit_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": "MMLifelongNoOracleRuntimeAuditV2",
+            "schema_version": "MMLifelongNoOracleRuntimeAuditV3",
             "method_arm": self.arm,
             "no_oracle_runtime_gate_passed": True,
             "forbidden_agent_visible_keys": sorted(FORBIDDEN_AGENT_VISIBLE_KEYS),
@@ -770,6 +865,33 @@ class OccurrencePacketTransform:
                 bool(row.get("passed"))
                 for row in self._text_budget_parity_checks
             ),
+            "occurrence_replay": {
+                "mode": (
+                    "replay"
+                    if self._replay_packets
+                    else "record"
+                    if self.replay_record_path is not None
+                    else "live"
+                ),
+                "fixture_digest": self._replay_fixture_digest or None,
+                "expected_packet_count": len(self._replay_packets),
+                "consumed_packet_count": len(
+                    self._replay_consumed_identity_digests
+                ),
+                "recorded_packet_count": len(self._recorded_packets),
+                "consumption_complete": (
+                    len(self._replay_consumed_identity_digests)
+                    == len(self._replay_packets)
+                    if self._replay_packets
+                    else None
+                ),
+                "request_identity_digests": list(
+                    self._replay_request_identity_digests
+                ),
+                "consumed_identity_digests": list(
+                    self._replay_consumed_identity_digests
+                ),
+            },
         }
 
     def _write_audit(self) -> None:
@@ -780,6 +902,49 @@ class OccurrencePacketTransform:
             encoding="utf-8",
         )
         temporary.replace(self.audit_path)
+
+
+def _load_occurrence_replay_fixture(
+    path: Path,
+    *,
+    case_id: str,
+    caption_config_digest: str,
+) -> dict[str, Any]:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, Mapping):
+        raise ValueError("occurrence replay fixture must be a JSON object")
+    fixture = dict(value)
+    if fixture.get("schema_version") != "MMLifelongOccurrenceReplayV1":
+        raise ValueError("unsupported occurrence replay fixture schema")
+    if case_id and str(fixture.get("case_id", "") or "") != case_id:
+        raise ValueError("occurrence replay fixture case_id mismatch")
+    if (
+        caption_config_digest
+        and str(fixture.get("caption_config_digest", "") or "")
+        != caption_config_digest
+    ):
+        raise ValueError("occurrence replay fixture Caption digest mismatch")
+    assert_no_oracle_packet(fixture, surface="occurrence_replay_fixture")
+    return fixture
+
+
+def _json_copy(value: Mapping[str, Any]) -> dict[str, Any]:
+    copied = json.loads(json.dumps(dict(value), ensure_ascii=False))
+    if not isinstance(copied, Mapping):
+        raise TypeError("occurrence replay packet must serialize to an object")
+    return dict(copied)
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
 
 
 def build_occurrence_candidate_cards(

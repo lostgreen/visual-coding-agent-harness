@@ -75,6 +75,10 @@ def _row(
             True if arm in {"a1", "a1-flat"} else None
         ),
         "no_oracle_gate_passed": True,
+        "occurrence_replay_mode": "live",
+        "occurrence_replay_fixture_digest": None,
+        "occurrence_replay_complete": True,
+        "occurrence_replay_identity_digests": [],
         "frozen_config": {"controller_mode": "frozen_baseline"},
     }
 
@@ -529,3 +533,63 @@ def test_scoped_canary_audit_requires_actionable_locator_execution(
     assert report["checks"]["scoped_set_integrity"] is True
     assert report["checks"]["a3_selected_locators_inspected"] is True
     assert report["per_arm"]["a3"]["selected_locator_count"] == 1
+
+
+def test_frozen_replay_requires_identical_complete_candidate_sequences() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    recorder = _row("a0", "c1", score=0.0, signature=signature)
+    recorder.update(
+        {
+            "occurrence_replay_mode": "record",
+            "occurrence_replay_fixture_digest": "fixture",
+            "occurrence_replay_identity_digests": ["packet-1"],
+        }
+    )
+    treatment = _row("a2-clean", "c1", score=1.0, signature=signature)
+    treatment.update(
+        {
+            "occurrence_replay_mode": "replay",
+            "occurrence_replay_fixture_digest": "fixture",
+            "occurrence_replay_identity_digests": ["packet-1"],
+        }
+    )
+
+    report = ANALYSIS.build_report(
+        (recorder, treatment),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=5,
+    )
+
+    assert report["frozen_occurrence_replay"]["passed"] is True
+    assert report["structural_gate_passed"] is True
+
+    treatment["occurrence_replay_identity_digests"] = ["different"]
+    mismatched = ANALYSIS.build_report(
+        (recorder, treatment),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=5,
+    )
+    assert mismatched["frozen_occurrence_replay"]["passed"] is False
+    assert mismatched["structural_gate_passed"] is False
+    assert AUDIT._replay_parity(
+        {
+            "a0": {
+                "c1": {
+                    "mode": "record",
+                    "fixture_digest": "fixture",
+                    "complete": True,
+                    "identity_digests": ("packet-1",),
+                }
+            },
+            "a3": {
+                "c1": {
+                    "mode": "replay",
+                    "fixture_digest": "fixture",
+                    "complete": True,
+                    "identity_digests": ("packet-1",),
+                }
+            },
+        }
+    ) is True

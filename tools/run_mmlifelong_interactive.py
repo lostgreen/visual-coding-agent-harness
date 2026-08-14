@@ -46,6 +46,14 @@ def main() -> None:
         oracle_arm=args.oracle_arm,
         oracle_intervention=args.oracle_intervention,
     )
+    if args.occurrence_replay_fixture and args.occurrence_replay_record:
+        raise ValueError(
+            "--occurrence-replay-fixture and --occurrence-replay-record are mutually exclusive"
+        )
+    if (
+        args.occurrence_replay_fixture or args.occurrence_replay_record
+    ) and occurrence_method_arm == "none":
+        raise ValueError("occurrence replay requires an occurrence method arm")
     protocol = Phase5Protocol(
         controller_mode=args.controller_mode,
         controller_evidence_visibility=args.controller_evidence_visibility,
@@ -102,6 +110,18 @@ def main() -> None:
         occurrence_packet_transform = OccurrencePacketTransform(
             arm=occurrence_method_arm,
             audit_path=workspace.root_dir / "no_oracle_runtime_audit.json",
+            case_id=workspace.case.case_id,
+            caption_config_digest=str(args.caption_config_digest or ""),
+            replay_fixture_path=(
+                Path(args.occurrence_replay_fixture)
+                if args.occurrence_replay_fixture
+                else None
+            ),
+            replay_record_path=(
+                Path(args.occurrence_replay_record)
+                if args.occurrence_replay_record
+                else None
+            ),
         )
         occurrence_packet_transform.validate_surface(
             runtime_case_payload,
@@ -295,6 +315,11 @@ def main() -> None:
         "effective_caption_query_strategy": investigator.caption_query_strategy,
         "caption_config_digest": args.caption_config_digest,
         "occurrence_method_arm": occurrence_method_arm,
+        "occurrence_replay": (
+            dict(occurrence_packet_transform.audit.get("occurrence_replay", {}))
+            if occurrence_packet_transform is not None
+            else None
+        ),
         "no_oracle_runtime_gate": (
             {
                 "schema_version": "MMLifelongNoOracleRuntimeGateV1",
@@ -673,6 +698,8 @@ def _parse_args() -> argparse.Namespace:
         choices=OCCURRENCE_METHOD_ARMS,
         default="none",
     )
+    parser.add_argument("--occurrence-replay-fixture")
+    parser.add_argument("--occurrence-replay-record")
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")

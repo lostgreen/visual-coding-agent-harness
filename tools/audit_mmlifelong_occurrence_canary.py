@@ -29,6 +29,7 @@ def audit_roots(
 ) -> dict[str, Any]:
     per_arm: dict[str, dict[str, Any]] = {}
     case_sets: dict[str, set[str]] = {}
+    replay_cases: dict[str, dict[str, dict[str, Any]]] = {}
     for declared_arm, root in bindings.items():
         cases = []
         for prediction_path in sorted(Path(root).glob("cases/*/prediction.json")):
@@ -41,6 +42,9 @@ def audit_roots(
                 if isinstance(raw_no_oracle_audit, Mapping)
                 else {}
             )
+            raw_replay = no_oracle_audit.get("occurrence_replay", {})
+            replay = raw_replay if isinstance(raw_replay, Mapping) else {}
+            replay_mode = str(replay.get("mode", "live") or "live")
             trace = tuple(
                 row
                 for row in tuple(runtime.get("trace", ()) or ())
@@ -209,6 +213,22 @@ def audit_roots(
                         if arm != "a0"
                         else None
                     ),
+                    "replay_mode": replay_mode,
+                    "replay_fixture_digest": str(
+                        replay.get("fixture_digest", "") or ""
+                    ),
+                    "replay_complete": (
+                        replay.get("consumption_complete") is True
+                        if replay_mode == "replay"
+                        else True
+                    ),
+                    "replay_identity_digests": tuple(
+                        replay.get("consumed_identity_digests", ())
+                        if replay_mode == "replay"
+                        else no_oracle_audit.get(
+                            "retrieval_identity_digests", ()
+                        )
+                    ),
                     "eligible_events": sum(
                         row.get("type") == "occurrence_treatment_eligible"
                         for row in trace
@@ -281,6 +301,15 @@ def audit_roots(
                 }
             )
         case_sets[declared_arm] = {row["case_id"] for row in cases}
+        replay_cases[declared_arm] = {
+            row["case_id"]: {
+                "mode": row["replay_mode"],
+                "fixture_digest": row["replay_fixture_digest"],
+                "complete": row["replay_complete"],
+                "identity_digests": row["replay_identity_digests"],
+            }
+            for row in cases
+        }
         per_arm[declared_arm] = {
             "n": len(cases),
             "declared_arm_match": all(
@@ -414,6 +443,12 @@ def audit_roots(
             "premature_commit_count": sum(
                 row["premature_commits"] for row in cases
             ),
+            "occurrence_replay_modes": sorted(
+                {row["replay_mode"] for row in cases}
+            ),
+            "occurrence_replay_complete": all(
+                row["replay_complete"] for row in cases
+            ),
         }
     common = set.intersection(*case_sets.values()) if case_sets else set()
     treatment_arms = tuple(arm for arm in bindings if arm != "a0")
@@ -501,6 +536,7 @@ def audit_roots(
         "no_premature_occurrence_commits": all(
             row["premature_commit_count"] == 0 for row in per_arm.values()
         ),
+        "frozen_occurrence_replay_parity": _replay_parity(replay_cases),
         "no_unrecovered_occurrence_validation_errors": sum(
             row["unrecovered_occurrence_validation_error_case_count"]
             for row in per_arm.values()
@@ -601,6 +637,39 @@ def _executed_binding_pairs(
         if locator_attempt_id and occurrence_id:
             pairs.add((locator_attempt_id, occurrence_id))
     return pairs
+
+
+def _replay_parity(
+    replay_cases: Mapping[str, Mapping[str, Mapping[str, Any]]]
+) -> bool:
+    replay_arms = tuple(
+        arm
+        for arm, cases in replay_cases.items()
+        if any(
+            row.get("mode") in {"record", "replay"}
+            for row in cases.values()
+        )
+    )
+    if not replay_arms:
+        return True
+    case_sets = [set(replay_cases[arm]) for arm in replay_arms]
+    case_ids = set.intersection(*case_sets) if case_sets else set()
+    if not case_ids:
+        return False
+    for case_id in case_ids:
+        rows = [replay_cases[arm][case_id] for arm in replay_arms]
+        digests = {str(row.get("fixture_digest", "") or "") for row in rows}
+        identities = {
+            tuple(row.get("identity_digests", ()) or ()) for row in rows
+        }
+        if (
+            not all(row.get("complete") is True for row in rows)
+            or len(digests) != 1
+            or "" in digests
+            or len(identities) != 1
+        ):
+            return False
+    return True
 
 
 def _read_json(path: Path) -> dict[str, Any]:
