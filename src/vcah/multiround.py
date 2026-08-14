@@ -1528,12 +1528,12 @@ def _frozen_mechanical_status(
 
 def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
     occurrence_sets = tuple(status.get("caption_occurrence_sets", ()) or ())
-    if not occurrence_sets or not isinstance(occurrence_sets[-1], Mapping):
-        return ()
     return tuple(
         dict.fromkeys(
             str(candidate.get("occurrence_id", "") or "")
-            for candidate in tuple(occurrence_sets[-1].get("candidates", ()) or ())
+            for occurrence_set in occurrence_sets
+            if isinstance(occurrence_set, Mapping)
+            for candidate in tuple(occurrence_set.get("candidates", ()) or ())
             if isinstance(candidate, Mapping)
             and str(candidate.get("occurrence_id", "") or "")
         )

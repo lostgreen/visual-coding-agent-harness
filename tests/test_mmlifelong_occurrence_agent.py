@@ -248,6 +248,31 @@ def test_grouped_and_flat_treatment_surfaces_have_text_parity(tmp_path) -> None:
     )
 
 
+def test_a2_registers_ids_from_every_visible_occurrence_set() -> None:
+    status = {
+        "caption_occurrence_sets": [
+            {
+                "candidates": [
+                    {"occurrence_id": "occ_first"},
+                    {"occurrence_id": "occ_shared"},
+                ]
+            },
+            {
+                "candidates": [
+                    {"occurrence_id": "occ_shared"},
+                    {"occurrence_id": "occ_last"},
+                ]
+            },
+        ]
+    }
+
+    assert _visible_occurrence_ids(status) == (
+        "occ_first",
+        "occ_shared",
+        "occ_last",
+    )
+
+
 def test_a2_prompt_is_only_enabled_by_resolution_state() -> None:
     base = {"question": "q", "options": {}, "mechanical_status": {}}
     assert "Explicit occurrence arbitration" not in _frozen_reasoner_prompt(base)
