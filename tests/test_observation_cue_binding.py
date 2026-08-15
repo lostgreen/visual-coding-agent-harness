@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from vcah.evidence_state import InterpretationItem
@@ -53,6 +54,34 @@ def test_only_exact_sampled_point_item_becomes_observation_cue(tmp_path: Path) -
     assert cue["item_id"] == "item_exact"
     assert cue["virtual_time"] == 5.0
     assert cue["source_frame_ref"] == "frame-1.0.jpg"
+
+
+def test_observation_cue_identity_is_stable_across_workspace_roots(
+    tmp_path: Path,
+) -> None:
+    rows = []
+    for workspace_name in ("a2", "a3-longer-root"):
+        workspace_root = tmp_path / workspace_name
+        frame_path = workspace_root / "observations" / "seg_0001" / "frame.jpg"
+        attempt = _attempt(
+            fps=1.0,
+            items=(
+                InterpretationItem(
+                    "item_exact",
+                    (5.0, 5.0),
+                    "Exact sampled moment.",
+                ),
+            ),
+        )
+        attempt = replace(attempt, frame_refs=(str(frame_path),))
+        log = ObservationLog(workspace_root / "observation_log.jsonl")
+        rows.append(log.append_attempt(attempt, round_id=1))
+
+    left = rows[0]["observation_cues"][0]
+    right = rows[1]["observation_cues"][0]
+    assert left["source_frame_ref"] == "observations/seg_0001/frame.jpg"
+    assert right["source_frame_ref"] == left["source_frame_ref"]
+    assert right["cue_id"] == left["cue_id"]
 
 
 def test_cue_status_requires_a_real_verification_item(tmp_path: Path) -> None:

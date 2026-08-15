@@ -1375,7 +1375,10 @@ class ObservationLog:
             attempt_id=attempt_id,
             interpretation_id=interpretation_id,
             items=interpretation_items,
-            frame_refs=frame_refs,
+            frame_refs=tuple(
+                _portable_frame_ref(frame_ref, root=self.path.parent)
+                for frame_ref in frame_refs
+            ),
             frame_times=frame_times,
         )
         row = {
@@ -1906,6 +1909,16 @@ def _bound_observation_cues(
             )
         )
     return tuple(cues)
+
+
+def _portable_frame_ref(frame_ref: str, *, root: Path) -> str:
+    path = Path(str(frame_ref or "").strip())
+    if not path.is_absolute():
+        return path.as_posix()
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _anchors_overlap(
