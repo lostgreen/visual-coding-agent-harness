@@ -464,11 +464,18 @@ class VirtualVideoMultiRoundDriver:
             nonlocal occurrence_recovery_rounds_granted
             if occurrence_recovery_pending:
                 return True
-            if (
-                isinstance(occurrence_state, OccurrenceResolutionStateV2)
-                and occurrence_recovery_rounds_granted >= 1
-            ):
-                return False
+            if isinstance(occurrence_state, OccurrenceResolutionStateV2):
+                if _occurrence_resolution_complete(occurrence_state):
+                    if (
+                        occurrence_answer_final_calls
+                        >= _OCCURRENCE_ANSWER_FINAL_CALL_BUDGET
+                    ):
+                        return False
+                elif (
+                    occurrence_selection_final_calls
+                    >= _OCCURRENCE_SELECTION_FINAL_CALL_BUDGET
+                ):
+                    return False
             occurrence_recovery_pending = True
             occurrence_recovery_rounds_granted += 1
             trace.append(

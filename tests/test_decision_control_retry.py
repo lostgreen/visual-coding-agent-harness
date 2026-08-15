@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+import pytest
+
 from vcah.interactive_agents import WorkspaceReasoner
 from vcah.investigator import InvestigationReport, ObservationAttempt
 from vcah.multiround import (
@@ -731,6 +733,65 @@ def test_a2_clean_is_identical_before_ambiguous_set_exposure(
         row for row in result.trace if row.get("type") == "reasoner_decision"
     ]
     assert decisions[1]["selected_occurrence_ids"] == ["occ_2"]
+    assert result.answer_present is True
+
+
+@pytest.mark.parametrize("occurrence_method_arm", ("a2-clean", "a3"))
+def test_scoped_occurrence_answer_recovery_uses_dedicated_call_budget(
+    tmp_path: Path,
+    occurrence_method_arm: str,
+) -> None:
+    ignored_answer_gate = ReasonerDecision(action="investigate")
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="locate",
+                        goal="locate target event",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {
+                        "op": "select",
+                        "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+                        "occurrence_id": "occ_2",
+                    },
+                ),
+            ),
+            ignored_answer_gate,
+            ignored_answer_gate,
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=ScopedOccurrenceInvestigator(),
+        max_rounds=1,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm=occurrence_method_arm,
+    ).run(_workspace(tmp_path))
+
+    recovery_events = [
+        row
+        for row in result.trace
+        if row.get("type") == "occurrence_recovery_round_granted"
+    ]
+    assert [row.get("recovery_index") for row in recovery_events] == [1, 2]
+    assert not any(
+        row.get("type") == "decision_control_exhausted"
+        for row in result.trace
+    )
     assert result.answer_present is True
 
 
