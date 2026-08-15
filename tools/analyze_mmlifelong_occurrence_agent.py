@@ -232,6 +232,22 @@ def collect_rows(
                     "selected_locator_inspected_count": len(
                         selected_locator_pairs & executed_binding_pairs
                     ),
+                    "released_unexecuted_count": released_unexecuted_count,
+                    "released_at_budget_exhaustion_count": (
+                        locator_accounting["release_counts"][
+                            "released_at_budget_exhaustion"
+                        ]
+                    ),
+                    "released_on_set_retirement_count": (
+                        locator_accounting["release_counts"][
+                            "released_on_set_retirement"
+                        ]
+                    ),
+                    "released_by_revision_count": (
+                        locator_accounting["release_counts"][
+                            "released_by_revision"
+                        ]
+                    ),
                     "selected_locators_accounted": locator_accounting[
                         "accounted"
                     ],
@@ -1055,19 +1071,62 @@ def _aggregate_arm_result(
         "occurrence_handle_usage_rate": _optional_mean(
             row.get("occurrence_handle_usage_rate") for row in rows
         ),
-        "selected_locator_usage_rate": _optional_mean(
+        "selected_locator_count": _sum_optional_int(
+            rows, "selected_locator_count"
+        ),
+        "selected_locator_inspected_count": _sum_optional_int(
+            rows, "selected_locator_inspected_count"
+        ),
+        "selected_locator_usage_rate": _locator_pair_rate(
+            rows,
+            numerator_key="selected_locator_inspected_count",
+            fallback_rate_key="selected_locator_usage_rate",
+        ),
+        "selected_locator_case_macro_usage_rate": _optional_mean(
             row.get("selected_locator_usage_rate") for row in rows
         ),
-        "released_unexecuted_rate": _optional_mean(
+        "released_unexecuted_count": _sum_optional_int(
+            rows, "released_unexecuted_count"
+        ),
+        "released_unexecuted_rate": _locator_pair_rate(
+            rows,
+            numerator_key="released_unexecuted_count",
+            fallback_rate_key="released_unexecuted_rate",
+        ),
+        "released_unexecuted_case_macro_rate": _optional_mean(
             row.get("released_unexecuted_rate") for row in rows
         ),
-        "released_at_budget_exhaustion_rate": _optional_mean(
+        "released_at_budget_exhaustion_count": _sum_optional_int(
+            rows, "released_at_budget_exhaustion_count"
+        ),
+        "released_at_budget_exhaustion_rate": _locator_pair_rate(
+            rows,
+            numerator_key="released_at_budget_exhaustion_count",
+            fallback_rate_key="released_at_budget_exhaustion_rate",
+        ),
+        "released_at_budget_exhaustion_case_macro_rate": _optional_mean(
             row.get("released_at_budget_exhaustion_rate") for row in rows
         ),
-        "released_on_set_retirement_rate": _optional_mean(
+        "released_on_set_retirement_count": _sum_optional_int(
+            rows, "released_on_set_retirement_count"
+        ),
+        "released_on_set_retirement_rate": _locator_pair_rate(
+            rows,
+            numerator_key="released_on_set_retirement_count",
+            fallback_rate_key="released_on_set_retirement_rate",
+        ),
+        "released_on_set_retirement_case_macro_rate": _optional_mean(
             row.get("released_on_set_retirement_rate") for row in rows
         ),
-        "released_by_revision_rate": _optional_mean(
+        "released_by_revision_count": _sum_optional_int(
+            rows, "released_by_revision_count"
+        ),
+        "released_by_revision_rate": _locator_pair_rate(
+            rows,
+            numerator_key="released_by_revision_count",
+            fallback_rate_key="released_by_revision_rate",
+        ),
+        "released_by_revision_case_macro_rate": _optional_mean(
             row.get("released_by_revision_rate") for row in rows
         ),
         "locator_scope_single_set_rate": _mean_bool(
@@ -2248,6 +2307,30 @@ def _interval_recall(
         any(_overlap(prediction, target) for prediction in predictions)
         for target in targets
     ) / len(targets)
+
+
+def _sum_optional_int(
+    rows: Sequence[Mapping[str, Any]], key: str
+) -> int | None:
+    values = [
+        int(row[key])
+        for row in rows
+        if isinstance(row.get(key), (int, float))
+    ]
+    return sum(values) if values else None
+
+
+def _locator_pair_rate(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    numerator_key: str,
+    fallback_rate_key: str,
+) -> float | None:
+    denominator = _sum_optional_int(rows, "selected_locator_count")
+    numerator = _sum_optional_int(rows, numerator_key)
+    if denominator is not None and denominator > 0 and numerator is not None:
+        return numerator / denominator
+    return _optional_mean(row.get(fallback_rate_key) for row in rows)
 
 
 def _optional_mean(values: Iterable[Any]) -> float | None:

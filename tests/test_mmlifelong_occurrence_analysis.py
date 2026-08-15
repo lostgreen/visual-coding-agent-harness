@@ -923,6 +923,53 @@ def test_matched_control_keeps_declared_cohort_when_replay_stops_post_treatment(
     assert report["comparisons"]["a3-a2-clean"]["paired_n"] == 1
 
 
+def test_locator_outcomes_are_pair_weighted_not_case_macro_averaged() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    inspected = _row("a3", "c1", score=0.0, signature=signature)
+    released = _row("a3", "c2", score=0.0, signature=signature)
+    inspected.update(
+        {
+            "selected_locator_count": 1,
+            "selected_locator_inspected_count": 1,
+            "selected_locator_usage_rate": 1.0,
+            "released_unexecuted_count": 0,
+            "released_unexecuted_rate": 0.0,
+            "released_at_budget_exhaustion_count": 0,
+            "released_at_budget_exhaustion_rate": 0.0,
+            "released_on_set_retirement_count": 0,
+            "released_on_set_retirement_rate": 0.0,
+            "released_by_revision_count": 0,
+            "released_by_revision_rate": 0.0,
+        }
+    )
+    released.update(
+        {
+            "selected_locator_count": 3,
+            "selected_locator_inspected_count": 0,
+            "selected_locator_usage_rate": 0.0,
+            "released_unexecuted_count": 3,
+            "released_unexecuted_rate": 1.0,
+            "released_at_budget_exhaustion_count": 2,
+            "released_at_budget_exhaustion_rate": 2 / 3,
+            "released_on_set_retirement_count": 0,
+            "released_on_set_retirement_rate": 0.0,
+            "released_by_revision_count": 1,
+            "released_by_revision_rate": 1 / 3,
+        }
+    )
+
+    metrics = ANALYSIS._aggregate_arm((inspected, released))
+
+    assert metrics["selected_locator_count"] == 4
+    assert metrics["selected_locator_inspected_count"] == 1
+    assert metrics["selected_locator_usage_rate"] == 0.25
+    assert metrics["selected_locator_case_macro_usage_rate"] == 0.5
+    assert metrics["released_unexecuted_rate"] == 0.75
+    assert metrics["released_at_budget_exhaustion_rate"] == 0.5
+    assert metrics["released_on_set_retirement_rate"] == 0.0
+    assert metrics["released_by_revision_rate"] == 0.25
+
+
 def test_scoped_canary_audit_requires_actionable_locator_accounting(
     tmp_path: Path,
 ) -> None:
