@@ -62,6 +62,9 @@ def _row(
         "visual_frames": 3,
         "visual_windows": 1,
         "vlm_calls": 1,
+        "semantic_rounds_used": 4,
+        "forced_finalize_round": 4,
+        "extra_rounds_granted": 0,
         "pre_treatment_signature": signature,
         "pre_treatment_prompt_digests": ["prompt"],
         "pre_activation_state_exposure": False,
@@ -136,6 +139,21 @@ def test_a1_flat_text_mismatch_fails_structural_gate() -> None:
     )
 
     assert report["text_budget_parity"]["passed"] is False
+    assert report["structural_gate_passed"] is False
+
+
+def test_budget_symmetry_fails_when_arm_mean_gap_exceeds_threshold() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    left = _row("a2-clean", "c1", score=0.0, signature=signature)
+    right = _row("a3", "c1", score=0.0, signature=signature)
+    right["semantic_rounds_used"] = 5
+
+    report = ANALYSIS.build_report(
+        (left, right), expected_cases=1, bootstrap_samples=10, seed=3
+    )
+
+    assert report["budget_symmetry"]["max_minus_min"] == 1.0
+    assert report["structural_checks"]["budget_symmetry_passed"] is False
     assert report["structural_gate_passed"] is False
 
 

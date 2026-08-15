@@ -181,6 +181,15 @@ def collect_rows(
                     "parse_status": answer_eval.get("parse_status"),
                     "visual_frames": metrics.get("visual_frames_inspected"),
                     "vlm_calls": metrics.get("visual_interpretation_count"),
+                    "semantic_rounds_used": metrics.get(
+                        "semantic_rounds_used", metrics.get("rounds")
+                    ),
+                    "forced_finalize_round": metrics.get(
+                        "forced_finalize_round"
+                    ),
+                    "extra_rounds_granted": metrics.get(
+                        "extra_rounds_granted"
+                    ),
                     "visual_windows": _visual_window_count(observations),
                     "candidate_count": len(candidates),
                     "candidate_recall": candidate_recall,
@@ -344,6 +353,7 @@ def build_report(
         )
     text_parity = _text_parity(by_arm)
     replay_parity = _frozen_replay_parity(by_arm)
+    budget_symmetry = _budget_symmetry(by_arm)
     structural_checks = {
         "arms_present": bool(arms),
         "case_sets_aligned": bool(case_sets)
@@ -375,6 +385,7 @@ def build_report(
         ),
         "frozen_occurrence_replay_parity": replay_parity.get("passed"),
         "frozen_occurrence_replay_prime": replay_parity.get("prime_passed"),
+        "budget_symmetry_passed": budget_symmetry.get("passed"),
     }
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV2",
@@ -387,11 +398,13 @@ def build_report(
             "abstention_accuracy": "no_match rate conditioned on no retrieved candidate overlapping any gold clue",
             "selected_locator_usage_rate": "final selected (locator_attempt_id, occurrence_id) pairs with executed candidate-bound visual observations",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
+            "budget_symmetry_passed": "maximum arm mean semantic rounds minus minimum arm mean semantic rounds is at most 0.25",
         },
         "arms": arm_metrics,
         "comparisons": comparisons,
         "text_budget_parity": text_parity,
         "frozen_occurrence_replay": replay_parity,
+        "budget_symmetry": budget_symmetry,
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
             value is not False for value in structural_checks.values()
@@ -476,6 +489,15 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             row.get("visual_windows") for row in rows
         ),
         "mean_vlm_calls": _optional_mean(row.get("vlm_calls") for row in rows),
+        "mean_semantic_rounds_used": _optional_mean(
+            row.get("semantic_rounds_used") for row in rows
+        ),
+        "mean_forced_finalize_round": _optional_mean(
+            row.get("forced_finalize_round") for row in rows
+        ),
+        "mean_extra_rounds_granted": _optional_mean(
+            row.get("extra_rounds_granted") for row in rows
+        ),
         "frozen_replay_prime_rate": _mean_bool(
             row.get("occurrence_replay_prime_configured") for row in rows
         ),
@@ -498,6 +520,32 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             row.get("occurrence_replay_post_fixture_reuse_count")
             for row in rows
         ),
+    }
+
+
+def _budget_symmetry(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    arm_means = {
+        arm: _optional_mean(
+            row.get("semantic_rounds_used") for row in cases.values()
+        )
+        for arm, cases in by_arm.items()
+    }
+    missing_arms = sorted(
+        arm for arm, value in arm_means.items() if value is None
+    )
+    values = [float(value) for value in arm_means.values() if value is not None]
+    gap = max(values) - min(values) if values else None
+    return {
+        "arm_mean_semantic_rounds": arm_means,
+        "max_minus_min": gap,
+        "threshold": 0.25,
+        "missing_arms": missing_arms,
+        "passed": bool(arm_means)
+        and not missing_arms
+        and gap is not None
+        and gap <= 0.25,
     }
 
 

@@ -229,6 +229,11 @@ def agent_run_metrics(
     }
     control_retries = tuple(row for row in trace if row.get("type") == "control_retry")
     closure_repairs = tuple(row for row in trace if row.get("type") == "closure_repair")
+    occurrence_recovery_grants = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_recovery_round_granted"
+    )
     answer_outcomes = tuple(row for row in trace if row.get("type") == "answer_outcome")
     ignored_state_ops = tuple(
         row for row in trace if row.get("type") == "runtime_state_ops_ignored"
@@ -416,6 +421,26 @@ def agent_run_metrics(
                 int(row.get("semantic_round", row.get("round", index)) or index)
                 for index, row in enumerate(committed_decisions, start=1)
             }
+        ),
+        "semantic_rounds_used": len(
+            {
+                int(row.get("semantic_round", row.get("round", index)) or index)
+                for index, row in enumerate(
+                    decision_attempts or decisions, start=1
+                )
+            }
+        ),
+        "forced_finalize_round": min(
+            (
+                int(row.get("semantic_round", row.get("round", 0)) or 0)
+                for row in decision_attempts or decisions
+                if row.get("force_finalize")
+            ),
+            default=None,
+        ),
+        "extra_rounds_granted": sum(
+            max(0, int(row.get("count", 1) or 0))
+            for row in occurrence_recovery_grants
         ),
         "control_retry_count": sum(
             max(0, int(row.get("count", 1) or 0)) for row in control_retries

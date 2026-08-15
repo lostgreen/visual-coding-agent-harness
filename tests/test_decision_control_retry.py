@@ -638,6 +638,74 @@ def test_a3_rejects_answer_until_selected_locator_is_inspected(
     assert result.answer_present is True
 
 
+def test_force_finalize_is_arm_symmetric(tmp_path: Path) -> None:
+    calls_by_arm: dict[str, list[dict[str, Any]]] = {}
+    metrics_by_arm: dict[str, dict[str, float | int | None]] = {}
+    traces_by_arm: dict[str, tuple[dict[str, Any], ...]] = {}
+
+    for arm in ("a2-clean", "a3"):
+        reasoner = ScriptedReasoner(
+            (
+                ReasonerDecision(action="update_workspace"),
+                ReasonerDecision(
+                    action="update_workspace",
+                    occurrence_ops=(
+                        {
+                            "op": "select",
+                            "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+                            "occurrence_id": "occ_2",
+                        },
+                    ),
+                ),
+                ReasonerDecision(action="answer", answer="resolved"),
+                ReasonerDecision(action="answer", answer="resolved"),
+                ReasonerDecision(action="answer", answer="resolved"),
+            )
+        )
+        result = VirtualVideoMultiRoundDriver(
+            reasoner=reasoner,
+            investigator=ScopedOccurrenceInvestigator(),
+            max_rounds=1,
+            max_investigations=4,
+            control_retry_budget=0,
+            controller_mode="frozen_baseline",
+            evidence_control_mode="shadow",
+            evidence_state_mode="llm_authored",
+            occurrence_method_arm=arm,
+            bootstrap_tasks=(
+                InvestigationTask(
+                    query_id="locate",
+                    goal="locate target event",
+                    inspection_mode="search_caption",
+                    caption_queries=("target event",),
+                ),
+            ),
+        ).run(_workspace(tmp_path / arm))
+        calls_by_arm[arm] = reasoner.calls
+        metrics_by_arm[arm] = agent_run_metrics(
+            result.trace,
+            (),
+            answer_present=result.answer_present,
+            reference_valid=result.reference_valid,
+        )
+        traces_by_arm[arm] = tuple(dict(row) for row in result.trace)
+
+    assert calls_by_arm["a2-clean"][1]["force_finalize"] is True
+    assert calls_by_arm["a3"][1]["force_finalize"] is True
+    assert metrics_by_arm["a2-clean"]["forced_finalize_round"] == 2
+    assert metrics_by_arm["a3"]["forced_finalize_round"] == 2
+    assert metrics_by_arm["a2-clean"]["semantic_rounds_used"] == 3
+    assert metrics_by_arm["a3"]["semantic_rounds_used"] == 3
+    assert metrics_by_arm["a2-clean"]["extra_rounds_granted"] == 1
+    assert metrics_by_arm["a3"]["extra_rounds_granted"] == 1
+    assert any(
+        row.get("type") == "occurrence_locator_budget_exhausted_at_finalize"
+        and row.get("method_arm") == "a3"
+        and row.get("pending_locator_count") == 1
+        for row in traces_by_arm["a3"]
+    )
+
+
 def test_json_repair_uses_control_budget_without_advancing_semantic_round(
     tmp_path: Path,
 ) -> None:

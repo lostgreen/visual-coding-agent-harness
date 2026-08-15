@@ -426,6 +426,8 @@ class VirtualVideoMultiRoundDriver:
         occurrence_selection_final_calls = 0
         occurrence_answer_final_calls = 0
         occurrence_recovery_pending = False
+        occurrence_recovery_rounds_granted = 0
+        locator_budget_exhaustion_recorded = False
         protocol_exhausted = False
         surfaced_observation_ids: set[str] = set()
         closure_repair_pending = False
@@ -438,6 +440,31 @@ class VirtualVideoMultiRoundDriver:
             occurrence_state = OccurrenceResolutionStateV2()
         else:
             occurrence_state = None
+
+        def grant_occurrence_recovery(*, round_id: int, stage: str) -> bool:
+            nonlocal occurrence_recovery_pending
+            nonlocal occurrence_recovery_rounds_granted
+            if occurrence_recovery_pending:
+                return True
+            if (
+                isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                and occurrence_recovery_rounds_granted >= 1
+            ):
+                return False
+            occurrence_recovery_pending = True
+            occurrence_recovery_rounds_granted += 1
+            trace.append(
+                {
+                    "type": "occurrence_recovery_round_granted",
+                    "round": round_id,
+                    "method_arm": self.occurrence_method_arm,
+                    "stage": stage,
+                    "recovery_index": occurrence_recovery_rounds_granted,
+                    "count": 1,
+                }
+            )
+            return True
+
         occurrence_state_path = workspace.root_dir / "occurrence_resolution_state.json"
         treatment_eligible_recorded = False
         treatment_exposed_recorded = False
@@ -572,6 +599,8 @@ class VirtualVideoMultiRoundDriver:
             ),
         ):
             remaining = max(0, self.max_investigations - completed_investigations)
+            occurrence_recovery_active = occurrence_recovery_pending
+            occurrence_recovery_pending = False
             closure_repair_active = bool(
                 closure_repair_pending
                 and closure_repair_count < self.closure_repair_budget
@@ -662,18 +691,44 @@ class VirtualVideoMultiRoundDriver:
                         status["active_occurrence_locators"] = [
                             row for row in locator_statuses if not row["inspected"]
                         ]
-            a3_locator_inspection_pending = bool(
-                status.get("active_occurrence_locators")
+            pending_locator_rows = tuple(
+                row
+                for row in tuple(status.get("active_occurrence_locators", ()) or ())
+                if isinstance(row, Mapping)
+            )
+            budget_exhausted = (
+                round_id > self.semantic_round_budget or remaining <= 0
             )
             force_finalize = (
-                round_id > self.semantic_round_budget
-                or remaining <= 0
-                or occurrence_recovery_pending
-            ) and not closure_repair_active and not (
-                self.occurrence_method_arm == "a3"
-                and a3_locator_inspection_pending
-                and remaining > 0
-            )
+                budget_exhausted or occurrence_recovery_active
+            ) and not closure_repair_active
+            if (
+                force_finalize
+                and budget_exhausted
+                and pending_locator_rows
+                and not locator_budget_exhaustion_recorded
+            ):
+                pending_pairs = sorted(
+                    {
+                        (
+                            str(row.get("locator_attempt_id", "") or ""),
+                            str(row.get("occurrence_id", "") or ""),
+                        )
+                        for row in pending_locator_rows
+                    }
+                )
+                trace.append(
+                    {
+                        "type": "occurrence_locator_budget_exhausted_at_finalize",
+                        "round": round_id,
+                        "method_arm": self.occurrence_method_arm,
+                        "pending_locator_count": len(pending_pairs),
+                        "pending_locator_pairs": [
+                            list(pair) for pair in pending_pairs
+                        ],
+                    }
+                )
+                locator_budget_exhaustion_recorded = True
             if self.controller_mode != "frozen_baseline":
                 status["closure_repair_active"] = closure_repair_active
                 status["closure_repair_count"] = closure_repair_count
@@ -876,7 +931,9 @@ class VirtualVideoMultiRoundDriver:
                     {
                         "type": "reasoner_decision_attempt",
                         "round": round_id,
+                        "semantic_round": round_id,
                         "control_attempt": control_attempt,
+                        "force_finalize": force_finalize,
                         "action": (
                             parsed_decision.action
                             if parsed_decision is not None
@@ -926,10 +983,17 @@ class VirtualVideoMultiRoundDriver:
                         rounds_run = round_id
                         break
                     if control_retries_used >= self.control_retry_budget:
-                        if occurrence_state is not None and _occurrence_repair_available(
-                            occurrence_state,
-                            selection_final_calls=occurrence_selection_final_calls,
-                            answer_final_calls=occurrence_answer_final_calls,
+                        if (
+                            occurrence_state is not None
+                            and _occurrence_repair_available(
+                                occurrence_state,
+                                selection_final_calls=occurrence_selection_final_calls,
+                                answer_final_calls=occurrence_answer_final_calls,
+                            )
+                            and grant_occurrence_recovery(
+                                round_id=round_id,
+                                stage="decision_preflight",
+                            )
                         ):
                             trace.append(
                                 {
@@ -944,7 +1008,6 @@ class VirtualVideoMultiRoundDriver:
                                 revision=document.revision,
                                 previous_feedback=feedback,
                             )
-                            occurrence_recovery_pending = True
                             retry_occurrence_next_round = True
                             break
                         trace.append(
@@ -1029,15 +1092,20 @@ class VirtualVideoMultiRoundDriver:
                         if isinstance(operation, Mapping)
                     )
                 )
-                if occurrence_selection_committed and (
-                    isinstance(occurrence_state, OccurrenceResolutionStateV1)
-                    or (
+                if occurrence_selection_committed:
+                    if isinstance(occurrence_state, OccurrenceResolutionStateV1):
+                        grant_occurrence_recovery(
+                            round_id=round_id,
+                            stage="occurrence_selection_committed",
+                        )
+                    elif (
                         isinstance(occurrence_state, OccurrenceResolutionStateV2)
-                        and self.occurrence_method_arm == "a2-clean"
                         and force_finalize
-                    )
-                ):
-                    occurrence_recovery_pending = True
+                    ):
+                        grant_occurrence_recovery(
+                            round_id=round_id,
+                            stage="occurrence_selection_committed",
+                        )
                 premature_occurrence_commit = bool(
                     occurrence_state is not None
                     and decision.action == "answer"
@@ -1174,10 +1242,17 @@ class VirtualVideoMultiRoundDriver:
                 )
                 requested_observations = requested_rows
                 if control_retries_used >= self.control_retry_budget:
-                    if occurrence_state is not None and _occurrence_repair_available(
-                        occurrence_state,
-                        selection_final_calls=occurrence_selection_final_calls,
-                        answer_final_calls=occurrence_answer_final_calls,
+                    if (
+                        occurrence_state is not None
+                        and _occurrence_repair_available(
+                            occurrence_state,
+                            selection_final_calls=occurrence_selection_final_calls,
+                            answer_final_calls=occurrence_answer_final_calls,
+                        )
+                        and grant_occurrence_recovery(
+                            round_id=round_id,
+                            stage="workspace_transaction",
+                        )
                     ):
                         trace.append(
                             {
@@ -1192,7 +1267,6 @@ class VirtualVideoMultiRoundDriver:
                             revision=document.revision,
                             previous_feedback=feedback,
                         )
-                        occurrence_recovery_pending = True
                         retry_occurrence_next_round = True
                         decision = None
                         break
