@@ -40,19 +40,32 @@ def _row(
         "case_id": case_id,
         "score": score,
         "exact_correct": score == 1.0,
+        "raw_exact": score == 1.0,
         "verified_correct": False,
         "correct_and_ref_300": score == 1.0,
+        "grounded_correct_ref300": score == 1.0,
+        "grounded_correct_bound_visual": False,
         "parse_status": "parsed",
         "judge_model": "judge",
         "candidate_recall": True,
+        "candidate_recall_trajectory": True,
+        "candidate_recall_active_set": True,
+        "candidate_recall_resolved_set": True,
         "candidate_clue_recall": 1.0,
+        "resolved_set_id": "set-1",
+        "final_resolution": "selected" if arm == "a2" else "unresolved",
         "osa_eligible": arm == "a2",
         "osa_correct": arm == "a2",
+        "osa_any": True if arm == "a2" else None,
+        "osa_strict": True if arm == "a2" else None,
+        "osa_precision": 1.0 if arm == "a2" else None,
         "selected_occurrence_count": 1 if arm == "a2" else 0,
         "selected_clue_recall": 1.0 if arm == "a2" else None,
         "abstention_eligible": False,
         "abstention_correct": None,
-        "false_abstention": False,
+        "no_match_correct": None,
+        "false_commit": None,
+        "false_abstention": False if arm == "a2" else None,
         "deferred_occurrence_set": False,
         "occurrence_handle_usage_rate": 1.0,
         "selected_locator_usage_rate": None,
@@ -85,6 +98,7 @@ def _row(
         "occurrence_replay_mode": "live",
         "occurrence_replay_fixture_digest": None,
         "occurrence_replay_complete": True,
+        "frozen_replay_full_consumption": True,
         "occurrence_replay_prefix_valid": True,
         "occurrence_replay_identity_digests": [],
         "occurrence_replay_prime_configured": False,
@@ -94,6 +108,7 @@ def _row(
         "occurrence_replay_prime_event_completed": False,
         "occurrence_replay_prime_event_pre_reasoner": False,
         "occurrence_replay_post_fixture_reuse_count": 0,
+        "retired_locator_count": 0,
         "frozen_config": {"controller_mode": "frozen_baseline"},
     }
 
@@ -129,6 +144,173 @@ def test_report_separates_pre_treatment_divergence_and_a2_osa() -> None:
     assert report["structural_gate_passed"] is True
 
 
+def test_candidate_recall_is_scoped_to_the_resolved_set() -> None:
+    observations = (
+        {
+            "attempt_id": "set-gold",
+            "sampling_config": {
+                "occurrence_set": {
+                    "candidates": [
+                        {"occurrence_id": "gold", "time_range": [10, 20]}
+                    ]
+                }
+            },
+        },
+        {
+            "attempt_id": "set-wrong",
+            "sampling_config": {
+                "occurrence_set": {
+                    "candidates": [
+                        {"occurrence_id": "wrong", "time_range": [100, 110]}
+                    ]
+                }
+            },
+        },
+    )
+    state = {
+        "active_set_id": "set-wrong",
+        "active_resolution": "selected",
+        "sets": [
+            {
+                "set_id": "set-gold",
+                "lifecycle": "retired",
+                "resolution": "deferred",
+                "candidates": [
+                    {"occurrence_id": "gold", "time_range": [10, 20]}
+                ],
+                "selected_occurrence_ids": [],
+            },
+            {
+                "set_id": "set-wrong",
+                "lifecycle": "active",
+                "resolution": "selected",
+                "candidates": [
+                    {"occurrence_id": "wrong", "time_range": [100, 110]}
+                ],
+                "selected_occurrence_ids": ["wrong"],
+            },
+        ],
+    }
+    trace = (
+        {
+            "type": "reasoner_decision",
+            "occurrence_ops_accepted": True,
+            "occurrence_ops": [
+                {
+                    "op": "select",
+                    "set_id": "set-wrong",
+                    "occurrence_id": "wrong",
+                }
+            ],
+        },
+    )
+
+    metrics = ANALYSIS._occurrence_resolution_metrics(
+        arm="a3",
+        state=state,
+        trace=trace,
+        observations=observations,
+        clues=((10.0, 20.0),),
+    )
+
+    assert metrics["candidate_recall_trajectory"] is True
+    assert metrics["candidate_recall_active_set"] is False
+    assert metrics["candidate_recall_resolved_set"] is False
+    assert metrics["resolved_set_id"] == "set-wrong"
+
+
+def test_final_resolution_reports_all_four_terminal_states() -> None:
+    expected = ("selected", "no_match", "deferred", "unresolved")
+    for resolution in expected:
+        state = {
+            "active_set_id": "set-1",
+            "active_resolution": resolution,
+            "sets": [
+                {
+                    "set_id": "set-1",
+                    "lifecycle": "active",
+                    "resolution": resolution,
+                    "candidates": [
+                        {"occurrence_id": "occ-1", "time_range": [10, 20]}
+                    ],
+                    "selected_occurrence_ids": (
+                        ["occ-1"] if resolution == "selected" else []
+                    ),
+                }
+            ],
+        }
+        metrics = ANALYSIS._occurrence_resolution_metrics(
+            arm="a2-clean",
+            state=state,
+            trace=(),
+            observations=(),
+            clues=((10.0, 20.0),),
+        )
+        assert metrics["final_resolution"] == resolution
+
+
+def test_strict_osa_rejects_multi_selection_credit() -> None:
+    state = {
+        "active_set_id": "set-1",
+        "active_resolution": "selected",
+        "sets": [
+            {
+                "set_id": "set-1",
+                "lifecycle": "active",
+                "resolution": "selected",
+                "candidates": [
+                    {"occurrence_id": "correct", "time_range": [10, 20]},
+                    {"occurrence_id": "wrong", "time_range": [100, 110]},
+                ],
+                "selected_occurrence_ids": ["correct", "wrong"],
+            }
+        ],
+    }
+
+    metrics = ANALYSIS._occurrence_resolution_metrics(
+        arm="a3",
+        state=state,
+        trace=(),
+        observations=(),
+        clues=((10.0, 20.0),),
+    )
+
+    assert metrics["osa_any"] is True
+    assert metrics["osa_strict"] is False
+    assert metrics["osa_precision"] == 0.5
+
+
+def test_false_commit_uses_final_resolved_set_state() -> None:
+    state = {
+        "active_set_id": "set-wrong",
+        "active_resolution": "selected",
+        "sets": [
+            {
+                "set_id": "set-wrong",
+                "lifecycle": "active",
+                "resolution": "selected",
+                "candidates": [
+                    {"occurrence_id": "wrong", "time_range": [100, 110]}
+                ],
+                "selected_occurrence_ids": ["wrong"],
+            }
+        ],
+    }
+
+    metrics = ANALYSIS._occurrence_resolution_metrics(
+        arm="a2-clean",
+        state=state,
+        trace=(),
+        observations=(),
+        clues=((10.0, 20.0),),
+    )
+
+    assert metrics["candidate_recall_resolved_set"] is False
+    assert metrics["false_commit"] is True
+    assert metrics["no_match_correct"] is False
+    assert metrics["false_abstention"] is None
+
+
 def test_a1_flat_text_mismatch_fails_structural_gate() -> None:
     signature = [{"action": "investigate", "tasks": []}]
     rows = (
@@ -144,6 +326,36 @@ def test_a1_flat_text_mismatch_fails_structural_gate() -> None:
 
     assert report["text_budget_parity"]["passed"] is False
     assert report["structural_gate_passed"] is False
+
+
+def test_frozen_complete_is_primary_and_comparisons_report_sign_test() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    rows = []
+    for case_id, baseline_score, treatment_score in (
+        ("c1", 0.0, 1.0),
+        ("c2", 1.0, 0.0),
+    ):
+        rows.append(
+            _row("a0", case_id, score=baseline_score, signature=signature)
+        )
+        treatment = _row(
+            "a1", case_id, score=treatment_score, signature=signature
+        )
+        if case_id == "c2":
+            treatment["frozen_replay_full_consumption"] = False
+        rows.append(treatment)
+
+    report = ANALYSIS.build_report(
+        tuple(rows), expected_cases=2, bootstrap_samples=20, seed=9
+    )
+
+    assert report["all_cases"]["n"] == 2
+    assert report["frozen_complete"]["n"] == 1
+    assert report["case_count"] == 1
+    comparison = report["comparisons"]["a1-a0"]
+    assert comparison["paired_n"] == 1
+    assert comparison["sign_test_p"] == 1.0
+    assert comparison["underpowered"] is True
 
 
 def test_budget_symmetry_fails_when_arm_mean_gap_exceeds_threshold() -> None:
@@ -421,12 +633,22 @@ def test_clean_and_actionable_arms_report_full_mechanism_chain() -> None:
             {
                 "osa_eligible": case_id == "c1",
                 "osa_correct": True if case_id == "c1" else None,
+                "osa_any": True if case_id == "c1" else None,
+                "osa_strict": True if case_id == "c1" else None,
+                "osa_precision": 1.0 if case_id == "c1" else None,
                 "candidate_recall": case_id == "c1",
+                "candidate_recall_trajectory": case_id == "c1",
+                "candidate_recall_active_set": case_id == "c1",
+                "candidate_recall_resolved_set": case_id == "c1",
                 "candidate_clue_recall": 1.0 if case_id == "c1" else 0.0,
                 "selected_occurrence_count": 1 if case_id == "c1" else 0,
                 "selected_clue_recall": 1.0 if case_id == "c1" else None,
                 "abstention_eligible": case_id == "c2",
                 "abstention_correct": True if case_id == "c2" else None,
+                "no_match_correct": True if case_id == "c2" else None,
+                "false_commit": False if case_id == "c2" else None,
+                "false_abstention": False if case_id == "c1" else None,
+                "final_resolution": "selected" if case_id == "c1" else "no_match",
                 "arbitration_activation_round": 2,
             }
         )
