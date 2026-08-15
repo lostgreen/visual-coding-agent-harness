@@ -1588,7 +1588,7 @@ def render_working_view(
             lines.append(
                 f"- [{row.get('attempt_id', '')}/{row.get('interpretation_id', '')}] "
                 f"modality={row.get('modality', '')} ranges={row.get('inspected_ranges', ())} "
-                f"raw_pointer={observations.path}::{row.get('interpretation_id', '')} {raw}"
+                f"raw_pointer={observations.path.name}::{row.get('interpretation_id', '')} {raw}"
             )
     return "\n".join(lines)
 
@@ -1678,7 +1678,7 @@ def render_frozen_working_view(
                 f"- [{row.get('attempt_id', '')}/{row.get('interpretation_id', '')}] "
                 f"modality={row.get('modality', '')} "
                 f"ranges={row.get('inspected_ranges', ())} "
-                f"raw_pointer={observations.path}::{row.get('interpretation_id', '')} {raw}"
+                f"raw_pointer={observations.path.name}::{row.get('interpretation_id', '')} {raw}"
             )
     return "\n".join(lines)
 

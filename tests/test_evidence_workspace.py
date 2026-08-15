@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from vcah.investigator import ObservationAttempt
-from vcah.workspace import ObservationLog, WorkingDocument, render_working_view, stable_attempt_id
+from vcah.workspace import (
+    ObservationLog,
+    WorkingDocument,
+    render_frozen_working_view,
+    render_working_view,
+    stable_attempt_id,
+)
 
 
 def test_attempt_identity_is_prompt_independent_but_material_sensitive() -> None:
@@ -295,7 +301,42 @@ def test_working_view_bounds_requested_observation_and_keeps_pointer(tmp_path: P
 
     assert "RAW_END_SENTINEL" not in view
     assert "REQUESTED OBSERVATION PREVIEWS" in view
-    assert f"raw_pointer={log.path}" in view
+    assert f"raw_pointer={log.path.name}" in view
+    assert str(tmp_path) not in view
+
+
+def test_frozen_working_view_is_independent_of_output_root(tmp_path: Path) -> None:
+    attempt_id = stable_attempt_id(frame_times=(5.0,), sampling_fps=1.0)
+    requested_rows = []
+    views = []
+    for root_name in ("a2clean-output", "a3-output"):
+        root = tmp_path / root_name
+        root.mkdir()
+        log = ObservationLog(root / "observation_log.jsonl")
+        log.append_attempt(
+            ObservationAttempt(
+                attempt_id=attempt_id,
+                inspected_ranges=((5.0, 5.1),),
+                attached_frame_times=(5.0,),
+                sampling_config={"fps": 1.0},
+                frame_refs=("frame-1",),
+                raw_output='{"summary":"same observation"}',
+            ),
+            round_id="bootstrap",
+        )
+        requested = log.read(attempt_ids=(attempt_id,))
+        requested_rows.append(requested)
+        views.append(
+            render_frozen_working_view(
+                WorkingDocument.with_question_premise("What is visible?"),
+                log,
+                requested_observations=requested,
+            )
+        )
+
+    assert requested_rows[0] == requested_rows[1]
+    assert views[0] == views[1]
+    assert str(tmp_path) not in views[0]
 
 
 def test_claim_entities_and_interval_roles_round_trip(tmp_path: Path) -> None:
