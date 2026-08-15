@@ -135,7 +135,10 @@ def _ordered_caption_packets(
         pointer = _raw_output_pointer(row.get("raw_output"))
         if not pointer:
             raise ValueError(f"{run_dir.name}: Caption observation missing packet pointer")
-        packet_path = Path(pointer).resolve()
+        packet_path = Path(pointer)
+        if not packet_path.is_absolute():
+            packet_path = Path(run_dir) / packet_path
+        packet_path = packet_path.resolve()
         if packet_path.parent != caption_root:
             raise ValueError(f"{run_dir.name}: Caption packet escaped case directory")
         if packet_path in seen_paths:

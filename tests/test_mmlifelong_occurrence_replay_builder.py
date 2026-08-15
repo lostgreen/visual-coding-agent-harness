@@ -108,6 +108,41 @@ def test_build_replay_fixtures_preserves_first_use_order_and_deduplicates(
     ) == manifest
 
 
+def test_build_replay_fixtures_accepts_case_relative_packet_pointers(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "fixtures"
+    run_dir = _source_case(source)
+    rows = [
+        {
+            "modality": "caption_search",
+            "raw_output": json.dumps(
+                {"raw_output_pointer": "caption_search/first.json"}
+            ),
+        },
+        {
+            "modality": "caption_search",
+            "raw_output": json.dumps(
+                {"raw_output_pointer": "caption_search/second.json"}
+            ),
+        },
+    ]
+    (run_dir / "observation_log.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    manifest = build_replay_fixtures(
+        source,
+        output,
+        caption_config_digest=CAPTION_DIGEST,
+        expected_cases=1,
+    )
+
+    assert manifest["packet_count"] == 2
+
+
 def test_build_replay_fixtures_rejects_packet_outside_case(tmp_path: Path) -> None:
     source = tmp_path / "source"
     run_dir = _source_case(source)

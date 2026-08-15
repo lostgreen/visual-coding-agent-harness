@@ -1351,7 +1351,9 @@ class VisionInvestigator(VirtualVideoInvestigator):
         }
         raw_output = json.dumps(
             {
-                "raw_output_pointer": str(raw_path),
+                "raw_output_pointer": str(
+                    raw_path.relative_to(self.workspace.root_dir)
+                ),
                 "summary": packet["rendered"],
                 "search_queries": list(queries),
                 "hits": hits,
