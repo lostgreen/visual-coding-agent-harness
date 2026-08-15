@@ -541,6 +541,9 @@ def audit_roots(
             "selected_locator_count": sum(
                 row["selected_locator_count"] for row in cases
             ),
+            "selected_locator_accounting_applicable": any(
+                row["selected_locator_count"] > 0 for row in cases
+            ),
             "selected_locator_inspected_count": sum(
                 row["selected_locator_inspected_count"] for row in cases
             ),
@@ -747,8 +750,7 @@ def audit_roots(
         "a3_selected_locators_accounted": (
             "a3" not in per_arm
             or (
-                per_arm["a3"]["selected_locator_count"] > 0
-                and per_arm["a3"][
+                per_arm["a3"][
                     "selected_locator_accounting_failure_case_count"
                 ]
                 == 0
@@ -797,6 +799,14 @@ def audit_roots(
     return {
         "schema_version": "MMLifelongOccurrenceCanaryAuditV5",
         "per_arm": per_arm,
+        "check_applicability": {
+            "a3_selected_locators_accounted": bool(
+                "a3" in per_arm
+                and per_arm["a3"][
+                    "selected_locator_accounting_applicable"
+                ]
+            )
+        },
         "post_selection_only_divergence": post_selection_balance,
         "matched_pre_treatment_responses": matched_response_gate,
         "checks": checks,

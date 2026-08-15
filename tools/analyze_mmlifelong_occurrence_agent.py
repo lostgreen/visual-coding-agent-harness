@@ -226,6 +226,9 @@ def collect_rows(
                     ),
                     "selected_locator_usage_rate": selected_locator_usage_rate,
                     "selected_locator_count": len(selected_locator_pairs),
+                    "selected_locator_accounting_applicable": bool(
+                        selected_locator_pairs
+                    ),
                     "selected_locator_inspected_count": len(
                         selected_locator_pairs & executed_binding_pairs
                     ),
@@ -520,6 +523,12 @@ def build_report(
         "budget_symmetry": budget_symmetry,
         "post_selection_only_divergence": post_selection_balance,
         "matched_pre_treatment_responses": matched_response_gate,
+        "structural_check_applicability": {
+            "a3_selected_locators_accounted": any(
+                bool(row.get("selected_locator_accounting_applicable"))
+                for row in by_arm.get("a3", {}).values()
+            )
+        },
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
             value is not False for value in structural_checks.values()

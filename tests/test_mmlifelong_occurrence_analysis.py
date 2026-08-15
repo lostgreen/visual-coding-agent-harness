@@ -1099,6 +1099,25 @@ def test_scoped_audit_does_not_count_no_match_as_missing_answer(
     ] == 0
     assert report["checks"]["scoped_resolution_complete"] is True
 
+    (case / "run_config.json").write_text(
+        json.dumps(
+            {
+                "occurrence_method_arm": "a3",
+                "models": {
+                    "reasoner": "pa/gmn-2.5-pr",
+                    "investigator": "pa/gmn-2.5-pr",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    a3_report = AUDIT.audit_roots({"a3": root}, expected_cases=1)
+
+    assert a3_report["checks"]["a3_selected_locators_accounted"] is True
+    assert a3_report["check_applicability"][
+        "a3_selected_locators_accounted"
+    ] is False
+
 
 def test_frozen_replay_accepts_valid_consumed_prefixes() -> None:
     signature = [{"action": "investigate", "tasks": []}]
