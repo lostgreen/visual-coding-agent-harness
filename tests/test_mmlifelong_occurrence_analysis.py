@@ -879,6 +879,50 @@ def test_matched_pre_treatment_response_gate_requires_exact_role_counts() -> Non
     assert failed["structural_checks"]["matched_pre_treatment_responses"] is False
 
 
+def test_matched_control_keeps_declared_cohort_when_replay_stops_post_treatment() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    clean = _row("a2-clean", "c1", score=0.0, signature=signature)
+    actionable = _row("a3", "c1", score=1.0, signature=signature)
+    common = {
+        "resolved_set_id": "set_1",
+        "final_resolution": "selected",
+        "selected_occurrence_ids": ["occ_1"],
+        "selected_locators_accounted": True,
+        "selected_locator_silent_drop_count": 0,
+        "selected_locator_accounting_conflict_count": 0,
+        "frozen_replay_full_consumption": False,
+    }
+    clean.update(common)
+    actionable.update(common)
+    clean["matched_response_control"] = {
+        "mode": "record",
+        "active": False,
+        "deactivation_reason": "scoped_occurrence_resolution_persisted",
+        "recorded": {"investigator": 2, "reasoner": 3},
+        "mismatch_count": 0,
+    }
+    actionable["matched_response_control"] = {
+        "mode": "replay",
+        "active": False,
+        "deactivation_reason": "scoped_occurrence_resolution_persisted",
+        "replayed": {"investigator": 2, "reasoner": 3},
+        "mismatch_count": 0,
+    }
+
+    report = ANALYSIS.build_report(
+        (clean, actionable),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=3,
+    )
+
+    assert report["frozen_complete"]["n"] == 0
+    assert report["primary_analysis_set"] == "matched_aligned"
+    assert report["case_count"] == 1
+    assert report["arms"]["a2-clean"]["n"] == 1
+    assert report["comparisons"]["a3-a2-clean"]["paired_n"] == 1
+
+
 def test_scoped_canary_audit_requires_actionable_locator_accounting(
     tmp_path: Path,
 ) -> None:

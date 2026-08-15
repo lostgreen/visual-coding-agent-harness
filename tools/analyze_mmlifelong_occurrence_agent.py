@@ -410,6 +410,16 @@ def build_report(
     budget_symmetry = _budget_symmetry(by_arm)
     post_selection_balance = _post_selection_only_divergence(by_arm)
     matched_response_gate = _matched_pre_treatment_response_gate(by_arm)
+    matched_control_primary = bool(
+        matched_response_gate.get("applicable")
+        and matched_response_gate.get("passed")
+        and post_selection_balance.get("applicable")
+        and post_selection_balance.get("passed")
+    )
+    primary_analysis = all_analysis if matched_control_primary else frozen_analysis
+    primary_analysis_set = (
+        "matched_aligned" if matched_control_primary else "frozen_complete"
+    )
     structural_checks = {
         "arms_present": bool(arms),
         "case_sets_aligned": bool(case_sets)
@@ -492,7 +502,14 @@ def build_report(
             "QA accuracy is a secondary endpoint; mechanism metrics are the "
             "primary endpoint during development."
         ),
-        "primary_analysis_set": "frozen_complete",
+        "primary_analysis_set": primary_analysis_set,
+        "primary_analysis_reason": (
+            "Exact matched pre-treatment responses and paired scoped-resolution "
+            "identity fix the declared aligned cohort before post-treatment "
+            "replay consumption can diverge."
+            if matched_control_primary
+            else "Use cases with complete frozen occurrence replay."
+        ),
         "trajectory_provenance": str(trajectory_provenance),
         "definitions": {
             "verified_correct": "judge score == 1 and runtime verification_status == verified",
@@ -515,8 +532,8 @@ def build_report(
         },
         "all_cases": all_analysis,
         "frozen_complete": frozen_analysis,
-        "arms": frozen_analysis["arms"],
-        "comparisons": frozen_analysis["comparisons"],
+        "arms": primary_analysis["arms"],
+        "comparisons": primary_analysis["comparisons"],
         "cases": _per_case_metrics(by_arm, aligned_cases),
         "text_budget_parity": text_parity,
         "frozen_occurrence_replay": replay_parity,
@@ -540,7 +557,11 @@ def build_report(
                 if row.get("judge_model")
             }
         ),
-        "case_count": len(frozen_complete_cases),
+        "case_count": (
+            len(aligned_cases)
+            if matched_control_primary
+            else len(frozen_complete_cases)
+        ),
         "all_case_count": len(aligned_cases),
     }
 
