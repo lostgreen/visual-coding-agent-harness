@@ -451,6 +451,42 @@ class WorkspaceReasoner:
         semantic_round = int(kwargs.get("semantic_round", self.calls) or self.calls)
         control_attempt = int(kwargs.get("control_attempt", 0) or 0)
         prompt = _reasoner_prompt(kwargs)
+        mechanical_status_json = json.dumps(
+            dict(kwargs.get("mechanical_status") or {}),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        working_view = str(kwargs.get("working_document_view", "") or "")
+        workspace_overview_json = json.dumps(
+            _prompt_overview(kwargs.get("workspace_overview") or {}),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": "reasoner_request_digest",
+                "round": self.calls,
+                "semantic_round": semantic_round,
+                "control_attempt": control_attempt,
+                "prompt_digest": prompt_digest(prompt),
+                "prompt_char_count": len(prompt),
+                "mechanical_status_digest": prompt_digest(
+                    mechanical_status_json
+                ),
+                "mechanical_status_char_count": len(mechanical_status_json),
+                "working_document_view_digest": prompt_digest(working_view),
+                "working_document_view_char_count": len(working_view),
+                "workspace_overview_digest": prompt_digest(
+                    workspace_overview_json
+                ),
+                "workspace_overview_char_count": len(workspace_overview_json),
+                "remaining_budget": int(kwargs.get("remaining_budget", 0) or 0),
+                "force_finalize": bool(kwargs.get("force_finalize")),
+            },
+        )
         raw = self.api.chat(prompt, max_tokens=_completion_budget(2200))
         api_response = dict(self.api.last_response_metadata)
         parsed = _parse_json(raw)

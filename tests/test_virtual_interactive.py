@@ -288,7 +288,12 @@ def test_reasoner_unwraps_valid_decision_wrappers(tmp_path: Path, wrapper: str) 
     assert decision.tasks[0].time_range == (5.0, 7.0)
     assert decision.tasks[0].sampling_floor_fps == 2.0
     assert len(api.calls) == 1
-    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    rows = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[0]["type"] == "reasoner_request_digest"
+    trace = rows[-1]
     assert trace["schema_unwrapped"] is True
     assert trace["repair_failed"] is False
 
@@ -322,7 +327,11 @@ def test_reasoner_repairs_schema_invalid_json_object(tmp_path: Path) -> None:
     assert decision.answer == "B. A cup"
     assert len(api.calls) == 2
     rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-    assert [row["type"] for row in rows] == ["reasoner_json_repair", "reasoner_workspace"]
+    assert [row["type"] for row in rows] == [
+        "reasoner_request_digest",
+        "reasoner_json_repair",
+        "reasoner_workspace",
+    ]
     assert rows[-1]["format_repaired"] is True
 
 

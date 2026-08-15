@@ -143,6 +143,59 @@ def test_matched_response_replay_rejects_request_mismatch(tmp_path: Path) -> Non
     assert replay_session.to_dict()["mismatch_count"] == 1
 
 
+def test_workspace_reasoner_records_component_digests_before_replay_error(
+    tmp_path: Path,
+) -> None:
+    record_session = MatchedResponseSession(mode="record")
+    recorder = WorkspaceReasoner(
+        MatchedResponseCacheClient(
+            StubClient((json.dumps({"action": "answer", "answer": "A"}),)),
+            root=tmp_path / "fixtures",
+            mode="record",
+            namespace="reasoner",
+            session=record_session,
+        ),
+        trace_path=tmp_path / "record.jsonl",
+        controller_mode="frozen_baseline",
+        matched_response_session=record_session,
+    )
+    recorder.decide(
+        question="Question?",
+        options={"A": "Answer"},
+        mechanical_status={},
+        working_document_view="recorded view",
+        workspace_overview={},
+    )
+
+    replay_session = MatchedResponseSession(mode="replay")
+    trace_path = tmp_path / "replay.jsonl"
+    replayer = WorkspaceReasoner(
+        MatchedResponseCacheClient(
+            StubClient(()),
+            root=tmp_path / "fixtures",
+            mode="replay",
+            namespace="reasoner",
+            session=replay_session,
+        ),
+        trace_path=trace_path,
+        controller_mode="frozen_baseline",
+        matched_response_session=replay_session,
+    )
+    with pytest.raises(MatchedResponseReplayError, match="request mismatch"):
+        replayer.decide(
+            question="Question?",
+            options={"A": "Answer"},
+            mechanical_status={},
+            working_document_view="different view",
+            workspace_overview={},
+        )
+
+    rows = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [row["type"] for row in rows] == ["reasoner_request_digest"]
+    assert rows[0]["working_document_view_char_count"] == len("different view")
+    assert rows[0]["working_document_view_digest"]
+
+
 def test_workspace_reasoner_deactivates_cache_after_resolution(tmp_path: Path) -> None:
     session = MatchedResponseSession(mode="record")
     delegate = StubClient((json.dumps({"action": "answer", "answer": "A"}),))
