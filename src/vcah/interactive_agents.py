@@ -2193,6 +2193,23 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
             "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
         )
+    if (
+        occurrence_state_version == "OccurrenceResolutionStateV2"
+        and occurrence_answer_pending
+        and not active_occurrence_locators
+    ):
+        return (
+            f"You are the sole semantic decision maker for {task_description}. The scoped occurrence resolution is "
+            "already persisted, and every selected locator is inspected or explicitly closed. The only valid next action "
+            "is answer. Return exactly one Answer JSON object with action=answer, no tasks, no workspace_ops, and no "
+            "occurrence_ops. Do not search, investigate, read observations, or revise the occurrence resolution.\n"
+            f"{answer_schema}{answer_rule}"
+            f"Question: {kwargs.get('question', '')}\n"
+            f"Options: {json.dumps(options, ensure_ascii=False)}\n"
+            f"Mechanical status: {json.dumps(mechanical_status, ensure_ascii=False)}\n"
+            f"Working view:\n{kwargs.get('working_document_view', '')}\n"
+            f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
+        )
     if active_occurrence_locators:
         action_rule = (
             "Before answering, inspect at least one pending active occurrence locator with action=investigate and a "

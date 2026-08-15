@@ -737,10 +737,10 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
             },
         }
     )
-    assert "Return action=answer only" in answer_only_prompt
-    assert "do not revise the resolved occurrence set or issue another search" in (
-        answer_only_prompt
-    )
+    assert "action=answer" in answer_only_prompt
+    assert "The only valid next action is answer" in answer_only_prompt
+    assert "Investigate schema" not in answer_only_prompt
+    assert "Scoped resolution schema" not in answer_only_prompt
 
 
 def test_grouped_and_flat_treatment_surfaces_have_text_parity(tmp_path) -> None:
