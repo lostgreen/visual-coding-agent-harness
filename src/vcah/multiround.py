@@ -775,7 +775,7 @@ class VirtualVideoMultiRoundDriver:
                         round_id=round_id,
                         locator_rows=locator_statuses,
                     )
-                    if self.occurrence_method_arm == "a3":
+                    if self.occurrence_method_arm == "a3" and locator_statuses:
                         locator_statuses = tuple(
                             {
                                 **row,

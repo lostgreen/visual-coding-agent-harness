@@ -911,6 +911,12 @@ def test_a3_rejects_answer_until_selected_locator_is_inspected(
         occurrence_method_arm="a3",
     ).run(_workspace(tmp_path))
 
+    pre_selection_status = reasoner.calls[1]["mechanical_status"]
+    assert "selected_occurrence_locators" not in pre_selection_status
+    assert "active_occurrence_locators" not in pre_selection_status
+    post_selection_status = reasoner.calls[2]["mechanical_status"]
+    assert post_selection_status["selected_occurrence_locators"]
+    assert post_selection_status["active_occurrence_locators"]
     assert any(
         row.get("type") == "decision_schema_error"
         and row.get("code") == "occurrence_locator_inspection_required"
