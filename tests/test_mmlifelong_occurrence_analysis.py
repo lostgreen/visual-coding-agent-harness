@@ -894,6 +894,7 @@ def test_matched_control_keeps_declared_cohort_when_replay_stops_post_treatment(
     }
     clean.update(common)
     actionable.update(common)
+    actionable["visual_frames"] = 5
     clean["matched_response_control"] = {
         "mode": "record",
         "active": False,
@@ -921,6 +922,11 @@ def test_matched_control_keeps_declared_cohort_when_replay_stops_post_treatment(
     assert report["case_count"] == 1
     assert report["arms"]["a2-clean"]["n"] == 1
     assert report["comparisons"]["a3-a2-clean"]["paired_n"] == 1
+    frame_delta = report["comparisons"]["a3-a2-clean"][
+        "mechanism_deltas"
+    ]["visual_frames"]
+    assert frame_delta["paired_n"] == 1
+    assert frame_delta["mean_delta"] == 2.0
 
 
 def test_locator_outcomes_are_pair_weighted_not_case_macro_averaged() -> None:

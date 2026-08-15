@@ -1356,16 +1356,40 @@ def _paired_score_delta(
     bootstrap_samples: int,
     seed: int,
 ) -> dict[str, Any]:
+    result = _paired_metric_delta(
+        left,
+        right,
+        case_ids,
+        metric="score",
+        bootstrap_samples=bootstrap_samples,
+        seed=seed,
+    )
+    mean_delta = result.pop("mean_delta")
+    return {
+        **result,
+        "mean_score_delta": mean_delta,
+    }
+
+
+def _paired_metric_delta(
+    left: Mapping[str, Mapping[str, Any]],
+    right: Mapping[str, Mapping[str, Any]],
+    case_ids: Sequence[str],
+    *,
+    metric: str,
+    bootstrap_samples: int,
+    seed: int,
+) -> dict[str, Any]:
     differences = [
-        float(left[case_id]["score"]) - float(right[case_id]["score"])
+        float(left[case_id][metric]) - float(right[case_id][metric])
         for case_id in case_ids
-        if isinstance(left[case_id].get("score"), (int, float))
-        and isinstance(right[case_id].get("score"), (int, float))
+        if isinstance(left[case_id].get(metric), (int, float))
+        and isinstance(right[case_id].get(metric), (int, float))
     ]
     if not differences:
         return {
             "paired_n": 0,
-            "mean_score_delta": None,
+            "mean_delta": None,
             "ci95_low": None,
             "ci95_high": None,
             "wins": 0,
@@ -1384,7 +1408,7 @@ def _paired_score_delta(
     discordant = wins + losses
     return {
         "paired_n": len(differences),
-        "mean_score_delta": mean(differences),
+        "mean_delta": mean(differences),
         "ci95_low": low,
         "ci95_high": high,
         "wins": wins,
@@ -1436,6 +1460,16 @@ def _paired_comparison(
         if left[case_id]["pre_treatment_prompt_digests"]
         == right[case_id]["pre_treatment_prompt_digests"]
     ]
+    mechanism_metrics = (
+        "selected_locator_usage_rate",
+        "released_unexecuted_rate",
+        "bound_visual_clue_recall",
+        "grounded_correct_ref300",
+        "grounded_correct_bound_visual",
+        "visual_frames",
+        "vlm_calls",
+        "semantic_rounds_used",
+    )
     return {
         **_paired_score_delta(
             left,
@@ -1468,6 +1502,17 @@ def _paired_comparison(
             bootstrap_samples=bootstrap_samples,
             seed=seed + 1,
         ),
+        "mechanism_deltas": {
+            metric: _paired_metric_delta(
+                left,
+                right,
+                paired_ids,
+                metric=metric,
+                bootstrap_samples=bootstrap_samples,
+                seed=seed + 11 + index * 7,
+            )
+            for index, metric in enumerate(mechanism_metrics)
+        },
     }
 
 
