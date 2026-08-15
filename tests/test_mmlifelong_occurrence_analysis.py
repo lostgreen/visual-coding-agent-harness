@@ -311,6 +311,92 @@ def test_false_commit_uses_final_resolved_set_state() -> None:
     assert metrics["false_abstention"] is None
 
 
+def test_decomposition_writes_tables_and_automatic_a_b_decision(
+    tmp_path: Path,
+) -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    rows = []
+    for case_id in ("loss", "absent"):
+        a0 = _row(
+            "a0",
+            case_id,
+            score=1.0 if case_id == "loss" else 0.0,
+            signature=signature,
+        )
+        a2_clean = _row(
+            "a2-clean", case_id, score=0.0, signature=signature
+        )
+        a3 = _row("a3", case_id, score=0.0, signature=signature)
+        if case_id == "loss":
+            a0["bound_visual_clue_recall"] = 0.0
+            a3.update(
+                {
+                    "osa_strict": False,
+                    "selected_locator_usage_rate": 1.0,
+                    "bound_visual_clue_recall": 0.0,
+                }
+            )
+        else:
+            for row in (a0, a2_clean, a3):
+                row["candidate_recall_resolved_set"] = False
+            a2_clean.update(
+                {
+                    "final_resolution": "no_match",
+                    "no_match_correct": True,
+                }
+            )
+            a3.update(
+                {
+                    "final_resolution": "selected",
+                    "false_commit": True,
+                }
+            )
+        rows.extend((a0, a2_clean, a3))
+
+    report = ANALYSIS.build_decomposition(
+        tuple(rows), trajectory_provenance="fixture"
+    )
+    primary = report["slices"]["frozen_complete"]
+
+    assert primary["n"] == 2
+    assert primary["table_a"]["classification"] == "A"
+    assert primary["table_a"]["loss_count"] == 1
+    assert any(
+        row["arm"] == "a3"
+        and row["final_resolution"] == "selected"
+        and row["n"] == 1
+        for row in primary["table_b"]["rows"]
+    )
+    assert any(
+        row["row_type"] == "paired_score_outcome"
+        and row["arm"] == "a3-a0"
+        for row in primary["table_c"]["rows"]
+    )
+
+    paths = ANALYSIS.write_decomposition_outputs(report, tmp_path)
+    assert set(paths) == {
+        "table_a_losses.csv",
+        "table_b_candidate_absent.csv",
+        "table_c_candidate_present_funnel.csv",
+        "decomposition_summary.md",
+    }
+    assert all(Path(path).is_file() for path in paths.values())
+    assert "Classification: **A**" in Path(
+        paths["decomposition_summary.md"]
+    ).read_text(encoding="utf-8")
+
+    b_decision = ANALYSIS._table_a_decision(
+        (
+            {
+                "a0_bound_visual_clue_recall": 1.0,
+                "a3_osa_strict": True,
+                "a3_bound_visual_clue_recall": 1.0,
+            },
+        )
+    )
+    assert b_decision["classification"] == "B"
+
+
 def test_a1_flat_text_mismatch_fails_structural_gate() -> None:
     signature = [{"action": "investigate", "tasks": []}]
     rows = (

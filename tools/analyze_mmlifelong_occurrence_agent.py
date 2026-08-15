@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import csv
 import json
 from math import comb
 from pathlib import Path
 import random
 from statistics import mean
+import sys
 from typing import Any, Iterable, Mapping, Sequence
 
 
@@ -555,6 +557,286 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         )
         for resolution in ("selected", "no_match", "deferred", "unresolved")
     }
+    return _aggregate_arm_result(
+        rows=rows,
+        scored=scored,
+        osa=osa,
+        candidate_absent=candidate_absent,
+        candidate_present=candidate_present,
+        selected_rows=selected_rows,
+        final_resolution_counts=final_resolution_counts,
+    )
+
+
+def build_decomposition(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    trajectory_provenance: str = "unspecified",
+) -> dict[str, Any]:
+    by_arm: dict[str, dict[str, Mapping[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        arm, case_id = str(row["arm"]), str(row["case_id"])
+        if case_id in by_arm[arm]:
+            raise ValueError(f"duplicate row: {arm}:{case_id}")
+        by_arm[arm][case_id] = row
+    required = {"a0", "a2-clean", "a3"}
+    missing = sorted(required - set(by_arm))
+    if missing:
+        raise ValueError(f"decomposition missing required arms: {', '.join(missing)}")
+    case_sets = [set(cases) for cases in by_arm.values()]
+    aligned = set.intersection(*case_sets) if case_sets else set()
+    frozen_complete = {
+        case_id
+        for case_id in aligned
+        if all(
+            _row_frozen_replay_complete(cases[case_id])
+            for cases in by_arm.values()
+        )
+    }
+    slices = {
+        "frozen_complete": _decompose_slice(by_arm, frozen_complete),
+        "all_cases": _decompose_slice(by_arm, aligned),
+    }
+    return {
+        "schema_version": "MMLifelongOccurrenceDecompositionV1",
+        "trajectory_provenance": str(trajectory_provenance),
+        "primary_analysis_set": "frozen_complete",
+        "slices": slices,
+    }
+
+
+def _decompose_slice(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    case_ids: Iterable[str],
+) -> dict[str, Any]:
+    selected_ids = tuple(sorted(set(case_ids)))
+    a0, a2_clean, a3 = by_arm["a0"], by_arm["a2-clean"], by_arm["a3"]
+    losses = [
+        case_id
+        for case_id in selected_ids
+        if _numeric_score(a0[case_id]) is not None
+        and _numeric_score(a3[case_id]) is not None
+        and _numeric_score(a3[case_id]) < _numeric_score(a0[case_id])
+    ]
+    table_a_rows = [
+        {
+            "case_id": case_id,
+            "a0_score": a0[case_id].get("score"),
+            "a0_ref_300": a0[case_id].get("ref_300"),
+            "a0_bound_visual_clue_recall": a0[case_id].get(
+                "bound_visual_clue_recall"
+            ),
+            "a3_score": a3[case_id].get("score"),
+            "a3_final_resolution": a3[case_id].get("final_resolution"),
+            "a3_osa_strict": a3[case_id].get("osa_strict"),
+            "a3_bound_visual_clue_recall": a3[case_id].get(
+                "bound_visual_clue_recall"
+            ),
+            "a3_semantic_rounds_used": a3[case_id].get(
+                "semantic_rounds_used"
+            ),
+            "a3_frames": a3[case_id].get("visual_frames"),
+        }
+        for case_id in losses
+    ]
+    table_a_decision = _table_a_decision(table_a_rows)
+
+    table_b_rows: list[dict[str, Any]] = []
+    for arm, cases in (("a2-clean", a2_clean), ("a3", a3)):
+        absent_rows = [
+            cases[case_id]
+            for case_id in selected_ids
+            if cases[case_id].get("candidate_recall_resolved_set") is False
+        ]
+        for resolution in ("selected", "no_match", "deferred", "unresolved"):
+            group = [
+                row
+                for row in absent_rows
+                if row.get("final_resolution") == resolution
+            ]
+            table_b_rows.append(
+                {
+                    "arm": arm,
+                    "final_resolution": resolution,
+                    "n": len(group),
+                    "mean_score": _optional_mean(row.get("score") for row in group),
+                    "grounded_correct_ref300_rate": _mean_bool(
+                        row.get("grounded_correct_ref300") for row in group
+                    ),
+                    "grounded_correct_bound_visual_rate": _mean_bool(
+                        row.get("grounded_correct_bound_visual") for row in group
+                    ),
+                    "mean_frames": _optional_mean(
+                        row.get("visual_frames") for row in group
+                    ),
+                    "mean_vlm_calls": _optional_mean(
+                        row.get("vlm_calls") for row in group
+                    ),
+                    "mean_semantic_rounds_used": _optional_mean(
+                        row.get("semantic_rounds_used") for row in group
+                    ),
+                }
+            )
+
+    table_c_rows: list[dict[str, Any]] = []
+    for arm, cases in (("a2-clean", a2_clean), ("a3", a3)):
+        present = [
+            cases[case_id]
+            for case_id in selected_ids
+            if cases[case_id].get("candidate_recall_resolved_set") is True
+        ]
+        current = present
+        stages = (
+            ("GoldAccessible", lambda row: True),
+            ("CorrectSelection", lambda row: row.get("osa_strict") is True),
+            (
+                "LocatorUsage",
+                lambda row: isinstance(
+                    row.get("selected_locator_usage_rate"), (int, float)
+                )
+                and float(row["selected_locator_usage_rate"]) > 0,
+            ),
+            (
+                "GoldVisual",
+                lambda row: isinstance(
+                    row.get("bound_visual_clue_recall"), (int, float)
+                )
+                and float(row["bound_visual_clue_recall"]) > 0,
+            ),
+            ("CorrectAnswer", lambda row: row.get("raw_exact") is True),
+        )
+        previous_count = len(current)
+        for index, (stage, predicate) in enumerate(stages):
+            stage_rows = current if index == 0 else [row for row in current if predicate(row)]
+            count = len(stage_rows)
+            table_c_rows.append(
+                {
+                    "row_type": "funnel",
+                    "arm": arm,
+                    "stage": stage,
+                    "count": count,
+                    "previous_count": previous_count,
+                    "conditional_rate": (
+                        count / previous_count if previous_count else None
+                    ),
+                    "paired_n": None,
+                    "wins": None,
+                    "ties": None,
+                    "losses": None,
+                }
+            )
+            current = stage_rows
+            previous_count = count
+
+    a3_present_ids = [
+        case_id
+        for case_id in selected_ids
+        if a3[case_id].get("candidate_recall_resolved_set") is True
+    ]
+    for baseline_arm, baseline in (("a0", a0), ("a2-clean", a2_clean)):
+        outcome = _paired_outcomes(a3, baseline, a3_present_ids)
+        table_c_rows.append(
+            {
+                "row_type": "paired_score_outcome",
+                "arm": f"a3-{baseline_arm}",
+                "stage": "CandidatePresentScore",
+                "count": None,
+                "previous_count": None,
+                "conditional_rate": None,
+                **outcome,
+            }
+        )
+
+    return {
+        "n": len(selected_ids),
+        "case_ids": list(selected_ids),
+        "table_a": {"rows": table_a_rows, **table_a_decision},
+        "table_b": {"rows": table_b_rows},
+        "table_c": {"rows": table_c_rows},
+    }
+
+
+def _numeric_score(row: Mapping[str, Any]) -> float | None:
+    value = row.get("score")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _table_a_decision(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    loss_count = len(rows)
+    a_evidence = sum(row.get("a0_bound_visual_clue_recall") == 0 for row in rows)
+    b_evidence = sum(
+        row.get("a3_osa_strict") is True
+        and isinstance(row.get("a3_bound_visual_clue_recall"), (int, float))
+        and float(row["a3_bound_visual_clue_recall"]) > 0
+        for row in rows
+    )
+    a_majority = bool(loss_count) and a_evidence > loss_count / 2
+    b_majority = bool(loss_count) and b_evidence > loss_count / 2
+    if a_majority and not b_majority:
+        classification = "A"
+        conclusion = (
+            "A3 primarily displaced ungrounded baseline lucky answers; keep "
+            "grounded-correct as the endpoint and do not introduce evidence "
+            "assimilation as a bottleneck."
+        )
+    elif b_majority and not a_majority:
+        classification = "B"
+        conclusion = (
+            "A3 usually reached and selected gold evidence before losing; "
+            "evidence assimilation becomes a candidate research question."
+        )
+    elif a_majority and b_majority:
+        classification = "mixed_A_B"
+        conclusion = (
+            "Both mechanisms are a majority signal; do not make a single-cause "
+            "claim without case-level review."
+        )
+    else:
+        classification = "inconclusive"
+        conclusion = (
+            "Neither A nor B has majority support; evidence assimilation must "
+            "not be claimed as the bottleneck."
+        )
+    return {
+        "loss_count": loss_count,
+        "a_ungrounded_baseline_count": a_evidence,
+        "b_gold_seen_selection_count": b_evidence,
+        "classification": classification,
+        "conclusion": conclusion,
+    }
+
+
+def _paired_outcomes(
+    left: Mapping[str, Mapping[str, Any]],
+    right: Mapping[str, Mapping[str, Any]],
+    case_ids: Iterable[str],
+) -> dict[str, int]:
+    differences = [
+        float(left[case_id]["score"]) - float(right[case_id]["score"])
+        for case_id in case_ids
+        if case_id in left
+        and case_id in right
+        and isinstance(left[case_id].get("score"), (int, float))
+        and isinstance(right[case_id].get("score"), (int, float))
+    ]
+    return {
+        "paired_n": len(differences),
+        "wins": sum(value > 0 for value in differences),
+        "ties": sum(value == 0 for value in differences),
+        "losses": sum(value < 0 for value in differences),
+    }
+
+
+def _aggregate_arm_result(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    scored: Sequence[Mapping[str, Any]],
+    osa: Sequence[Mapping[str, Any]],
+    candidate_absent: Sequence[Mapping[str, Any]],
+    candidate_present: Sequence[Mapping[str, Any]],
+    selected_rows: Sequence[Mapping[str, Any]],
+    final_resolution_counts: Mapping[str, int],
+) -> dict[str, Any]:
     return {
         "n": len(rows),
         "scored_n": len(scored),
@@ -1747,6 +2029,165 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_decomposition_outputs(
+    report: Mapping[str, Any], output_dir: Path
+) -> dict[str, str]:
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    table_specs = {
+        "table_a_losses.csv": (
+            "table_a",
+            (
+                "analysis_set",
+                "case_id",
+                "a0_score",
+                "a0_ref_300",
+                "a0_bound_visual_clue_recall",
+                "a3_score",
+                "a3_final_resolution",
+                "a3_osa_strict",
+                "a3_bound_visual_clue_recall",
+                "a3_semantic_rounds_used",
+                "a3_frames",
+            ),
+        ),
+        "table_b_candidate_absent.csv": (
+            "table_b",
+            (
+                "analysis_set",
+                "arm",
+                "final_resolution",
+                "n",
+                "mean_score",
+                "grounded_correct_ref300_rate",
+                "grounded_correct_bound_visual_rate",
+                "mean_frames",
+                "mean_vlm_calls",
+                "mean_semantic_rounds_used",
+            ),
+        ),
+        "table_c_candidate_present_funnel.csv": (
+            "table_c",
+            (
+                "analysis_set",
+                "row_type",
+                "arm",
+                "stage",
+                "count",
+                "previous_count",
+                "conditional_rate",
+                "paired_n",
+                "wins",
+                "ties",
+                "losses",
+            ),
+        ),
+    }
+    paths: dict[str, str] = {}
+    for filename, (table_key, fieldnames) in table_specs.items():
+        path = destination / filename
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for analysis_set, decomposition in report["slices"].items():
+                for row in decomposition[table_key]["rows"]:
+                    writer.writerow({"analysis_set": analysis_set, **row})
+        paths[filename] = str(path)
+    markdown_path = destination / "decomposition_summary.md"
+    markdown_path.write_text(
+        render_decomposition_markdown(report), encoding="utf-8"
+    )
+    paths[markdown_path.name] = str(markdown_path)
+    return paths
+
+
+def render_decomposition_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# MM-Lifelong Occurrence Decomposition",
+        "",
+        f"Trajectory provenance: `{report['trajectory_provenance']}`.",
+        "",
+        "The frozen-complete slice is primary; all-cases is sensitivity analysis.",
+    ]
+    for analysis_set in ("frozen_complete", "all_cases"):
+        decomposition = report["slices"][analysis_set]
+        table_a = decomposition["table_a"]
+        lines.extend(
+            [
+                "",
+                f"## {analysis_set} (n={decomposition['n']})",
+                "",
+                "### Table A: A3 losses vs A0",
+                "",
+                (
+                    f"Classification: **{table_a['classification']}**. "
+                    f"Losses={table_a['loss_count']}, "
+                    f"A-signal={table_a['a_ungrounded_baseline_count']}, "
+                    f"B-signal={table_a['b_gold_seen_selection_count']}."
+                ),
+                "",
+                table_a["conclusion"],
+                "",
+                "### Table B: Candidate-absent final resolutions",
+                "",
+                "| Arm | Resolution | N | Mean score | Grounded ref300 | Grounded visual | Frames | VLM calls | Rounds |",
+                "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for row in decomposition["table_b"]["rows"]:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(row["arm"]),
+                        str(row["final_resolution"]),
+                        str(row["n"]),
+                        _fmt(row["mean_score"]),
+                        _fmt(row["grounded_correct_ref300_rate"]),
+                        _fmt(row["grounded_correct_bound_visual_rate"]),
+                        _fmt(row["mean_frames"]),
+                        _fmt(row["mean_vlm_calls"]),
+                        _fmt(row["mean_semantic_rounds_used"]),
+                    ]
+                )
+                + " |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Table C: Candidate-present funnel",
+                "",
+                "| Arm | Stage | Count | Previous | Conditional rate | W/T/L |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+        )
+        for row in decomposition["table_c"]["rows"]:
+            outcome = (
+                f"{row['wins']}/{row['ties']}/{row['losses']}"
+                if row.get("row_type") == "paired_score_outcome"
+                else ""
+            )
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(row["arm"]),
+                        str(row["stage"]),
+                        "" if row.get("count") is None else str(row["count"]),
+                        (
+                            ""
+                            if row.get("previous_count") is None
+                            else str(row["previous_count"])
+                        ),
+                        _fmt(row.get("conditional_rate")),
+                        outcome,
+                    ]
+                )
+                + " |"
+            )
+    return "\n".join(lines) + "\n"
+
+
 def _fmt(value: Any) -> str:
     return "NA" if value is None else f"{float(value):.4f}"
 
@@ -1771,7 +2212,42 @@ def _read_jsonl(path: Path) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
+def _decompose_main(argv: Sequence[str]) -> None:
+    parser = argparse.ArgumentParser(
+        prog="analyze_mmlifelong_occurrence_agent.py decompose"
+    )
+    parser.add_argument("--run-root", action="append", required=True)
+    parser.add_argument("--evaluation-record-root", required=True)
+    parser.add_argument("--trajectory-provenance", default="unspecified")
+    parser.add_argument("--output-dir", required=True)
+    args = parser.parse_args(tuple(argv))
+    rows = collect_rows(
+        tuple(Path(value) for value in args.run_root),
+        evaluation_record_root=Path(args.evaluation_record_root),
+    )
+    report = build_decomposition(
+        rows, trajectory_provenance=args.trajectory_provenance
+    )
+    paths = write_decomposition_outputs(report, Path(args.output_dir))
+    print(
+        json.dumps(
+            {
+                "primary_n": report["slices"]["frozen_complete"]["n"],
+                "all_n": report["slices"]["all_cases"]["n"],
+                "primary_table_a_classification": report["slices"][
+                    "frozen_complete"
+                ]["table_a"]["classification"],
+                "outputs": paths,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "decompose":
+        _decompose_main(sys.argv[2:])
+        return
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", action="append", required=True)
     parser.add_argument("--evaluation-record-root", required=True)
