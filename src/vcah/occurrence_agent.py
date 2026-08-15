@@ -332,11 +332,23 @@ class OccurrenceResolutionStateV2:
         return bool(active is not None and active.resolution == "deferred")
 
     @property
+    def resolution_committed(self) -> bool:
+        active = self.active_set
+        return bool(
+            active is not None and active.resolution in {"selected", "no_match"}
+        )
+
+    @property
     def selected_occurrence_ids(self) -> tuple[str, ...]:
         active = self.active_set
         return active.selected_occurrence_ids if active is not None else ()
 
     def sync_sets(self, occurrence_sets: Sequence[Mapping[str, Any]]) -> bool:
+        # A selected/no-match result is the scoped decision endpoint. Later
+        # retrieval packets cannot silently replace it; search-more remains
+        # available while the active set is unresolved or deferred.
+        if self.resolution_committed:
+            return False
         changed = False
         for raw_set in occurrence_sets:
             if not isinstance(raw_set, Mapping):
@@ -388,9 +400,14 @@ class OccurrenceResolutionStateV2:
         self, operations: Sequence[Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
         shadow = self._clone()
+        allow_selection_batch = not shadow.resolution_committed
         errors: list[dict[str, Any]] = []
         for index, operation in enumerate(operations):
-            error = shadow._apply_one(operation, index=index)
+            error = shadow._apply_one(
+                operation,
+                index=index,
+                allow_selection_batch=allow_selection_batch,
+            )
             if error is not None:
                 errors.append(error)
         return errors
@@ -404,9 +421,14 @@ class OccurrenceResolutionStateV2:
         errors = self.validate_ops(normalized)
         if errors:
             return {"accepted": False, "errors": errors, "applied": []}
+        allow_selection_batch = not self.resolution_committed
         applied: list[dict[str, Any]] = []
         for index, operation in enumerate(normalized):
-            error = self._apply_one(operation, index=index)
+            error = self._apply_one(
+                operation,
+                index=index,
+                allow_selection_batch=allow_selection_batch,
+            )
             assert error is None
             applied.append(_normalized_scoped_occurrence_op(operation))
         if applied:
@@ -506,6 +528,7 @@ class OccurrenceResolutionStateV2:
         operation: Mapping[str, Any],
         *,
         index: int,
+        allow_selection_batch: bool = False,
     ) -> dict[str, Any] | None:
         if not isinstance(operation, Mapping):
             return {
@@ -535,6 +558,17 @@ class OccurrenceResolutionStateV2:
                 "occurrence_op_index": index,
                 "set_id": set_id,
                 "active_set_id": self.active_set_id,
+            }
+        if occurrence_set.resolution in {"selected", "no_match"} and not (
+            allow_selection_batch
+            and occurrence_set.resolution == "selected"
+            and op == "select"
+        ):
+            return {
+                "code": "occurrence_resolution_already_committed",
+                "occurrence_op_index": index,
+                "set_id": set_id,
+                "resolution": occurrence_set.resolution,
             }
         if op in {"defer", "no_match"}:
             if occurrence_id:

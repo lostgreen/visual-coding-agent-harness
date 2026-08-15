@@ -382,7 +382,7 @@ def test_a2_clean_keeps_locator_attempt_sets_separate() -> None:
     assert rejected["errors"][0]["code"] == "occurrence_id_not_in_set"
 
 
-def test_scoped_locators_only_expose_the_active_set() -> None:
+def test_scoped_locators_only_expose_the_active_set_after_deferred_search() -> None:
     state = OccurrenceResolutionStateV2()
     state.sync_sets(
         (
@@ -396,13 +396,7 @@ def test_scoped_locators_only_expose_the_active_set() -> None:
         )
     )
     assert state.apply_ops(
-        (
-            {
-                "op": "select",
-                "set_id": "attempt_old",
-                "occurrence_id": "old_1",
-            },
-        )
+        ({"op": "defer", "set_id": "attempt_old"},)
     )["accepted"] is True
     state.sync_sets(
         (
@@ -436,8 +430,7 @@ def test_scoped_locators_only_expose_the_active_set() -> None:
             "status": "selected_for_active_set",
         },
     )
-    assert state.retired_locators()[0]["set_id"] == "attempt_old"
-    assert state.retired_locators()[0]["status"] == "retired_history"
+    assert state.retired_locators() == ()
     retired_op = state.apply_ops(
         (
             {
@@ -455,6 +448,56 @@ def test_scoped_locators_only_expose_the_active_set() -> None:
         "retired",
         "active",
     ]
+
+
+def test_scoped_terminal_resolution_is_immutable_across_sets_and_ops() -> None:
+    state = OccurrenceResolutionStateV2()
+    assert state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_committed",
+                "candidates": [
+                    {"occurrence_id": "occ_1"},
+                    {"occurrence_id": "occ_2"},
+                ],
+            },
+        )
+    ) is True
+    assert state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_committed",
+                "occurrence_id": "occ_2",
+            },
+        )
+    )["accepted"] is True
+
+    assert state.resolution_committed is True
+    assert state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_late",
+                "candidates": [{"occurrence_id": "occ_late"}],
+            },
+        )
+    ) is False
+    assert state.active_set_id == "attempt_committed"
+    assert set(state.sets) == {"attempt_committed"}
+    revision = state.apply_ops(
+        (
+            {
+                "op": "reopen",
+                "set_id": "attempt_committed",
+                "occurrence_id": "occ_2",
+            },
+        )
+    )
+    assert revision["accepted"] is False
+    assert revision["errors"][0]["code"] == (
+        "occurrence_resolution_already_committed"
+    )
+    assert state.selected_occurrence_ids == ("occ_2",)
 
 
 def test_a2_clean_supports_abstention_and_multiple_selections() -> None:
@@ -489,6 +532,7 @@ def test_a2_clean_supports_abstention_and_multiple_selections() -> None:
     assert state.selected_occurrence_ids == ("boss_1", "boss_3")
     assert len(state.active_locators()) == 2
 
+    state = OccurrenceResolutionStateV2()
     state.sync_sets(
         (
             {
@@ -678,6 +722,25 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
         }
     )
     assert "copy both locator_attempt_id and occurrence_id" in actionable_prompt
+
+    answer_only_prompt = _frozen_reasoner_prompt(
+        {
+            **base,
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    **scoped_state,
+                    "selection_required": False,
+                    "active_resolution": "selected",
+                    "selected_occurrence_ids": ["occ_2"],
+                },
+                "active_occurrence_locators": [],
+            },
+        }
+    )
+    assert "Return action=answer only" in answer_only_prompt
+    assert "do not revise the resolved occurrence set or issue another search" in (
+        answer_only_prompt
+    )
 
 
 def test_grouped_and_flat_treatment_surfaces_have_text_parity(tmp_path) -> None:

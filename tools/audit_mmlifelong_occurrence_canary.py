@@ -18,6 +18,7 @@ EXPECTED_LIFECYCLE_RETRY_CODES = {
     "occurrence_search_required",
     "occurrence_no_match_required_at_finalization",
     "occurrence_answer_required_after_resolution",
+    "occurrence_resolution_already_committed",
     "occurrence_locator_inspection_required",
     "occurrence_locator_binding_required",
     "occurrence_locator_unbound_window_forbidden",

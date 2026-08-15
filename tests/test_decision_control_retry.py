@@ -736,6 +736,106 @@ def test_a2_clean_is_identical_before_ambiguous_set_exposure(
     assert result.answer_present is True
 
 
+@pytest.mark.parametrize(
+    ("terminal_op", "rewrite_op"),
+    (
+        (
+            {
+                "op": "select",
+                "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+                "occurrence_id": "occ_2",
+            },
+            {
+                "op": "no_match",
+                "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+            },
+        ),
+        (
+            {
+                "op": "no_match",
+                "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+            },
+            {
+                "op": "select",
+                "set_id": ScopedOccurrenceInvestigator.locator_attempt_id,
+                "occurrence_id": "occ_1",
+            },
+        ),
+    ),
+)
+def test_scoped_terminal_resolution_requires_immediate_answer_and_rejects_rewrite(
+    tmp_path: Path,
+    terminal_op: dict[str, Any],
+    rewrite_op: dict[str, Any],
+) -> None:
+    late_search = InvestigationTask(
+        query_id="late_search",
+        goal="replace committed resolution",
+        inspection_mode="search_caption",
+        caption_queries=("different event",),
+    )
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="locate",
+                        goal="locate target event",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(terminal_op,),
+            ),
+            ReasonerDecision(
+                action="investigate",
+                tasks=(late_search,),
+                occurrence_ops=(rewrite_op,),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+    investigator = ScopedOccurrenceInvestigator()
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2-clean",
+    ).run(_workspace(tmp_path))
+
+    errors = [
+        error
+        for row in result.trace
+        if row.get("type") == "decision_schema_error"
+        for error in row.get("errors", ())
+    ]
+    assert {error["code"] for error in errors} >= {
+        "occurrence_resolution_already_committed",
+        "occurrence_answer_required_after_resolution",
+    }
+    assert reasoner.calls[2]["force_finalize"] is False
+    assert reasoner.calls[3]["control_retry"] is True
+    assert [task.query_id for task in investigator.tasks] == ["locate"]
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    assert [row.get("action") for row in decisions] == [
+        "investigate",
+        "update_workspace",
+        "answer",
+    ]
+    assert result.answer_present is True
+
+
 @pytest.mark.parametrize("occurrence_method_arm", ("a2-clean", "a3"))
 def test_scoped_occurrence_answer_recovery_uses_dedicated_call_budget(
     tmp_path: Path,
@@ -936,7 +1036,7 @@ def test_a3_rejects_answer_until_selected_locator_is_inspected(
     assert result.answer_present is True
 
 
-def test_a3_records_locator_release_by_resolution_revision(
+def test_a3_rejects_resolution_revision_after_locator_inspection(
     tmp_path: Path,
 ) -> None:
     set_id = ScopedOccurrenceInvestigator.locator_attempt_id
@@ -949,12 +1049,19 @@ def test_a3_records_locator_release_by_resolution_revision(
                 ),
             ),
             ReasonerDecision(
-                action="update_workspace",
-                occurrence_ops=({"op": "defer", "set_id": set_id},),
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="inspect_selected",
+                        goal="inspect selected occurrence",
+                        locator_attempt_id=set_id,
+                        occurrence_id="occ_2",
+                    ),
+                ),
             ),
             ReasonerDecision(
                 action="update_workspace",
-                occurrence_ops=({"op": "no_match", "set_id": set_id},),
+                occurrence_ops=({"op": "defer", "set_id": set_id},),
             ),
             ReasonerDecision(action="answer", answer="resolved"),
         )
@@ -965,7 +1072,7 @@ def test_a3_records_locator_release_by_resolution_revision(
         investigator=ScopedOccurrenceInvestigator(),
         max_rounds=4,
         max_investigations=4,
-        control_retry_budget=0,
+        control_retry_budget=1,
         controller_mode="frozen_baseline",
         evidence_control_mode="shadow",
         evidence_state_mode="llm_authored",
@@ -981,25 +1088,31 @@ def test_a3_records_locator_release_by_resolution_revision(
     ).run(_workspace(tmp_path))
 
     assert any(
+        error.get("code") == "occurrence_resolution_already_committed"
+        for row in result.trace
+        if row.get("type") == "decision_schema_error"
+        for error in row.get("errors", ())
+    )
+    assert not any(
         row.get("type") == "occurrence_locator_released_unexecuted"
         and row.get("outcome") == "released_by_revision"
-        and row.get("revision_op") == "defer"
         for row in result.trace
     )
     assert result.answer_present is True
 
 
-def test_a3_records_locator_release_when_new_set_retires_selected_set(
+def test_a3_allows_deferred_set_retirement_before_terminal_resolution(
     tmp_path: Path,
 ) -> None:
     first_set, second_set = RotatingScopedOccurrenceInvestigator.locator_attempt_ids
     reasoner = ScriptedReasoner(
         (
             ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=({"op": "defer", "set_id": first_set},),
+            ),
+            ReasonerDecision(
                 action="investigate",
-                occurrence_ops=(
-                    {"op": "select", "set_id": first_set, "occurrence_id": "occ_1"},
-                ),
                 tasks=(
                     InvestigationTask(
                         query_id="search_more",
@@ -1020,7 +1133,7 @@ def test_a3_records_locator_release_when_new_set_retires_selected_set(
     result = VirtualVideoMultiRoundDriver(
         reasoner=reasoner,
         investigator=RotatingScopedOccurrenceInvestigator(),
-        max_rounds=3,
+        max_rounds=4,
         max_investigations=4,
         control_retry_budget=0,
         controller_mode="frozen_baseline",
@@ -1037,11 +1150,15 @@ def test_a3_records_locator_release_when_new_set_retires_selected_set(
         ),
     ).run(_workspace(tmp_path))
 
-    assert any(
-        row.get("type") == "occurrence_locator_released_unexecuted"
-        and row.get("outcome") == "released_on_set_retirement"
-        and row.get("locator_attempt_id") == first_set
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    assert decisions[-2]["active_occurrence_set_id"] == second_set
+    assert not any(
+        error.get("code") == "occurrence_resolution_already_committed"
         for row in result.trace
+        if row.get("type") == "decision_schema_error"
+        for error in row.get("errors", ())
     )
     assert result.answer_present is True
 

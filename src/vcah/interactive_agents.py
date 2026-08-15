@@ -2209,12 +2209,14 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "The active occurrence set was deferred. Continue with a refined search_caption task, or commit no_match "
             "for that set if no listed candidate is suitable. Do not answer while NEED_MORE_SEARCH is active."
         )
-    elif occurrence_answer_pending and final:
+    elif occurrence_answer_pending and (
+        final or occurrence_state_version == "OccurrenceResolutionStateV2"
+    ):
         if occurrence_state_version == "OccurrenceResolutionStateV2":
             action_rule = (
-                "The occurrence resolution is already persisted and investigation is closed. "
+                "The occurrence resolution is already persisted and all required locator inspection is complete or explicitly closed. "
                 "Return action=answer only with no tasks and no occurrence_ops; do not revise "
-                "the resolved occurrence set."
+                "the resolved occurrence set or issue another search."
             )
         else:
             action_rule = (

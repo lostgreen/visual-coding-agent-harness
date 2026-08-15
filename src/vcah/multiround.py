@@ -1011,12 +1011,19 @@ class VirtualVideoMultiRoundDriver:
                                 )
                             )
                     if occurrence_state is not None:
+                        require_terminal_answer = bool(
+                            isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                            and _occurrence_resolution_complete(occurrence_state)
+                            and not pending_locator_rows
+                        )
                         schema_errors.extend(
                             _occurrence_answer_errors(
                                 parsed_decision,
                                 occurrence_state,
                                 require_selection=force_finalize,
-                                require_answer=force_finalize,
+                                require_answer=(
+                                    force_finalize or require_terminal_answer
+                                ),
                             )
                         )
                     if (
@@ -2938,6 +2945,10 @@ def _control_retry_feedback(
     if "occurrence_answer_required_after_resolution" in codes:
         repair_rules.append(
             "The active scoped occurrence set is resolved. Return action=answer with no occurrence_ops; selected occurrences remain persisted."
+        )
+    if "occurrence_resolution_already_committed" in codes:
+        repair_rules.append(
+            "The active scoped occurrence resolution is immutable. Remove all occurrence_ops and follow the pending locator instruction, or return action=answer when no locator remains."
         )
     if any(
         code
