@@ -109,7 +109,11 @@ def _row(
         "occurrence_replay_prime_event_pre_reasoner": False,
         "occurrence_replay_post_fixture_reuse_count": 0,
         "retired_locator_count": 0,
-        "frozen_config": {"controller_mode": "frozen_baseline"},
+        "frozen_config": {
+            "controller_mode": "frozen_baseline",
+            "max_rounds": 4,
+            "semantic_round_budget": 4,
+        },
     }
 
 
@@ -444,7 +448,7 @@ def test_frozen_complete_is_primary_and_comparisons_report_sign_test() -> None:
     assert comparison["underpowered"] is True
 
 
-def test_budget_symmetry_fails_when_arm_mean_gap_exceeds_threshold() -> None:
+def test_budget_symmetry_treats_realized_rounds_as_endpoint() -> None:
     signature = [{"action": "investigate", "tasks": []}]
     left = _row("a2-clean", "c1", score=0.0, signature=signature)
     right = _row("a3", "c1", score=0.0, signature=signature)
@@ -455,6 +459,29 @@ def test_budget_symmetry_fails_when_arm_mean_gap_exceeds_threshold() -> None:
     )
 
     assert report["budget_symmetry"]["max_minus_min"] == 1.0
+    assert report["budget_symmetry"]["configured_max_minus_min"] == 0
+    assert report["budget_symmetry"][
+        "observed_realized_rounds_endpoint_only"
+    ] is True
+    assert report["structural_checks"]["budget_symmetry_passed"] is True
+    assert report["structural_gate_passed"] is True
+
+
+def test_budget_symmetry_fails_when_configured_budgets_differ() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    left = _row("a2-clean", "c1", score=0.0, signature=signature)
+    right = _row("a3", "c1", score=0.0, signature=signature)
+    right["frozen_config"] = {
+        **right["frozen_config"],
+        "max_rounds": 5,
+        "semantic_round_budget": 5,
+    }
+
+    report = ANALYSIS.build_report(
+        (left, right), expected_cases=1, bootstrap_samples=10, seed=3
+    )
+
+    assert report["budget_symmetry"]["configured_max_minus_min"] == 1
     assert report["structural_checks"]["budget_symmetry_passed"] is False
     assert report["structural_gate_passed"] is False
 

@@ -511,7 +511,7 @@ def build_report(
             "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
             "matched_pre_treatment_responses": "A3 exactly replays A2-clean Reasoner and Investigator responses until scoped resolution is persisted; all later calls remain live",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
-            "budget_symmetry_passed": "maximum arm mean semantic rounds minus minimum arm mean semantic rounds is at most 0.25",
+            "budget_symmetry_passed": "configured semantic-round budgets are present, internally consistent, and equal across arms; realized semantic rounds remain a treatment cost endpoint",
         },
         "all_cases": all_analysis,
         "frozen_complete": frozen_analysis,
@@ -1203,27 +1203,69 @@ def _matched_pre_treatment_response_gate(
 def _budget_symmetry(
     by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> dict[str, Any]:
+    configured_budgets = {
+        arm: sorted(
+            {
+                budget
+                for row in cases.values()
+                if (budget := _configured_semantic_round_budget(row))
+                is not None
+            }
+        )
+        for arm, cases in by_arm.items()
+    }
+    missing_arms = sorted(
+        arm for arm, values in configured_budgets.items() if not values
+    )
+    inconsistent_arms = sorted(
+        arm for arm, values in configured_budgets.items() if len(values) > 1
+    )
+    configured_values = sorted(
+        {value for values in configured_budgets.values() for value in values}
+    )
+    configured_gap = (
+        max(configured_values) - min(configured_values)
+        if configured_values
+        else None
+    )
     arm_means = {
         arm: _optional_mean(
             row.get("semantic_rounds_used") for row in cases.values()
         )
         for arm, cases in by_arm.items()
     }
-    missing_arms = sorted(
-        arm for arm, value in arm_means.items() if value is None
-    )
     values = [float(value) for value in arm_means.values() if value is not None]
-    gap = max(values) - min(values) if values else None
+    observed_gap = max(values) - min(values) if values else None
     return {
-        "arm_mean_semantic_rounds": arm_means,
-        "max_minus_min": gap,
-        "threshold": 0.25,
+        "configured_semantic_round_budgets": configured_budgets,
+        "configured_max_minus_min": configured_gap,
+        "inconsistent_arms": inconsistent_arms,
         "missing_arms": missing_arms,
-        "passed": bool(arm_means)
+        "arm_mean_semantic_rounds": arm_means,
+        "max_minus_min": observed_gap,
+        "observed_realized_rounds_endpoint_only": True,
+        "passed": bool(configured_budgets)
         and not missing_arms
-        and gap is not None
-        and gap <= 0.25,
+        and not inconsistent_arms
+        and configured_gap == 0,
     }
+
+
+def _configured_semantic_round_budget(
+    row: Mapping[str, Any],
+) -> int | None:
+    config = row.get("frozen_config")
+    if not isinstance(config, Mapping):
+        return None
+    for key in ("semantic_round_budget", "max_rounds"):
+        value = config.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _paired_score_delta(
