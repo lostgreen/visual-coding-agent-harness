@@ -282,7 +282,7 @@ def test_a2_occurrence_state_preserves_previously_exposed_ids() -> None:
     assert state.selected_occurrence_id == "occ_1"
 
 
-def test_a2_clean_activates_only_for_ambiguous_scoped_sets() -> None:
+def test_a2_clean_resolves_singletons_and_arbitrates_multiple_candidates() -> None:
     state = OccurrenceResolutionStateV2()
     assert state.sync_sets(
         (
@@ -292,8 +292,12 @@ def test_a2_clean_activates_only_for_ambiguous_scoped_sets() -> None:
                 "candidates": [{"occurrence_id": "occ_1"}],
             },
         )
-    ) is False
-    assert state.activated is False
+    ) is True
+    assert state.activated is True
+    assert state.candidate_count == 1
+    assert state.resolution_required is True
+    assert state.arbitration_required is False
+    assert state.selection_required is True
 
     assert state.sync_sets(
         (
@@ -309,6 +313,9 @@ def test_a2_clean_activates_only_for_ambiguous_scoped_sets() -> None:
     ) is True
     assert state.activated is True
     assert state.active_set_id == "attempt_ambiguous"
+    assert state.candidate_count == 2
+    assert state.resolution_required is True
+    assert state.arbitration_required is True
     assert state.selection_required is True
 
 
@@ -592,6 +599,9 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
     scoped_state = {
         "schema_version": "OccurrenceResolutionStateV2",
         "active_set_id": "attempt_locator",
+        "candidate_count": 1,
+        "resolution_required": True,
+        "arbitration_required": False,
         "selection_required": True,
         "search_required": False,
         "active_resolution": "unresolved",
@@ -604,9 +614,24 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
             "mechanical_status": {"occurrence_resolution_state": scoped_state},
         }
     )
-    assert "Scoped occurrence arbitration is enabled" in scoped_prompt
+    assert "Scoped occurrence resolution is enabled" in scoped_prompt
+    assert "Scoped occurrence arbitration is enabled" not in scoped_prompt
     assert '"set_id":"attempt_visible_id"' in scoped_prompt
     assert "no_match" in scoped_prompt
+
+    arbitration_prompt = _frozen_reasoner_prompt(
+        {
+            **base,
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    **scoped_state,
+                    "candidate_count": 2,
+                    "arbitration_required": True,
+                }
+            },
+        }
+    )
+    assert "Scoped occurrence arbitration is enabled" in arbitration_prompt
 
     actionable_prompt = _frozen_reasoner_prompt(
         {

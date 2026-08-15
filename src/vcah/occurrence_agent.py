@@ -309,6 +309,19 @@ class OccurrenceResolutionStateV2:
         )
 
     @property
+    def candidate_count(self) -> int:
+        active = self.active_set
+        return len(active.candidates) if active is not None else 0
+
+    @property
+    def resolution_required(self) -> bool:
+        return self.candidate_count >= 1
+
+    @property
+    def arbitration_required(self) -> bool:
+        return self.candidate_count >= 2
+
+    @property
     def selection_required(self) -> bool:
         active = self.active_set
         return bool(active is not None and active.resolution == "unresolved")
@@ -334,7 +347,7 @@ class OccurrenceResolutionStateV2:
                 if isinstance(candidate, Mapping)
                 and str(candidate.get("occurrence_id", "") or "").strip()
             )
-            if len(candidates) < 2:
+            if len(candidates) < 1:
                 continue
             set_id = str(
                 raw_set.get("attempt_id", raw_set.get("set_id", "")) or ""
@@ -446,6 +459,9 @@ class OccurrenceResolutionStateV2:
             "selection_required": self.selection_required,
             "search_required": self.search_required,
             "active_resolution": active.resolution if active is not None else None,
+            "candidate_count": self.candidate_count,
+            "resolution_required": self.resolution_required,
+            "arbitration_required": self.arbitration_required,
             "selected_occurrence_ids": list(self.selected_occurrence_ids),
             "retired_set_ids": list(self.retired_set_ids),
             "active_locators": list(self.active_locators()),

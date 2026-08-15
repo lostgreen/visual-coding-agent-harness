@@ -140,9 +140,17 @@ def audit_roots(
                 for row in trace
                 if row.get("type") == "occurrence_arbitration_activated"
             )
+            resolution_activation_events = tuple(
+                row
+                for row in trace
+                if row.get("type") == "occurrence_resolution_activated"
+            )
             activation_round = (
-                min(int(row.get("round", 0) or 0) for row in activation_events)
-                if activation_events
+                min(
+                    int(row.get("round", 0) or 0)
+                    for row in resolution_activation_events
+                )
+                if resolution_activation_events
                 else None
             )
             state_exposure_before_activation = sum(
@@ -154,7 +162,7 @@ def audit_roots(
                 for row in decisions
             )
             selection_required = (
-                bool(activation_events)
+                bool(resolution_activation_events)
                 if arm in SCOPED_ARMS
                 else any(
                     row.get("type") == "occurrence_treatment_eligible"
@@ -297,6 +305,17 @@ def audit_roots(
                     "resolution_before_answer": resolution_before_answer,
                     "lifecycle_complete": lifecycle_complete,
                     "arbitration_activation_events": len(activation_events),
+                    "resolution_activation_events": len(
+                        resolution_activation_events
+                    ),
+                    "resolution_activation_threshold_valid": all(
+                        int(row.get("candidate_count", 0) or 0) >= 1
+                        for row in resolution_activation_events
+                    ),
+                    "arbitration_activation_threshold_valid": all(
+                        int(row.get("candidate_count", 0) or 0) >= 2
+                        for row in activation_events
+                    ),
                     "state_exposure_before_activation": (
                         state_exposure_before_activation
                     ),
@@ -407,8 +426,19 @@ def audit_roots(
             "arbitration_activation_case_count": sum(
                 row["arbitration_activation_events"] > 0 for row in cases
             ),
+            "resolution_activation_case_count": sum(
+                row["resolution_activation_events"] > 0 for row in cases
+            ),
             "duplicate_arbitration_activation_case_count": sum(
                 row["arbitration_activation_events"] > 1 for row in cases
+            ),
+            "duplicate_resolution_activation_case_count": sum(
+                row["resolution_activation_events"] > 1 for row in cases
+            ),
+            "activation_threshold_failure_case_count": sum(
+                not row["resolution_activation_threshold_valid"]
+                or not row["arbitration_activation_threshold_valid"]
+                for row in cases
             ),
             "pre_activation_state_exposure_count": sum(
                 row["state_exposure_before_activation"] for row in cases
@@ -582,12 +612,17 @@ def audit_roots(
                 == 0
             )
         ),
-        "scoped_arbitration_activated": all(
-            per_arm[arm]["arbitration_activation_case_count"] > 0
+        "scoped_resolution_activated": all(
+            per_arm[arm]["resolution_activation_case_count"] > 0
             for arm in scoped_arms
         ),
         "scoped_activation_unique": all(
-            per_arm[arm]["duplicate_arbitration_activation_case_count"] == 0
+            per_arm[arm]["duplicate_resolution_activation_case_count"] == 0
+            and per_arm[arm]["duplicate_arbitration_activation_case_count"] == 0
+            for arm in scoped_arms
+        ),
+        "scoped_activation_thresholds_valid": all(
+            per_arm[arm]["activation_threshold_failure_case_count"] == 0
             for arm in scoped_arms
         ),
         "no_pre_activation_state_exposure": all(

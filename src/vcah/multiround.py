@@ -468,6 +468,7 @@ class VirtualVideoMultiRoundDriver:
         occurrence_state_path = workspace.root_dir / "occurrence_resolution_state.json"
         treatment_eligible_recorded = False
         treatment_exposed_recorded = False
+        resolution_activated_recorded = False
         arbitration_activated_recorded = False
         if isinstance(occurrence_state, OccurrenceResolutionStateV1):
             occurrence_state.save(occurrence_state_path)
@@ -662,9 +663,26 @@ class VirtualVideoMultiRoundDriver:
                 occurrence_state.save(occurrence_state_path)
                 status["occurrence_resolution_state"] = occurrence_state.to_dict()
             elif isinstance(occurrence_state, OccurrenceResolutionStateV2):
-                occurrence_state.sync_sets(_ambiguous_occurrence_sets(status))
+                occurrence_state.sync_sets(_scoped_occurrence_sets(status))
                 if occurrence_state.activated:
-                    if not arbitration_activated_recorded:
+                    if not resolution_activated_recorded:
+                        trace.append(
+                            {
+                                "type": "occurrence_resolution_activated",
+                                "round": round_id,
+                                "method_arm": self.occurrence_method_arm,
+                                "active_set_id": occurrence_state.active_set_id,
+                                "candidate_count": occurrence_state.candidate_count,
+                                "arbitration_required": (
+                                    occurrence_state.arbitration_required
+                                ),
+                            }
+                        )
+                        resolution_activated_recorded = True
+                    if (
+                        occurrence_state.arbitration_required
+                        and not arbitration_activated_recorded
+                    ):
                         active = occurrence_state.active_set
                         trace.append(
                             {
@@ -1739,7 +1757,7 @@ def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-def _ambiguous_occurrence_sets(
+def _scoped_occurrence_sets(
     status: Mapping[str, Any],
 ) -> tuple[dict[str, Any], ...]:
     values: list[dict[str, Any]] = []
@@ -1752,7 +1770,7 @@ def _ambiguous_occurrence_sets(
             if isinstance(candidate, Mapping)
             and str(candidate.get("occurrence_id", "") or "")
         )
-        if len(candidates) < 2:
+        if len(candidates) < 1:
             continue
         values.append(
             {

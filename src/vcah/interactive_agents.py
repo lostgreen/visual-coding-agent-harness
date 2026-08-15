@@ -1998,8 +1998,12 @@ def _occurrence_resolution_prompt_rule(
     if not isinstance(state, Mapping):
         return ""
     if str(state.get("schema_version", "")) == "OccurrenceResolutionStateV2":
-        return (
-            "Scoped occurrence arbitration is enabled because an ambiguous candidate set is now exposed. Each set_id "
+        protocol = (
+            "Scoped occurrence arbitration is enabled because a multi-candidate set is now exposed. Each set_id "
+            if state.get("arbitration_required")
+            else "Scoped occurrence resolution is enabled because a candidate set is now exposed. Each set_id "
+        )
+        return protocol + (
             "is one Caption locator attempt for one semantic target; never compare, eliminate, or select candidates "
             "across different sets. Use top-level occurrence_ops with an explicit set_id. Candidate operations are "
             '[{"op":"keep|eliminate|select|reopen","set_id":"attempt_...",'

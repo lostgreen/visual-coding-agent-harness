@@ -151,8 +151,21 @@ def collect_rows(
             activation_round = _event_round(
                 trace, "occurrence_arbitration_activated"
             )
+            resolution_activation_round = _event_round(
+                trace, "occurrence_resolution_activated"
+            )
+            resolution_activation_events = tuple(
+                row
+                for row in trace
+                if row.get("type") == "occurrence_resolution_activated"
+            )
+            arbitration_activation_events = tuple(
+                row
+                for row in trace
+                if row.get("type") == "occurrence_arbitration_activated"
+            )
             treatment_cutoff_round = (
-                activation_round
+                resolution_activation_round
                 if arm in {"a2-clean", "a3"}
                 else eligibility_round
             )
@@ -241,6 +254,15 @@ def collect_rows(
                     ),
                     "treatment_eligible_round": eligibility_round,
                     "arbitration_activation_round": activation_round,
+                    "resolution_activation_round": resolution_activation_round,
+                    "resolution_activation_threshold_valid": all(
+                        int(row.get("candidate_count", 0) or 0) >= 1
+                        for row in resolution_activation_events
+                    ),
+                    "arbitration_activation_threshold_valid": all(
+                        int(row.get("candidate_count", 0) or 0) >= 2
+                        for row in arbitration_activation_events
+                    ),
                     "pre_treatment_signature": _pre_treatment_signature(
                         trace, treatment_cutoff_round
                     ),
@@ -251,9 +273,9 @@ def collect_rows(
                         row.get("type") == "reasoner_decision"
                         and row.get("occurrence_resolution_state_exposed")
                         and (
-                            activation_round is None
+                            resolution_activation_round is None
                             or int(row.get("round", 0) or 0)
-                            < activation_round
+                            < resolution_activation_round
                         )
                         for row in trace
                     ),
@@ -397,6 +419,12 @@ def build_report(
             for arm in ("a2-clean", "a3")
             for row in by_arm.get(arm, {}).values()
         ),
+        "occurrence_activation_thresholds_valid": all(
+            row.get("resolution_activation_threshold_valid") is True
+            and row.get("arbitration_activation_threshold_valid") is True
+            for arm in ("a2-clean", "a3")
+            for row in by_arm.get(arm, {}).values()
+        ),
     }
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV2",
@@ -491,6 +519,10 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         ),
         "arbitration_activation_rate": _mean_bool(
             row.get("arbitration_activation_round") is not None
+            for row in rows
+        ),
+        "resolution_activation_rate": _mean_bool(
+            row.get("resolution_activation_round") is not None
             for row in rows
         ),
         "premature_commit_rate": _mean_bool(

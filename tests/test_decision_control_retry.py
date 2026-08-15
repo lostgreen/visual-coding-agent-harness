@@ -148,6 +148,21 @@ class ScopedOccurrenceInvestigator(RecordingInvestigator):
         return tuple(reports)
 
 
+class SingleScopedOccurrenceInvestigator(ScopedOccurrenceInvestigator):
+    occurrence_set = {
+        "status": "candidate",
+        "occurrence_ambiguous": False,
+        "candidates": [
+            {
+                "occurrence_id": "occ_single",
+                "time_range": [8.0, 10.0],
+                "source_video_ids": ["video-a"],
+                "segment_ids": ["seg_0001"],
+            }
+        ],
+    }
+
+
 class MetadataScriptedReasoner(ScriptedReasoner):
     def __init__(
         self,
@@ -562,6 +577,68 @@ def test_a2_clean_is_identical_before_ambiguous_set_exposure(
         row for row in result.trace if row.get("type") == "reasoner_decision"
     ]
     assert decisions[1]["selected_occurrence_ids"] == ["occ_2"]
+    assert result.answer_present is True
+
+
+def test_single_candidate_requires_resolution_without_arbitration(
+    tmp_path: Path,
+) -> None:
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="locate_single",
+                        goal="locate target event",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="premature"),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {
+                        "op": "select",
+                        "set_id": SingleScopedOccurrenceInvestigator.locator_attempt_id,
+                        "occurrence_id": "occ_single",
+                    },
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=SingleScopedOccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a2-clean",
+    ).run(_workspace(tmp_path))
+
+    resolution_events = [
+        row
+        for row in result.trace
+        if row.get("type") == "occurrence_resolution_activated"
+    ]
+    assert len(resolution_events) == 1
+    assert resolution_events[0]["candidate_count"] == 1
+    assert resolution_events[0]["arbitration_required"] is False
+    assert not any(
+        row.get("type") == "occurrence_arbitration_activated"
+        for row in result.trace
+    )
+    assert any(
+        row.get("type") == "decision_schema_error"
+        and row.get("code") == "occurrence_resolution_required"
+        for row in result.trace
+    )
     assert result.answer_present is True
 
 

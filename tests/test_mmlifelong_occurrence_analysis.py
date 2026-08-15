@@ -59,6 +59,9 @@ def _row(
         "locator_scope_single_set_passed": True,
         "bound_visual_clue_recall": None,
         "arbitration_activation_round": None,
+        "resolution_activation_round": None,
+        "resolution_activation_threshold_valid": True,
+        "arbitration_activation_threshold_valid": True,
         "premature_occurrence_commit": False,
         "visual_frames": 3,
         "visual_windows": 1,
@@ -499,9 +502,17 @@ def test_scoped_canary_audit_requires_actionable_locator_execution(
                         "occurrence_resolution_state_exposed": False,
                     },
                     {
+                        "type": "occurrence_resolution_activated",
+                        "round": 2,
+                        "active_set_id": "locator_1",
+                        "candidate_count": 2,
+                        "arbitration_required": True,
+                    },
+                    {
                         "type": "occurrence_arbitration_activated",
                         "round": 2,
                         "active_set_id": "locator_1",
+                        "candidate_count": 2,
                     },
                     {
                         "type": "reasoner_decision",
