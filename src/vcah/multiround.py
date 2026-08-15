@@ -1833,6 +1833,14 @@ def _occurrence_locator_statuses(
         for binding in (config.get("candidate_binding"),)
         if isinstance(binding, Mapping)
     }
+    locators = state.active_locators()
+    if any(
+        str(locator.get("set_id", "") or "") != state.active_set_id
+        for locator in locators
+    ):
+        raise RuntimeError(
+            "occurrence answer and locator gates must share the active set"
+        )
     return tuple(
         {
             **locator,
@@ -1841,17 +1849,17 @@ def _occurrence_locator_statuses(
                 str(locator["occurrence_id"]),
             )
             in inspected,
-            "status": (
+            "inspection_status": (
                 "inspected"
                 if (
                     str(locator["locator_attempt_id"]),
                     str(locator["occurrence_id"]),
                 )
                 in inspected
-                else "selected_pending_inspection"
+                else "pending_inspection"
             ),
         }
-        for locator in state.active_locators()
+        for locator in locators
     )
 
 

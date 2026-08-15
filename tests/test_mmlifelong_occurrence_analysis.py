@@ -56,6 +56,7 @@ def _row(
         "deferred_occurrence_set": False,
         "occurrence_handle_usage_rate": 1.0,
         "selected_locator_usage_rate": None,
+        "locator_scope_single_set_passed": True,
         "bound_visual_clue_recall": None,
         "arbitration_activation_round": None,
         "premature_occurrence_commit": False,
@@ -155,6 +156,45 @@ def test_budget_symmetry_fails_when_arm_mean_gap_exceeds_threshold() -> None:
     assert report["budget_symmetry"]["max_minus_min"] == 1.0
     assert report["structural_checks"]["budget_symmetry_passed"] is False
     assert report["structural_gate_passed"] is False
+
+
+def test_locator_scope_must_resolve_to_one_active_set() -> None:
+    row = _row(
+        "a3",
+        "c1",
+        score=0.0,
+        signature=[{"action": "investigate", "tasks": []}],
+    )
+    row["locator_scope_single_set_passed"] = False
+
+    report = ANALYSIS.build_report(
+        (row,), expected_cases=1, bootstrap_samples=10, seed=3
+    )
+
+    assert report["structural_checks"][
+        "locator_scope_single_set_passed"
+    ] is False
+    assert report["structural_gate_passed"] is False
+
+    malformed_state = {
+        "active_set_id": "new",
+        "retired_set_ids": ["old"],
+        "active_locators": [],
+        "retired_locators": [],
+        "sets": [
+            {
+                "set_id": "old",
+                "lifecycle": "retired",
+                "selected_occurrence_ids": ["old_1"],
+            },
+            {
+                "set_id": "new",
+                "lifecycle": "active",
+                "selected_occurrence_ids": [],
+            },
+        ],
+    }
+    assert ANALYSIS._locator_scope_single_set_passed(malformed_state) is False
 
 
 def test_a1_flat_text_parity_is_not_comparable_after_trajectory_divergence() -> None:
@@ -523,10 +563,22 @@ def test_scoped_canary_audit_requires_actionable_locator_execution(
                 json.dumps(
                     {
                         "active_resolution": "selected",
+                        "active_set_id": "locator_1",
+                        "retired_set_ids": [],
+                        "active_locators": [
+                            {
+                                "set_id": "locator_1",
+                                "locator_attempt_id": "locator_1",
+                                "occurrence_id": "occ_1",
+                                "status": "selected_for_active_set",
+                            }
+                        ],
+                        "retired_locators": [],
                         "sets": [
                             {
                                 "set_id": "locator_1",
                                 "resolution": "selected",
+                                "lifecycle": "active",
                                 "selected_occurrence_ids": ["occ_1"],
                                 "candidates": [
                                     {"occurrence_id": "occ_1"},

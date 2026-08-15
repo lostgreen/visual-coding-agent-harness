@@ -190,6 +190,9 @@ def audit_roots(
                 )
             )
             scoped_sets = _scoped_state_sets(state)
+            locator_scope_single_set_passed = _locator_scope_single_set_passed(
+                state
+            )
             scoped_ops_have_set_id = all(
                 bool(_operation_set_id(operation))
                 for _, operation in accepted_ops
@@ -299,6 +302,9 @@ def audit_roots(
                     ),
                     "scoped_ops_have_set_id": scoped_ops_have_set_id,
                     "scoped_candidate_integrity": scoped_candidate_integrity,
+                    "locator_scope_single_set_passed": (
+                        locator_scope_single_set_passed
+                    ),
                     "defer_ops": sum(
                         _operation_name(operation) == "defer"
                         for _, operation in accepted_ops
@@ -447,6 +453,9 @@ def audit_roots(
             "scoped_candidate_integrity_failure_case_count": sum(
                 not row["scoped_candidate_integrity"] for row in cases
             ),
+            "locator_scope_single_set_failure_case_count": sum(
+                not row["locator_scope_single_set_passed"] for row in cases
+            ),
             "defer_op_count": sum(row["defer_ops"] for row in cases),
             "no_match_op_count": sum(row["no_match_ops"] for row in cases),
             "multi_selection_set_count": sum(
@@ -591,6 +600,10 @@ def audit_roots(
             == 0
             for arm in scoped_arms
         ),
+        "locator_scope_single_set_passed": all(
+            per_arm[arm]["locator_scope_single_set_failure_case_count"] == 0
+            for arm in scoped_arms
+        ),
         "scoped_resolution_complete": all(
             per_arm[arm]["resolution_missing_before_answer_case_count"] == 0
             for arm in scoped_arms
@@ -667,6 +680,7 @@ def _scoped_state_sets(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "candidate_ids": candidates,
             "selected_occurrence_ids": selected,
             "resolution": str(raw_set.get("resolution", "") or ""),
+            "lifecycle": str(raw_set.get("lifecycle", "") or ""),
         }
     return values
 
@@ -689,11 +703,85 @@ def _scoped_operation_valid(
 
 
 def _final_selected_pairs(state: Mapping[str, Any]) -> set[tuple[str, str]]:
+    active_set_id = str(state.get("active_set_id", "") or "")
     return {
         (set_id, occurrence_id)
         for set_id, value in _scoped_state_sets(state).items()
+        if set_id == active_set_id and value.get("lifecycle") == "active"
         for occurrence_id in value["selected_occurrence_ids"]
     }
+
+
+def _locator_scope_single_set_passed(state: Mapping[str, Any]) -> bool:
+    scoped_sets = _scoped_state_sets(state)
+    if not scoped_sets:
+        return not state.get("active_set_id")
+    active_set_id = str(state.get("active_set_id", "") or "")
+    active_set_ids = {
+        set_id
+        for set_id, value in scoped_sets.items()
+        if value.get("lifecycle") == "active"
+    }
+    retired_set_ids = {
+        set_id
+        for set_id, value in scoped_sets.items()
+        if value.get("lifecycle") == "retired"
+    }
+    serialized_retired = {
+        str(value)
+        for value in tuple(state.get("retired_set_ids", ()) or ())
+        if str(value)
+    }
+    active_locators = tuple(state.get("active_locators", ()) or ())
+    retired_locators = tuple(state.get("retired_locators", ()) or ())
+    expected_active_pairs = {
+        (active_set_id, occurrence_id)
+        for set_id, value in scoped_sets.items()
+        if set_id == active_set_id
+        for occurrence_id in value["selected_occurrence_ids"]
+    }
+    expected_retired_pairs = {
+        (set_id, occurrence_id)
+        for set_id, value in scoped_sets.items()
+        if set_id in retired_set_ids
+        for occurrence_id in value["selected_occurrence_ids"]
+    }
+    actual_active_pairs = {
+        (
+            str(locator.get("set_id", "") or ""),
+            str(locator.get("occurrence_id", "") or ""),
+        )
+        for locator in active_locators
+        if isinstance(locator, Mapping)
+    }
+    actual_retired_pairs = {
+        (
+            str(locator.get("set_id", "") or ""),
+            str(locator.get("occurrence_id", "") or ""),
+        )
+        for locator in retired_locators
+        if isinstance(locator, Mapping)
+    }
+    return bool(active_set_id) and all(
+        (
+            active_set_ids == {active_set_id},
+            retired_set_ids == serialized_retired,
+            actual_active_pairs == expected_active_pairs,
+            actual_retired_pairs == expected_retired_pairs,
+            all(
+                isinstance(locator, Mapping)
+                and str(locator.get("set_id", "") or "") == active_set_id
+                and locator.get("status") == "selected_for_active_set"
+                for locator in active_locators
+            ),
+            all(
+                isinstance(locator, Mapping)
+                and str(locator.get("set_id", "") or "") in retired_set_ids
+                and locator.get("status") == "retired_history"
+                for locator in retired_locators
+            ),
+        )
+    )
 
 
 def _executed_binding_pairs(

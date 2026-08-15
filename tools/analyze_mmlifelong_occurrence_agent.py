@@ -122,6 +122,9 @@ def collect_rows(
             )
             selected_clue_recall = _interval_recall(selected_ranges, clues)
             state = _read_json(run_dir / "occurrence_resolution_state.json")
+            locator_scope_single_set_passed = _locator_scope_single_set_passed(
+                state
+            )
             final_selected_pairs = _final_selected_pairs(state)
             executed_binding_pairs, bound_visual_ranges = _bound_visual_evidence(
                 observations
@@ -225,6 +228,9 @@ def collect_rows(
                         trace, treatment_cutoff_round
                     ),
                     "selected_locator_usage_rate": selected_locator_usage_rate,
+                    "locator_scope_single_set_passed": (
+                        locator_scope_single_set_passed
+                    ),
                     "bound_visual_clue_recall": _interval_recall(
                         bound_visual_ranges, clues
                     ),
@@ -386,6 +392,11 @@ def build_report(
         "frozen_occurrence_replay_parity": replay_parity.get("passed"),
         "frozen_occurrence_replay_prime": replay_parity.get("prime_passed"),
         "budget_symmetry_passed": budget_symmetry.get("passed"),
+        "locator_scope_single_set_passed": all(
+            row.get("locator_scope_single_set_passed") is True
+            for arm in ("a2-clean", "a3")
+            for row in by_arm.get(arm, {}).values()
+        ),
     }
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV2",
@@ -471,6 +482,9 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         ),
         "selected_locator_usage_rate": _optional_mean(
             row.get("selected_locator_usage_rate") for row in rows
+        ),
+        "locator_scope_single_set_rate": _mean_bool(
+            row.get("locator_scope_single_set_passed") for row in rows
         ),
         "bound_visual_clue_recall": _optional_mean(
             row.get("bound_visual_clue_recall") for row in rows
@@ -777,13 +791,94 @@ def _accepted_occurrence_op(
 
 
 def _final_selected_pairs(state: Mapping[str, Any]) -> set[tuple[str, str]]:
+    active_set_id = str(state.get("active_set_id", "") or "")
     return {
         (str(raw_set.get("set_id", "") or ""), str(occurrence_id))
         for raw_set in tuple(state.get("sets", ()) or ())
-        if isinstance(raw_set, Mapping) and raw_set.get("set_id")
+        if isinstance(raw_set, Mapping)
+        and str(raw_set.get("set_id", "") or "") == active_set_id
+        and str(raw_set.get("lifecycle", "") or "") == "active"
         for occurrence_id in tuple(raw_set.get("selected_occurrence_ids", ()) or ())
         if str(occurrence_id)
     }
+
+
+def _locator_scope_single_set_passed(state: Mapping[str, Any]) -> bool:
+    raw_sets = tuple(
+        raw_set
+        for raw_set in tuple(state.get("sets", ()) or ())
+        if isinstance(raw_set, Mapping)
+    )
+    if not raw_sets:
+        return not state.get("active_set_id")
+    active_set_id = str(state.get("active_set_id", "") or "")
+    active_set_ids = {
+        str(raw_set.get("set_id", "") or "")
+        for raw_set in raw_sets
+        if str(raw_set.get("lifecycle", "") or "") == "active"
+    }
+    retired_set_ids = {
+        str(raw_set.get("set_id", "") or "")
+        for raw_set in raw_sets
+        if str(raw_set.get("lifecycle", "") or "") == "retired"
+    }
+    serialized_retired = {
+        str(value)
+        for value in tuple(state.get("retired_set_ids", ()) or ())
+        if str(value)
+    }
+    active_locators = tuple(state.get("active_locators", ()) or ())
+    retired_locators = tuple(state.get("retired_locators", ()) or ())
+    expected_active_pairs = {
+        (active_set_id, str(occurrence_id))
+        for raw_set in raw_sets
+        if str(raw_set.get("set_id", "") or "") == active_set_id
+        for occurrence_id in tuple(raw_set.get("selected_occurrence_ids", ()) or ())
+        if str(occurrence_id)
+    }
+    expected_retired_pairs = {
+        (str(raw_set.get("set_id", "") or ""), str(occurrence_id))
+        for raw_set in raw_sets
+        if str(raw_set.get("set_id", "") or "") in retired_set_ids
+        for occurrence_id in tuple(raw_set.get("selected_occurrence_ids", ()) or ())
+        if str(occurrence_id)
+    }
+    actual_active_pairs = {
+        (
+            str(locator.get("set_id", "") or ""),
+            str(locator.get("occurrence_id", "") or ""),
+        )
+        for locator in active_locators
+        if isinstance(locator, Mapping)
+    }
+    actual_retired_pairs = {
+        (
+            str(locator.get("set_id", "") or ""),
+            str(locator.get("occurrence_id", "") or ""),
+        )
+        for locator in retired_locators
+        if isinstance(locator, Mapping)
+    }
+    return bool(active_set_id) and all(
+        (
+            active_set_ids == {active_set_id},
+            retired_set_ids == serialized_retired,
+            actual_active_pairs == expected_active_pairs,
+            actual_retired_pairs == expected_retired_pairs,
+            all(
+                isinstance(locator, Mapping)
+                and str(locator.get("set_id", "") or "") == active_set_id
+                and locator.get("status") == "selected_for_active_set"
+                for locator in active_locators
+            ),
+            all(
+                isinstance(locator, Mapping)
+                and str(locator.get("set_id", "") or "") in retired_set_ids
+                and locator.get("status") == "retired_history"
+                for locator in retired_locators
+            ),
+        )
+    )
 
 
 def _bound_visual_evidence(

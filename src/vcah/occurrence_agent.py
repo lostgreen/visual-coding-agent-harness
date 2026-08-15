@@ -207,6 +207,7 @@ class OccurrenceSetStateV2:
     states: dict[str, str] = field(default_factory=dict)
     selected_occurrence_ids: tuple[str, ...] = ()
     resolution: str = "unresolved"
+    lifecycle: str = "active"
     revision: int = 0
 
     @property
@@ -266,6 +267,7 @@ class OccurrenceSetStateV2:
             "semantic_target": list(self.semantic_target),
             "revision": self.revision,
             "resolution": self.resolution,
+            "lifecycle": self.lifecycle,
             "candidates": [
                 {
                     "occurrence_id": occurrence_id,
@@ -295,7 +297,16 @@ class OccurrenceResolutionStateV2:
 
     @property
     def active_set(self) -> OccurrenceSetStateV2 | None:
-        return self.sets.get(self.active_set_id)
+        active = self.sets.get(self.active_set_id)
+        return active if active is not None and active.lifecycle == "active" else None
+
+    @property
+    def retired_set_ids(self) -> tuple[str, ...]:
+        return tuple(
+            set_id
+            for set_id, occurrence_set in self.sets.items()
+            if occurrence_set.lifecycle == "retired"
+        )
 
     @property
     def selection_required(self) -> bool:
@@ -309,13 +320,8 @@ class OccurrenceResolutionStateV2:
 
     @property
     def selected_occurrence_ids(self) -> tuple[str, ...]:
-        return tuple(
-            dict.fromkeys(
-                occurrence_id
-                for occurrence_set in self.sets.values()
-                for occurrence_id in occurrence_set.selected_occurrence_ids
-            )
-        )
+        active = self.active_set
+        return active.selected_occurrence_ids if active is not None else ()
 
     def sync_sets(self, occurrence_sets: Sequence[Mapping[str, Any]]) -> bool:
         changed = False
@@ -353,9 +359,12 @@ class OccurrenceResolutionStateV2:
                 changed = True
             if is_new:
                 previous = self.active_set
-                if previous is not None and previous.resolution == "unresolved":
-                    previous.resolution = "deferred"
+                if previous is not None:
+                    previous.lifecycle = "retired"
+                    if previous.resolution == "unresolved":
+                        previous.resolution = "deferred"
                     previous.revision += 1
+                occurrence_set.lifecycle = "active"
                 self.active_set_id = set_id
                 changed = True
         if changed:
@@ -392,6 +401,9 @@ class OccurrenceResolutionStateV2:
         return {"accepted": True, "errors": [], "applied": applied}
 
     def active_locators(self) -> tuple[dict[str, Any], ...]:
+        occurrence_set = self.active_set
+        if occurrence_set is None:
+            return ()
         return tuple(
             {
                 "set_id": occurrence_set.set_id,
@@ -401,9 +413,26 @@ class OccurrenceResolutionStateV2:
                     occurrence_set.candidates[occurrence_id].get("time_range", ())
                     or ()
                 ),
-                "status": "authoritative_for_current_hypothesis",
+                "status": "selected_for_active_set",
+            }
+            for occurrence_id in occurrence_set.selected_occurrence_ids
+            if occurrence_id in occurrence_set.candidates
+        )
+
+    def retired_locators(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            {
+                "set_id": occurrence_set.set_id,
+                "locator_attempt_id": occurrence_set.set_id,
+                "occurrence_id": occurrence_id,
+                "time_range": list(
+                    occurrence_set.candidates[occurrence_id].get("time_range", ())
+                    or ()
+                ),
+                "status": "retired_history",
             }
             for occurrence_set in self.sets.values()
+            if occurrence_set.lifecycle == "retired"
             for occurrence_id in occurrence_set.selected_occurrence_ids
             if occurrence_id in occurrence_set.candidates
         )
@@ -418,6 +447,9 @@ class OccurrenceResolutionStateV2:
             "search_required": self.search_required,
             "active_resolution": active.resolution if active is not None else None,
             "selected_occurrence_ids": list(self.selected_occurrence_ids),
+            "retired_set_ids": list(self.retired_set_ids),
+            "active_locators": list(self.active_locators()),
+            "retired_locators": list(self.retired_locators()),
             "sets": [occurrence_set.to_dict() for occurrence_set in self.sets.values()],
         }
 
@@ -444,6 +476,7 @@ class OccurrenceResolutionStateV2:
                     states=dict(value.states),
                     selected_occurrence_ids=value.selected_occurrence_ids,
                     resolution=value.resolution,
+                    lifecycle=value.lifecycle,
                     revision=value.revision,
                 )
                 for set_id, value in self.sets.items()
@@ -480,6 +513,13 @@ class OccurrenceResolutionStateV2:
                 "occurrence_op_index": index,
                 "set_id": set_id,
             }
+        if set_id != self.active_set_id or occurrence_set.lifecycle != "active":
+            return {
+                "code": "occurrence_set_not_active",
+                "occurrence_op_index": index,
+                "set_id": set_id,
+                "active_set_id": self.active_set_id,
+            }
         if op in {"defer", "no_match"}:
             if occurrence_id:
                 return {
@@ -494,7 +534,6 @@ class OccurrenceResolutionStateV2:
                     occurrence_set.states[candidate_id] = "active"
             occurrence_set.resolution = "deferred" if op == "defer" else "no_match"
             occurrence_set.revision += 1
-            self.active_set_id = set_id
             return None
         if not occurrence_id or occurrence_id not in occurrence_set.candidates:
             return {
@@ -543,7 +582,6 @@ class OccurrenceResolutionStateV2:
             if occurrence_set.resolution in {"deferred", "no_match"}:
                 occurrence_set.resolution = "unresolved"
         occurrence_set.revision += 1
-        self.active_set_id = set_id
         return None
 
 

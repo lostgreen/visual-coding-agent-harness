@@ -362,6 +362,81 @@ def test_a2_clean_keeps_locator_attempt_sets_separate() -> None:
     assert rejected["errors"][0]["code"] == "occurrence_id_not_in_set"
 
 
+def test_scoped_locators_only_expose_the_active_set() -> None:
+    state = OccurrenceResolutionStateV2()
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_old",
+                "candidates": [
+                    {"occurrence_id": "old_1", "time_range": [1, 2]},
+                    {"occurrence_id": "old_2", "time_range": [3, 4]},
+                ],
+            },
+        )
+    )
+    assert state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_old",
+                "occurrence_id": "old_1",
+            },
+        )
+    )["accepted"] is True
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_new",
+                "candidates": [
+                    {"occurrence_id": "new_1", "time_range": [5, 6]},
+                    {"occurrence_id": "new_2", "time_range": [7, 8]},
+                ],
+            },
+        )
+    )
+    assert state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_new",
+                "occurrence_id": "new_2",
+            },
+        )
+    )["accepted"] is True
+
+    assert state.active_set_id == "attempt_new"
+    assert state.retired_set_ids == ("attempt_old",)
+    assert state.active_locators() == (
+        {
+            "set_id": "attempt_new",
+            "locator_attempt_id": "attempt_new",
+            "occurrence_id": "new_2",
+            "time_range": [7, 8],
+            "status": "selected_for_active_set",
+        },
+    )
+    assert state.retired_locators()[0]["set_id"] == "attempt_old"
+    assert state.retired_locators()[0]["status"] == "retired_history"
+    retired_op = state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_old",
+                "occurrence_id": "old_2",
+            },
+        )
+    )
+    assert retired_op["accepted"] is False
+    assert retired_op["errors"][0]["code"] == "occurrence_set_not_active"
+    serialized = state.to_dict()
+    assert serialized["retired_set_ids"] == ["attempt_old"]
+    assert [value["lifecycle"] for value in serialized["sets"]] == [
+        "retired",
+        "active",
+    ]
+
+
 def test_a2_clean_supports_abstention_and_multiple_selections() -> None:
     state = OccurrenceResolutionStateV2()
     state.sync_sets(
@@ -446,7 +521,8 @@ def test_a3_requires_selected_locator_binding_before_answer() -> None:
         )
     )
     pending = _occurrence_locator_statuses(state, ())
-    assert pending[0]["status"] == "selected_pending_inspection"
+    assert pending[0]["status"] == "selected_for_active_set"
+    assert pending[0]["inspection_status"] == "pending_inspection"
     assert [
         error["code"]
         for error in _actionable_locator_errors(
@@ -503,7 +579,8 @@ def test_a3_requires_selected_locator_binding_before_answer() -> None:
             },
         ),
     )
-    assert inspected[0]["status"] == "inspected"
+    assert inspected[0]["status"] == "selected_for_active_set"
+    assert inspected[0]["inspection_status"] == "inspected"
     assert inspected[0]["inspected"] is True
 
 
