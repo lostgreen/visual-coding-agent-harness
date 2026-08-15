@@ -500,6 +500,59 @@ def test_scoped_terminal_resolution_is_immutable_across_sets_and_ops() -> None:
     assert state.selected_occurrence_ids == ("occ_2",)
 
 
+def test_scoped_resolution_transaction_commits_only_after_all_ops() -> None:
+    state = OccurrenceResolutionStateV2()
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_transaction",
+                "candidates": [
+                    {"occurrence_id": "occ_1"},
+                    {"occurrence_id": "occ_2"},
+                    {"occurrence_id": "occ_3"},
+                ],
+            },
+        )
+    )
+
+    result = state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_transaction",
+                "occurrence_id": "occ_2",
+            },
+            {
+                "op": "eliminate",
+                "set_id": "attempt_transaction",
+                "occurrence_id": "occ_1",
+            },
+            {
+                "op": "keep",
+                "set_id": "attempt_transaction",
+                "occurrence_id": "occ_3",
+            },
+        )
+    )
+
+    assert result["accepted"] is True
+    assert state.resolution_committed is True
+    assert state.selected_occurrence_ids == ("occ_2",)
+    later = state.apply_ops(
+        (
+            {
+                "op": "keep",
+                "set_id": "attempt_transaction",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+    assert later["accepted"] is False
+    assert later["errors"][0]["code"] == (
+        "occurrence_resolution_already_committed"
+    )
+
+
 def test_a2_clean_supports_abstention_and_multiple_selections() -> None:
     state = OccurrenceResolutionStateV2()
     state.sync_sets(

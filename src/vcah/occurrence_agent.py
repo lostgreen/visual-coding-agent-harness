@@ -400,13 +400,13 @@ class OccurrenceResolutionStateV2:
         self, operations: Sequence[Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
         shadow = self._clone()
-        allow_selection_batch = not shadow.resolution_committed
+        allow_resolution_transaction = not shadow.resolution_committed
         errors: list[dict[str, Any]] = []
         for index, operation in enumerate(operations):
             error = shadow._apply_one(
                 operation,
                 index=index,
-                allow_selection_batch=allow_selection_batch,
+                allow_resolution_transaction=allow_resolution_transaction,
             )
             if error is not None:
                 errors.append(error)
@@ -421,13 +421,13 @@ class OccurrenceResolutionStateV2:
         errors = self.validate_ops(normalized)
         if errors:
             return {"accepted": False, "errors": errors, "applied": []}
-        allow_selection_batch = not self.resolution_committed
+        allow_resolution_transaction = not self.resolution_committed
         applied: list[dict[str, Any]] = []
         for index, operation in enumerate(normalized):
             error = self._apply_one(
                 operation,
                 index=index,
-                allow_selection_batch=allow_selection_batch,
+                allow_resolution_transaction=allow_resolution_transaction,
             )
             assert error is None
             applied.append(_normalized_scoped_occurrence_op(operation))
@@ -528,7 +528,7 @@ class OccurrenceResolutionStateV2:
         operation: Mapping[str, Any],
         *,
         index: int,
-        allow_selection_batch: bool = False,
+        allow_resolution_transaction: bool = False,
     ) -> dict[str, Any] | None:
         if not isinstance(operation, Mapping):
             return {
@@ -559,10 +559,9 @@ class OccurrenceResolutionStateV2:
                 "set_id": set_id,
                 "active_set_id": self.active_set_id,
             }
-        if occurrence_set.resolution in {"selected", "no_match"} and not (
-            allow_selection_batch
-            and occurrence_set.resolution == "selected"
-            and op == "select"
+        if (
+            occurrence_set.resolution in {"selected", "no_match"}
+            and not allow_resolution_transaction
         ):
             return {
                 "code": "occurrence_resolution_already_committed",
