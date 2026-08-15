@@ -572,6 +572,18 @@ def test_a3_requires_selected_locator_binding_before_answer() -> None:
         pending,
         investigation_budget_remaining=1,
     ) == []
+    assert _actionable_locator_errors(
+        ReasonerDecision(action="answer", answer="final"),
+        pending,
+        investigation_budget_remaining=0,
+        force_finalize=True,
+    ) == []
+    with pytest.raises(RuntimeError, match="must enter finalization"):
+        _actionable_locator_errors(
+            ReasonerDecision(action="answer", answer="invalid"),
+            pending,
+            investigation_budget_remaining=0,
+        )
 
     inspected = _occurrence_locator_statuses(
         state,

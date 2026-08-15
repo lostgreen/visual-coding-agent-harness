@@ -10,7 +10,9 @@ from vcah.multiround import (
     InvestigationTask,
     ReasonerDecision,
     VirtualVideoMultiRoundDriver,
+    _append_contradictory_gate_state,
     _control_retry_feedback,
+    _record_occurrence_locator_outcome,
 )
 from vcah.runtime_metrics import agent_run_metrics
 from vcah.virtual_video import (
@@ -161,6 +163,87 @@ class SingleScopedOccurrenceInvestigator(ScopedOccurrenceInvestigator):
             }
         ],
     }
+
+
+class RotatingScopedOccurrenceInvestigator(ScopedOccurrenceInvestigator):
+    locator_attempt_ids = tuple(
+        stable_attempt_id(
+            source_video_ids=(source_video_id,),
+            frame_refs=(),
+            frame_times=(),
+            inspected_ranges=(),
+            sampling_fps=0.0,
+            modality="caption_search",
+        )
+        for source_video_id in ("video-a", "video-b")
+    )
+
+    def reset_run_state(self) -> None:
+        super().reset_run_state()
+        self.search_count = 0
+
+    def run_batch(
+        self,
+        tasks: Sequence[InvestigationTask],
+    ) -> tuple[InvestigationReport, ...]:
+        self.tasks.extend(tasks)
+        reports = []
+        for task in tasks:
+            if task.inspection_mode == "search_caption":
+                index = min(self.search_count, 1)
+                self.search_count += 1
+                occurrence_id = f"occ_{index + 1}"
+                source_video_id = ("video-a", "video-b")[index]
+                attempt = ObservationAttempt(
+                    attempt_id=self.locator_attempt_ids[index],
+                    task_id=task.query_id,
+                    sampling_config={
+                        "mode": "search_caption",
+                        "queries": ["target event"],
+                        "occurrence_set": {
+                            "status": "candidate",
+                            "occurrence_ambiguous": False,
+                            "candidates": [
+                                {
+                                    "occurrence_id": occurrence_id,
+                                    "time_range": [2.0 + 6.0 * index, 4.0 + 6.0 * index],
+                                    "source_video_ids": [source_video_id],
+                                    "segment_ids": ["seg_0001"],
+                                }
+                            ],
+                        },
+                        "hits": [],
+                    },
+                    modality="caption_search",
+                    evidence_role="candidate",
+                    parse_status="deterministic",
+                    source_video_ids=(source_video_id,),
+                )
+            else:
+                attempt = ObservationAttempt(
+                    attempt_id="",
+                    task_id=task.query_id,
+                    requested_range=task.time_range,
+                    inspected_ranges=(task.time_range,) if task.time_range else (),
+                    sampling_config={
+                        "mode": "window",
+                        "candidate_binding": {
+                            "locator_attempt_id": task.locator_attempt_id,
+                            "occurrence_id": task.occurrence_id,
+                        },
+                    },
+                    modality="visual",
+                    parse_status="parsed",
+                )
+            reports.append(
+                InvestigationReport(
+                    query_id=task.query_id,
+                    status="completed",
+                    attempts=(attempt,),
+                    cost={"consumes_budget": True},
+                )
+            )
+        return tuple(reports)
 
 
 class MetadataScriptedReasoner(ScriptedReasoner):
@@ -322,6 +405,77 @@ def test_workspace_retry_feedback_names_mechanical_repairs() -> None:
     assert "Omit add operations for IDs that already exist" in instruction
     assert "supporting_attempt_ids" in instruction
     assert "supporting claim derives from the dependency" in instruction
+
+
+def test_occurrence_retry_feedback_rejects_contradictory_gate_state() -> None:
+    feedback = _control_retry_feedback(
+        (
+            {"code": "occurrence_answer_required_after_resolution"},
+            {"code": "occurrence_locator_inspection_required"},
+        ),
+        revision=4,
+        previous_feedback={},
+    )
+    trace: list[dict[str, Any]] = []
+    _append_contradictory_gate_state(trace, feedback, round_id=5)
+
+    assert feedback["type"] == "contradictory_gate_state"
+    assert "Return action=answer" not in feedback["instruction"]
+    assert "Return action=investigate" not in feedback["instruction"]
+    assert trace == [
+        {
+            "type": "contradictory_gate_state",
+            "round": 5,
+            "must_answer_codes": [
+                "occurrence_answer_required_after_resolution"
+            ],
+            "must_not_answer_codes": [
+                "occurrence_locator_inspection_required"
+            ],
+        }
+    ]
+
+
+def test_occurrence_locator_terminal_outcomes_are_explicit_and_exclusive() -> None:
+    trace: list[dict[str, Any]] = []
+    outcomes: dict[tuple[str, str], str] = {}
+    expected = (
+        ("inspected", ""),
+        ("released_at_budget_exhaustion", "budget_exhausted_at_finalize"),
+        ("released_on_set_retirement", "set_retired"),
+        ("released_by_revision", "resolution_revision:no_match"),
+    )
+    for index, (outcome, reason) in enumerate(expected, start=1):
+        _record_occurrence_locator_outcome(
+            trace,
+            outcomes,
+            round_id=index,
+            locator={
+                "locator_attempt_id": f"set_{index}",
+                "occurrence_id": f"occ_{index}",
+            },
+            outcome=outcome,
+            reason=reason,
+            revision_op=("no_match" if outcome == "released_by_revision" else ""),
+        )
+
+    assert set(outcomes.values()) == {value[0] for value in expected}
+    assert [row["type"] for row in trace] == [
+        "occurrence_locator_inspected",
+        "occurrence_locator_released_unexecuted",
+        "occurrence_locator_released_unexecuted",
+        "occurrence_locator_released_unexecuted",
+    ]
+    _record_occurrence_locator_outcome(
+        trace,
+        outcomes,
+        round_id=6,
+        locator={"locator_attempt_id": "set_1", "occurrence_id": "occ_1"},
+        outcome="released_by_revision",
+        reason="resolution_revision:reopen",
+        revision_op="reopen",
+    )
+    assert trace[-1]["type"] == "occurrence_locator_accounting_conflict"
 
 
 def test_a2_recovers_from_workspace_exhaustion_before_selection(
@@ -715,6 +869,116 @@ def test_a3_rejects_answer_until_selected_locator_is_inspected(
     assert result.answer_present is True
 
 
+def test_a3_records_locator_release_by_resolution_revision(
+    tmp_path: Path,
+) -> None:
+    set_id = ScopedOccurrenceInvestigator.locator_attempt_id
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {"op": "select", "set_id": set_id, "occurrence_id": "occ_2"},
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=({"op": "defer", "set_id": set_id},),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=({"op": "no_match", "set_id": set_id},),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=ScopedOccurrenceInvestigator(),
+        max_rounds=4,
+        max_investigations=4,
+        control_retry_budget=0,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a3",
+        bootstrap_tasks=(
+            InvestigationTask(
+                query_id="locate",
+                goal="locate target event",
+                inspection_mode="search_caption",
+                caption_queries=("target event",),
+            ),
+        ),
+    ).run(_workspace(tmp_path))
+
+    assert any(
+        row.get("type") == "occurrence_locator_released_unexecuted"
+        and row.get("outcome") == "released_by_revision"
+        and row.get("revision_op") == "defer"
+        for row in result.trace
+    )
+    assert result.answer_present is True
+
+
+def test_a3_records_locator_release_when_new_set_retires_selected_set(
+    tmp_path: Path,
+) -> None:
+    first_set, second_set = RotatingScopedOccurrenceInvestigator.locator_attempt_ids
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                occurrence_ops=(
+                    {"op": "select", "set_id": first_set, "occurrence_id": "occ_1"},
+                ),
+                tasks=(
+                    InvestigationTask(
+                        query_id="search_more",
+                        goal="search for another occurrence set",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=({"op": "no_match", "set_id": second_set},),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=RotatingScopedOccurrenceInvestigator(),
+        max_rounds=3,
+        max_investigations=4,
+        control_retry_budget=0,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a3",
+        bootstrap_tasks=(
+            InvestigationTask(
+                query_id="locate",
+                goal="locate target event",
+                inspection_mode="search_caption",
+                caption_queries=("target event",),
+            ),
+        ),
+    ).run(_workspace(tmp_path))
+
+    assert any(
+        row.get("type") == "occurrence_locator_released_unexecuted"
+        and row.get("outcome") == "released_on_set_retirement"
+        and row.get("locator_attempt_id") == first_set
+        for row in result.trace
+    )
+    assert result.answer_present is True
+
+
 def test_force_finalize_is_arm_symmetric(tmp_path: Path) -> None:
     calls_by_arm: dict[str, list[dict[str, Any]]] = {}
     metrics_by_arm: dict[str, dict[str, float | int | None]] = {}
@@ -780,6 +1044,22 @@ def test_force_finalize_is_arm_symmetric(tmp_path: Path) -> None:
         and row.get("method_arm") == "a3"
         and row.get("pending_locator_count") == 1
         for row in traces_by_arm["a3"]
+    )
+    assert any(
+        row.get("type") == "occurrence_locator_released_unexecuted"
+        and row.get("outcome") == "released_at_budget_exhaustion"
+        and row.get("reason") == "budget_exhausted_at_finalize"
+        for row in traces_by_arm["a3"]
+    )
+    assert not any(
+        row.get("type") == "decision_schema_error"
+        and row.get("code")
+        in {
+            "occurrence_locator_inspection_required",
+            "occurrence_answer_required_after_resolution",
+        }
+        for row in traces_by_arm["a3"]
+        if int(row.get("round", 0) or 0) >= 2
     )
 
 

@@ -30,6 +30,7 @@ def audit_roots(
     per_arm: dict[str, dict[str, Any]] = {}
     case_sets: dict[str, set[str]] = {}
     replay_cases: dict[str, dict[str, dict[str, Any]]] = {}
+    resolution_signatures: dict[str, dict[str, tuple[Any, ...]]] = {}
     for declared_arm, root in bindings.items():
         cases = []
         for prediction_path in sorted(Path(root).glob("cases/*/prediction.json")):
@@ -209,7 +210,7 @@ def audit_roots(
                 _scoped_operation_valid(operation, scoped_sets)
                 for _, operation in accepted_ops
             )
-            final_selected_pairs = _final_selected_pairs(state)
+            selected_locator_pairs = _selected_locator_pairs(trace)
             task_pairs_before_answer = {
                 (
                     str(task.get("locator_attempt_id", "") or ""),
@@ -223,9 +224,14 @@ def audit_roots(
                 and task.get("occurrence_id")
             }
             executed_binding_pairs = _executed_binding_pairs(observations)
+            locator_accounting = _locator_accounting(
+                selected_locator_pairs,
+                executed_binding_pairs,
+                trace,
+            )
             selected_locators_inspected = bool(
-                final_selected_pairs.issubset(task_pairs_before_answer)
-                and final_selected_pairs.issubset(executed_binding_pairs)
+                selected_locator_pairs.issubset(task_pairs_before_answer)
+                and selected_locator_pairs.issubset(executed_binding_pairs)
             )
             rejected_occurrence_op_attempts = sum(
                 row.get("occurrence_ops_accepted") is False for row in decisions
@@ -336,8 +342,31 @@ def audit_roots(
                         len(value["selected_occurrence_ids"]) > 1
                         for value in scoped_sets.values()
                     ),
-                    "selected_locator_count": len(final_selected_pairs),
+                    "selected_locator_count": len(selected_locator_pairs),
+                    "selected_locator_inspected_count": len(
+                        selected_locator_pairs & executed_binding_pairs
+                    ),
                     "selected_locators_inspected": selected_locators_inspected,
+                    "selected_locators_accounted": locator_accounting[
+                        "accounted"
+                    ],
+                    "selected_locator_silent_drop_count": locator_accounting[
+                        "silent_drop_count"
+                    ],
+                    "selected_locator_accounting_conflict_count": (
+                        locator_accounting["conflict_count"]
+                    ),
+                    "selected_locator_release_counts": locator_accounting[
+                        "release_counts"
+                    ],
+                    "contradictory_gate_state_count": sum(
+                        row.get("type") == "contradictory_gate_state"
+                        for row in trace
+                    ),
+                    "resolution_signature": _resolution_signature(
+                        state,
+                        accepted_ops,
+                    ),
                     "ops_accepted": all(
                         row.get("occurrence_ops_accepted") is not False
                         for row in decisions
@@ -391,6 +420,9 @@ def audit_roots(
                 ],
             }
             for row in cases
+        }
+        resolution_signatures[declared_arm] = {
+            row["case_id"]: row["resolution_signature"] for row in cases
         }
         per_arm[declared_arm] = {
             "n": len(cases),
@@ -469,7 +501,12 @@ def audit_roots(
             ),
             "answer_missing_after_selection_case_count": sum(
                 row["selection_required"]
-                and not row["answer_after_selection"]
+                and not row["resolution_before_answer"]
+                for row in cases
+            ),
+            "answer_missing_after_resolution_case_count": sum(
+                row["selection_required"]
+                and not row["resolution_before_answer"]
                 for row in cases
             ),
             "resolution_missing_before_answer_case_count": sum(
@@ -494,10 +531,39 @@ def audit_roots(
             "selected_locator_count": sum(
                 row["selected_locator_count"] for row in cases
             ),
+            "selected_locator_inspected_count": sum(
+                row["selected_locator_inspected_count"] for row in cases
+            ),
             "selected_locator_inspection_failure_case_count": sum(
                 row["selected_locator_count"] > 0
                 and not row["selected_locators_inspected"]
                 for row in cases
+            ),
+            "selected_locator_accounting_failure_case_count": sum(
+                row["selected_locator_count"] > 0
+                and not row["selected_locators_accounted"]
+                for row in cases
+            ),
+            "selected_locator_silent_drop_count": sum(
+                row["selected_locator_silent_drop_count"] for row in cases
+            ),
+            "selected_locator_accounting_conflict_count": sum(
+                row["selected_locator_accounting_conflict_count"]
+                for row in cases
+            ),
+            "selected_locator_release_counts": {
+                outcome: sum(
+                    row["selected_locator_release_counts"].get(outcome, 0)
+                    for row in cases
+                )
+                for outcome in (
+                    "released_at_budget_exhaustion",
+                    "released_on_set_retirement",
+                    "released_by_revision",
+                )
+            },
+            "contradictory_gate_state_count": sum(
+                row["contradictory_gate_state_count"] for row in cases
             ),
             "all_occurrence_ops_accepted": all(
                 row["ops_accepted"] for row in cases
@@ -564,6 +630,9 @@ def audit_roots(
     common = set.intersection(*case_sets.values()) if case_sets else set()
     treatment_arms = tuple(arm for arm in bindings if arm != "a0")
     scoped_arms = tuple(arm for arm in bindings if arm in SCOPED_ARMS)
+    post_selection_balance = _post_selection_only_divergence(
+        resolution_signatures
+    )
     checks = {
         "expected_arms_present": bool(bindings)
         and set(bindings).issubset(SUPPORTED_ARMS),
@@ -643,15 +712,29 @@ def audit_roots(
             per_arm[arm]["resolution_missing_before_answer_case_count"] == 0
             for arm in scoped_arms
         ),
-        "a3_selected_locators_inspected": (
+        "a3_selected_locators_accounted": (
             "a3" not in per_arm
             or (
                 per_arm["a3"]["selected_locator_count"] > 0
                 and per_arm["a3"][
-                    "selected_locator_inspection_failure_case_count"
+                    "selected_locator_accounting_failure_case_count"
+                ]
+                == 0
+                and per_arm["a3"]["selected_locator_silent_drop_count"] == 0
+                and per_arm["a3"][
+                    "selected_locator_accounting_conflict_count"
                 ]
                 == 0
             )
+        ),
+        "post_selection_only_divergence": (
+            post_selection_balance["passed"]
+            if post_selection_balance["applicable"]
+            else True
+        ),
+        "no_contradictory_gate_states": all(
+            row["contradictory_gate_state_count"] == 0
+            for row in per_arm.values()
         ),
         "no_premature_occurrence_commits": all(
             row["premature_commit_count"] == 0 for row in per_arm.values()
@@ -675,8 +758,9 @@ def audit_roots(
         == 0,
     }
     return {
-        "schema_version": "MMLifelongOccurrenceCanaryAuditV4",
+        "schema_version": "MMLifelongOccurrenceCanaryAuditV5",
         "per_arm": per_arm,
+        "post_selection_only_divergence": post_selection_balance,
         "checks": checks,
         "structural_gate_passed": all(checks.values()),
     }
@@ -737,13 +821,117 @@ def _scoped_operation_valid(
     )
 
 
-def _final_selected_pairs(state: Mapping[str, Any]) -> set[tuple[str, str]]:
-    active_set_id = str(state.get("active_set_id", "") or "")
+def _selected_locator_pairs(
+    trace: tuple[Mapping[str, Any], ...],
+) -> set[tuple[str, str]]:
     return {
-        (set_id, occurrence_id)
-        for set_id, value in _scoped_state_sets(state).items()
-        if set_id == active_set_id and value.get("lifecycle") == "active"
-        for occurrence_id in value["selected_occurrence_ids"]
+        (_operation_set_id(operation), str(operation.get("occurrence_id", "") or ""))
+        for row in trace
+        if row.get("type") == "reasoner_decision"
+        and row.get("occurrence_ops_accepted") is not False
+        for operation in tuple(row.get("occurrence_ops", ()) or ())
+        if isinstance(operation, Mapping)
+        and _operation_name(operation) == "select"
+        and _operation_set_id(operation)
+        and str(operation.get("occurrence_id", "") or "")
+    }
+
+
+def _locator_accounting(
+    selected_pairs: set[tuple[str, str]],
+    executed_pairs: set[tuple[str, str]],
+    trace: tuple[Mapping[str, Any], ...],
+) -> dict[str, Any]:
+    release_outcomes: dict[tuple[str, str], set[str]] = {}
+    explicit_conflicts: set[tuple[str, str]] = set()
+    for row in trace:
+        event_type = str(row.get("type", "") or "")
+        pair = (
+            str(row.get("locator_attempt_id", "") or ""),
+            str(row.get("occurrence_id", "") or ""),
+        )
+        if not all(pair):
+            continue
+        if event_type == "occurrence_locator_released_unexecuted":
+            outcome = str(row.get("outcome", "") or "")
+            if outcome:
+                release_outcomes.setdefault(pair, set()).add(outcome)
+        elif event_type == "occurrence_locator_accounting_conflict":
+            explicit_conflicts.add(pair)
+
+    outcomes_by_pair: dict[tuple[str, str], set[str]] = {}
+    for pair in selected_pairs:
+        outcomes = set(release_outcomes.get(pair, set()))
+        if pair in executed_pairs:
+            outcomes.add("inspected")
+        outcomes_by_pair[pair] = outcomes
+    silent_pairs = {
+        pair for pair, outcomes in outcomes_by_pair.items() if not outcomes
+    }
+    conflict_pairs = {
+        pair for pair, outcomes in outcomes_by_pair.items() if len(outcomes) > 1
+    } | (explicit_conflicts & selected_pairs)
+    release_counts = {
+        outcome: sum(
+            outcomes == {outcome} for outcomes in outcomes_by_pair.values()
+        )
+        for outcome in (
+            "released_at_budget_exhaustion",
+            "released_on_set_retirement",
+            "released_by_revision",
+        )
+    }
+    return {
+        "accounted": not silent_pairs and not conflict_pairs,
+        "silent_drop_count": len(silent_pairs),
+        "conflict_count": len(conflict_pairs),
+        "release_counts": release_counts,
+    }
+
+
+def _resolution_signature(
+    state: Mapping[str, Any],
+    accepted_ops: tuple[tuple[int, dict[str, Any]], ...],
+) -> tuple[Any, ...]:
+    resolution_ops = tuple(
+        operation
+        for _, operation in accepted_ops
+        if _operation_name(operation) in {"select", "no_match"}
+    )
+    active_set_id = str(state.get("active_set_id", "") or "")
+    resolved_set_id = (
+        _operation_set_id(resolution_ops[-1]) if resolution_ops else active_set_id
+    )
+    scoped_sets = _scoped_state_sets(state)
+    resolved = scoped_sets.get(resolved_set_id, {})
+    resolution = str(resolved.get("resolution", "") or "")
+    if not resolution and resolved_set_id == active_set_id:
+        resolution = str(state.get("active_resolution", "") or "")
+    selected = tuple(resolved.get("selected_occurrence_ids", ()) or ())
+    return (resolved_set_id, resolution, selected)
+
+
+def _post_selection_only_divergence(
+    signatures: Mapping[str, Mapping[str, tuple[Any, ...]]],
+) -> dict[str, Any]:
+    if "a2-clean" not in signatures or "a3" not in signatures:
+        return {
+            "applicable": False,
+            "passed": None,
+            "paired_case_count": 0,
+            "mismatch_case_ids": [],
+        }
+    clean = signatures["a2-clean"]
+    actionable = signatures["a3"]
+    paired = sorted(set(clean) & set(actionable))
+    mismatches = [
+        case_id for case_id in paired if clean[case_id] != actionable[case_id]
+    ]
+    return {
+        "applicable": True,
+        "passed": set(clean) == set(actionable) and not mismatches,
+        "paired_case_count": len(paired),
+        "mismatch_case_ids": mismatches,
     }
 
 

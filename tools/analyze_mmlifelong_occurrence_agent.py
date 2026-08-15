@@ -111,14 +111,27 @@ def collect_rows(
             locator_scope_single_set_passed = _locator_scope_single_set_passed(
                 state
             )
-            final_selected_pairs = _final_selected_pairs(state)
+            selected_locator_pairs = _selected_locator_pairs(trace)
             executed_binding_pairs, bound_visual_ranges = _bound_visual_evidence(
                 observations
             )
+            locator_accounting = _locator_accounting(
+                selected_locator_pairs,
+                executed_binding_pairs,
+                trace,
+            )
             selected_locator_usage_rate = (
-                len(final_selected_pairs & executed_binding_pairs)
-                / len(final_selected_pairs)
-                if final_selected_pairs
+                len(selected_locator_pairs & executed_binding_pairs)
+                / len(selected_locator_pairs)
+                if selected_locator_pairs
+                else None
+            )
+            released_unexecuted_count = sum(
+                locator_accounting["release_counts"].values()
+            )
+            released_unexecuted_rate = (
+                released_unexecuted_count / len(selected_locator_pairs)
+                if selected_locator_pairs
                 else None
             )
             answer_eval = evaluation.get("answer", {})
@@ -209,6 +222,48 @@ def collect_rows(
                         trace, treatment_cutoff_round
                     ),
                     "selected_locator_usage_rate": selected_locator_usage_rate,
+                    "selected_locator_count": len(selected_locator_pairs),
+                    "selected_locator_inspected_count": len(
+                        selected_locator_pairs & executed_binding_pairs
+                    ),
+                    "selected_locators_accounted": locator_accounting[
+                        "accounted"
+                    ],
+                    "selected_locator_silent_drop_count": locator_accounting[
+                        "silent_drop_count"
+                    ],
+                    "selected_locator_accounting_conflict_count": (
+                        locator_accounting["conflict_count"]
+                    ),
+                    "released_unexecuted_rate": released_unexecuted_rate,
+                    "released_at_budget_exhaustion_rate": (
+                        locator_accounting["release_counts"][
+                            "released_at_budget_exhaustion"
+                        ]
+                        / len(selected_locator_pairs)
+                        if selected_locator_pairs
+                        else None
+                    ),
+                    "released_on_set_retirement_rate": (
+                        locator_accounting["release_counts"][
+                            "released_on_set_retirement"
+                        ]
+                        / len(selected_locator_pairs)
+                        if selected_locator_pairs
+                        else None
+                    ),
+                    "released_by_revision_rate": (
+                        locator_accounting["release_counts"][
+                            "released_by_revision"
+                        ]
+                        / len(selected_locator_pairs)
+                        if selected_locator_pairs
+                        else None
+                    ),
+                    "contradictory_gate_state_count": sum(
+                        row.get("type") == "contradictory_gate_state"
+                        for row in trace
+                    ),
                     "locator_scope_single_set_passed": (
                         locator_scope_single_set_passed
                     ),
@@ -346,6 +401,7 @@ def build_report(
     text_parity = _text_parity(by_arm)
     replay_parity = _frozen_replay_parity(by_arm)
     budget_symmetry = _budget_symmetry(by_arm)
+    post_selection_balance = _post_selection_only_divergence(by_arm)
     structural_checks = {
         "arms_present": bool(arms),
         "case_sets_aligned": bool(case_sets)
@@ -371,9 +427,36 @@ def build_report(
             for arm in ("a2-clean", "a3")
             for row in by_arm.get(arm, {}).values()
         ),
-        "a3_selected_locators_executed": all(
-            row.get("selected_locator_usage_rate") in {None, 1.0}
-            for row in by_arm.get("a3", {}).values()
+        "a3_selected_locators_accounted": (
+            "a3" not in by_arm
+            or all(
+                row.get(
+                    "selected_locators_accounted",
+                    row.get("selected_locator_usage_rate") in {None, 1.0},
+                )
+                is True
+                and int(
+                    row.get("selected_locator_silent_drop_count", 0) or 0
+                )
+                == 0
+                and int(
+                    row.get(
+                        "selected_locator_accounting_conflict_count", 0
+                    )
+                    or 0
+                )
+                == 0
+                for row in by_arm["a3"].values()
+            )
+        ),
+        "post_selection_only_divergence": (
+            post_selection_balance["passed"]
+            if post_selection_balance["applicable"]
+            else True
+        ),
+        "no_contradictory_gate_states": all(
+            int(row.get("contradictory_gate_state_count", 0) or 0) == 0
+            for row in rows
         ),
         "frozen_occurrence_replay_parity": replay_parity.get("passed"),
         "frozen_occurrence_replay_prime": replay_parity.get("prime_passed"),
@@ -410,7 +493,9 @@ def build_report(
             "false_commit_rate": "final resolution is selected, conditioned on gold absent from the resolved set",
             "no_match_accuracy": "final resolution is no_match, conditioned on gold absent from the resolved set",
             "occurrence_handle_usage_rate": "post-eligibility visual-window tasks with occurrence_id divided by all post-eligibility visual-window tasks",
-            "selected_locator_usage_rate": "final selected (locator_attempt_id, occurrence_id) pairs with executed candidate-bound visual observations",
+            "selected_locator_usage_rate": "accepted selected (locator_attempt_id, occurrence_id) pairs with executed candidate-bound visual observations",
+            "selected_locator_accounting": "every selected locator has exactly one terminal outcome: inspected or one explicit release category",
+            "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
             "budget_symmetry_passed": "maximum arm mean semantic rounds minus minimum arm mean semantic rounds is at most 0.25",
         },
@@ -422,6 +507,7 @@ def build_report(
         "text_budget_parity": text_parity,
         "frozen_occurrence_replay": replay_parity,
         "budget_symmetry": budget_symmetry,
+        "post_selection_only_divergence": post_selection_balance,
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
             value is not False for value in structural_checks.values()
@@ -930,6 +1016,18 @@ def _aggregate_arm_result(
         "selected_locator_usage_rate": _optional_mean(
             row.get("selected_locator_usage_rate") for row in rows
         ),
+        "released_unexecuted_rate": _optional_mean(
+            row.get("released_unexecuted_rate") for row in rows
+        ),
+        "released_at_budget_exhaustion_rate": _optional_mean(
+            row.get("released_at_budget_exhaustion_rate") for row in rows
+        ),
+        "released_on_set_retirement_rate": _optional_mean(
+            row.get("released_on_set_retirement_rate") for row in rows
+        ),
+        "released_by_revision_rate": _optional_mean(
+            row.get("released_by_revision_rate") for row in rows
+        ),
         "locator_scope_single_set_rate": _mean_bool(
             row.get("locator_scope_single_set_passed") for row in rows
         ),
@@ -991,6 +1089,40 @@ def _aggregate_arm_result(
             row.get("occurrence_replay_post_fixture_reuse_count")
             for row in rows
         ),
+    }
+
+
+def _post_selection_only_divergence(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    if "a2-clean" not in by_arm or "a3" not in by_arm:
+        return {
+            "applicable": False,
+            "passed": None,
+            "paired_case_count": 0,
+            "mismatch_case_ids": [],
+        }
+    clean = by_arm["a2-clean"]
+    actionable = by_arm["a3"]
+    paired = sorted(set(clean) & set(actionable))
+
+    def signature(row: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (
+            str(row.get("resolved_set_id", "") or ""),
+            str(row.get("final_resolution", "") or ""),
+            tuple(row.get("selected_occurrence_ids", ()) or ()),
+        )
+
+    mismatches = [
+        case_id
+        for case_id in paired
+        if signature(clean[case_id]) != signature(actionable[case_id])
+    ]
+    return {
+        "applicable": True,
+        "passed": set(clean) == set(actionable) and not mismatches,
+        "paired_case_count": len(paired),
+        "mismatch_case_ids": mismatches,
     }
 
 
@@ -1590,16 +1722,85 @@ def _accepted_occurrence_op(
     )
 
 
-def _final_selected_pairs(state: Mapping[str, Any]) -> set[tuple[str, str]]:
-    active_set_id = str(state.get("active_set_id", "") or "")
+def _selected_locator_pairs(
+    trace: Sequence[Mapping[str, Any]],
+) -> set[tuple[str, str]]:
     return {
-        (str(raw_set.get("set_id", "") or ""), str(occurrence_id))
-        for raw_set in tuple(state.get("sets", ()) or ())
-        if isinstance(raw_set, Mapping)
-        and str(raw_set.get("set_id", "") or "") == active_set_id
-        and str(raw_set.get("lifecycle", "") or "") == "active"
-        for occurrence_id in tuple(raw_set.get("selected_occurrence_ids", ()) or ())
-        if str(occurrence_id)
+        (
+            str(
+                operation.get(
+                    "set_id", operation.get("locator_attempt_id", "")
+                )
+                or ""
+            ),
+            str(operation.get("occurrence_id", "") or ""),
+        )
+        for row in trace
+        if row.get("type") == "reasoner_decision"
+        and row.get("occurrence_ops_accepted") is not False
+        for operation in tuple(row.get("occurrence_ops", ()) or ())
+        if isinstance(operation, Mapping)
+        and str(
+            operation.get("op", operation.get("type", "")) or ""
+        ).casefold()
+        == "select"
+        and str(
+            operation.get("set_id", operation.get("locator_attempt_id", ""))
+            or ""
+        )
+        and str(operation.get("occurrence_id", "") or "")
+    }
+
+
+def _locator_accounting(
+    selected_pairs: set[tuple[str, str]],
+    executed_pairs: set[tuple[str, str]],
+    trace: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    release_outcomes: dict[tuple[str, str], set[str]] = {}
+    explicit_conflicts: set[tuple[str, str]] = set()
+    for row in trace:
+        event_type = str(row.get("type", "") or "")
+        pair = (
+            str(row.get("locator_attempt_id", "") or ""),
+            str(row.get("occurrence_id", "") or ""),
+        )
+        if not all(pair):
+            continue
+        if event_type == "occurrence_locator_released_unexecuted":
+            outcome = str(row.get("outcome", "") or "")
+            if outcome:
+                release_outcomes.setdefault(pair, set()).add(outcome)
+        elif event_type == "occurrence_locator_accounting_conflict":
+            explicit_conflicts.add(pair)
+
+    outcomes_by_pair: dict[tuple[str, str], set[str]] = {}
+    for pair in selected_pairs:
+        outcomes = set(release_outcomes.get(pair, set()))
+        if pair in executed_pairs:
+            outcomes.add("inspected")
+        outcomes_by_pair[pair] = outcomes
+    silent_pairs = {
+        pair for pair, outcomes in outcomes_by_pair.items() if not outcomes
+    }
+    conflict_pairs = {
+        pair for pair, outcomes in outcomes_by_pair.items() if len(outcomes) > 1
+    } | (explicit_conflicts & selected_pairs)
+    release_counts = {
+        outcome: sum(
+            outcomes == {outcome} for outcomes in outcomes_by_pair.values()
+        )
+        for outcome in (
+            "released_at_budget_exhaustion",
+            "released_on_set_retirement",
+            "released_by_revision",
+        )
+    }
+    return {
+        "accounted": not silent_pairs and not conflict_pairs,
+        "silent_drop_count": len(silent_pairs),
+        "conflict_count": len(conflict_pairs),
+        "release_counts": release_counts,
     }
 
 
@@ -1958,8 +2159,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"Primary analysis: frozen_complete (n={report['frozen_complete']['n']}); all_cases sensitivity n={report['all_cases']['n']}.",
         f"Trajectory provenance: `{report['trajectory_provenance']}`.",
         "",
-        "| Arm | N | Mean | Raw exact | Verified | Grounded ref300 | Grounded visual | Recall trajectory | Recall resolved | OSA any | OSA strict | No-match | False commit | Locator use | Bound visual recall | Rounds |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Arm | N | Mean | Raw exact | Verified | Grounded ref300 | Grounded visual | Recall trajectory | Recall resolved | OSA any | OSA strict | No-match | False commit | Locator use | Released | Bound visual recall | Rounds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm, metrics in report["arms"].items():
         lines.append(
@@ -1980,6 +2181,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                     _fmt(metrics["no_match_accuracy"]),
                     _fmt(metrics["false_commit_rate"]),
                     _fmt(metrics["selected_locator_usage_rate"]),
+                    _fmt(metrics["released_unexecuted_rate"]),
                     _fmt(metrics["bound_visual_clue_recall"]),
                     _fmt(metrics["mean_semantic_rounds_used"]),
                 ]

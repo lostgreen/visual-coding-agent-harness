@@ -768,7 +768,37 @@ def test_clean_and_actionable_arms_report_full_mechanism_chain() -> None:
     assert report["structural_gate_passed"] is True
 
 
-def test_scoped_canary_audit_requires_actionable_locator_execution(
+def test_post_selection_only_divergence_requires_paired_resolution_identity() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    clean = _row("a2-clean", "c1", score=0.0, signature=signature)
+    actionable = _row("a3", "c1", score=0.0, signature=signature)
+    for row in (clean, actionable):
+        row.update(
+            {
+                "resolved_set_id": "set_1",
+                "final_resolution": "selected",
+                "selected_locators_accounted": True,
+                "selected_locator_silent_drop_count": 0,
+                "selected_locator_accounting_conflict_count": 0,
+            }
+        )
+    clean["selected_occurrence_ids"] = ["occ_1"]
+    actionable["selected_occurrence_ids"] = ["occ_2"]
+
+    report = ANALYSIS.build_report(
+        (clean, actionable),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=3,
+    )
+
+    assert report["structural_checks"]["post_selection_only_divergence"] is False
+    assert report["post_selection_only_divergence"]["mismatch_case_ids"] == [
+        "c1"
+    ]
+
+
+def test_scoped_canary_audit_requires_actionable_locator_accounting(
     tmp_path: Path,
 ) -> None:
     bindings = {}
@@ -841,33 +871,13 @@ def test_scoped_canary_audit_requires_actionable_locator_execution(
             if arm == "a3":
                 trace.append(
                     {
-                        "type": "reasoner_decision",
+                        "type": "occurrence_locator_released_unexecuted",
                         "round": 3,
-                        "action": "investigate",
-                        "tasks": [
-                            {
-                                "inspection_mode": "window",
-                                "locator_attempt_id": "locator_1",
-                                "occurrence_id": "occ_1",
-                            }
-                        ],
-                        "occurrence_ops": [],
-                        "occurrence_ops_accepted": True,
+                        "locator_attempt_id": "locator_1",
+                        "occurrence_id": "occ_1",
+                        "outcome": "released_at_budget_exhaustion",
+                        "reason": "budget_exhausted_at_finalize",
                     }
-                )
-                (case / "observation_log.jsonl").write_text(
-                    json.dumps(
-                        {
-                            "sampling_config": {
-                                "candidate_binding": {
-                                    "locator_attempt_id": "locator_1",
-                                    "occurrence_id": "occ_1",
-                                }
-                            }
-                        }
-                    )
-                    + "\n",
-                    encoding="utf-8",
                 )
             trace.append(
                 {
@@ -928,8 +938,112 @@ def test_scoped_canary_audit_requires_actionable_locator_execution(
     assert report["structural_gate_passed"] is True
     assert report["checks"]["no_pre_activation_state_exposure"] is True
     assert report["checks"]["scoped_set_integrity"] is True
-    assert report["checks"]["a3_selected_locators_inspected"] is True
+    assert report["checks"]["a3_selected_locators_accounted"] is True
     assert report["per_arm"]["a3"]["selected_locator_count"] == 1
+    assert report["per_arm"]["a3"][
+        "selected_locator_inspection_failure_case_count"
+    ] == 1
+    assert report["per_arm"]["a3"]["selected_locator_release_counts"] == {
+        "released_at_budget_exhaustion": 1,
+        "released_on_set_retirement": 0,
+        "released_by_revision": 0,
+    }
+
+
+def test_scoped_audit_does_not_count_no_match_as_missing_answer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "a2-clean"
+    case = root / "cases" / "case-1"
+    case.mkdir(parents=True)
+    (case / "prediction.json").write_text(
+        json.dumps({"case_id": "case-1"}), encoding="utf-8"
+    )
+    (case / "run_config.json").write_text(
+        json.dumps(
+            {
+                "occurrence_method_arm": "a2-clean",
+                "models": {
+                    "reasoner": "pa/gmn-2.5-pr",
+                    "investigator": "pa/gmn-2.5-pr",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    trace = [
+        {
+            "type": "occurrence_treatment_eligible",
+            "round": 1,
+            "visible_occurrence_count": 1,
+        },
+        {"type": "occurrence_treatment_exposed", "round": 1},
+        {
+            "type": "occurrence_resolution_activated",
+            "round": 1,
+            "active_set_id": "set_1",
+            "candidate_count": 1,
+            "arbitration_required": False,
+        },
+        {
+            "type": "reasoner_decision",
+            "round": 1,
+            "action": "update_workspace",
+            "occurrence_ops": [{"op": "no_match", "set_id": "set_1"}],
+            "occurrence_ops_accepted": True,
+            "occurrence_resolution_state_exposed": True,
+        },
+        {
+            "type": "reasoner_decision",
+            "round": 2,
+            "action": "answer",
+            "occurrence_ops": [],
+            "occurrence_ops_accepted": True,
+        },
+    ]
+    (case / "runtime_summary.json").write_text(
+        json.dumps(
+            {
+                "no_oracle_runtime_gate": {
+                    "no_oracle_runtime_gate_passed": True,
+                    "text_budget_parity_passed": True,
+                },
+                "trace": trace,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (case / "occurrence_resolution_state.json").write_text(
+        json.dumps(
+            {
+                "active_resolution": "no_match",
+                "active_set_id": "set_1",
+                "retired_set_ids": [],
+                "active_locators": [],
+                "retired_locators": [],
+                "sets": [
+                    {
+                        "set_id": "set_1",
+                        "resolution": "no_match",
+                        "lifecycle": "active",
+                        "selected_occurrence_ids": [],
+                        "candidates": [{"occurrence_id": "occ_1"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = AUDIT.audit_roots({"a2-clean": root}, expected_cases=1)
+
+    assert report["per_arm"]["a2-clean"][
+        "answer_missing_after_selection_case_count"
+    ] == 0
+    assert report["per_arm"]["a2-clean"][
+        "answer_missing_after_resolution_case_count"
+    ] == 0
+    assert report["checks"]["scoped_resolution_complete"] is True
 
 
 def test_frozen_replay_accepts_valid_consumed_prefixes() -> None:

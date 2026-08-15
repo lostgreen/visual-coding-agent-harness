@@ -52,6 +52,23 @@ _INSPECTION_MODES = {"window", "search_asr", "search_caption", "arbitrate_observ
 _TIME_BOUNDARY_TOLERANCE_SEC = 1.0
 _OCCURRENCE_SELECTION_FINAL_CALL_BUDGET = 3
 _OCCURRENCE_ANSWER_FINAL_CALL_BUDGET = 3
+_MUST_ANSWER_OCCURRENCE_CODES = frozenset(
+    {
+        "occurrence_answer_required_after_selection",
+        "occurrence_answer_required_after_resolution",
+    }
+)
+_MUST_NOT_ANSWER_OCCURRENCE_CODES = frozenset(
+    {
+        "occurrence_selection_required",
+        "occurrence_resolution_required",
+        "occurrence_search_required",
+        "occurrence_no_match_required_at_finalization",
+        "occurrence_locator_inspection_required",
+        "occurrence_locator_binding_required",
+        "occurrence_locator_unbound_window_forbidden",
+    }
+)
 RUN_ARTIFACT_NAMES = (
     "evidence.jsonl",
     "observation_log.jsonl",
@@ -428,6 +445,7 @@ class VirtualVideoMultiRoundDriver:
         occurrence_recovery_pending = False
         occurrence_recovery_rounds_granted = 0
         locator_budget_exhaustion_recorded = False
+        locator_terminal_outcomes: dict[tuple[str, str], str] = {}
         protocol_exhausted = False
         surfaced_observation_ids: set[str] = set()
         closure_repair_pending = False
@@ -663,7 +681,49 @@ class VirtualVideoMultiRoundDriver:
                 occurrence_state.save(occurrence_state_path)
                 status["occurrence_resolution_state"] = occurrence_state.to_dict()
             elif isinstance(occurrence_state, OccurrenceResolutionStateV2):
+                previous_locator_rows = _occurrence_locator_statuses(
+                    occurrence_state,
+                    observation_log.rows,
+                )
+                _record_inspected_occurrence_locators(
+                    trace,
+                    locator_terminal_outcomes,
+                    round_id=round_id,
+                    locator_rows=previous_locator_rows,
+                )
                 occurrence_state.sync_sets(_scoped_occurrence_sets(status))
+                current_locator_pairs = {
+                    _occurrence_locator_pair(locator)
+                    for locator in occurrence_state.active_locators()
+                }
+                for locator in previous_locator_rows:
+                    pair = _occurrence_locator_pair(locator)
+                    if pair in current_locator_pairs or pair in locator_terminal_outcomes:
+                        continue
+                    previous_set = occurrence_state.sets.get(
+                        str(locator.get("set_id", "") or "")
+                    )
+                    retired = bool(
+                        previous_set is not None
+                        and previous_set.lifecycle == "retired"
+                    )
+                    _record_occurrence_locator_outcome(
+                        trace,
+                        locator_terminal_outcomes,
+                        round_id=round_id,
+                        locator=locator,
+                        outcome=(
+                            "released_on_set_retirement"
+                            if retired
+                            else "released_by_revision"
+                        ),
+                        reason=(
+                            "set_retired"
+                            if retired
+                            else "candidate_set_revision"
+                        ),
+                        revision_op=("" if retired else "sync_visible_set"),
+                    )
                 if occurrence_state.activated:
                     if not resolution_activated_recorded:
                         trace.append(
@@ -698,16 +758,49 @@ class VirtualVideoMultiRoundDriver:
                         arbitration_activated_recorded = True
                     occurrence_state.save(occurrence_state_path)
                     status["occurrence_resolution_state"] = occurrence_state.to_dict()
+                    locator_statuses = _occurrence_locator_statuses(
+                        occurrence_state,
+                        observation_log.rows,
+                    )
+                    _record_inspected_occurrence_locators(
+                        trace,
+                        locator_terminal_outcomes,
+                        round_id=round_id,
+                        locator_rows=locator_statuses,
+                    )
                     if self.occurrence_method_arm == "a3":
-                        locator_statuses = _occurrence_locator_statuses(
-                            occurrence_state,
-                            observation_log.rows,
+                        locator_statuses = tuple(
+                            {
+                                **row,
+                                **(
+                                    {
+                                        "inspection_status": (
+                                            "released_unexecuted"
+                                        ),
+                                        "accounting_outcome": (
+                                            locator_terminal_outcomes.get(
+                                                _occurrence_locator_pair(row)
+                                            )
+                                        ),
+                                    }
+                                    if locator_terminal_outcomes.get(
+                                        _occurrence_locator_pair(row), ""
+                                    ).startswith("released_")
+                                    else {}
+                                ),
+                            }
+                            for row in locator_statuses
                         )
                         status["selected_occurrence_locators"] = list(
                             locator_statuses
                         )
                         status["active_occurrence_locators"] = [
-                            row for row in locator_statuses if not row["inspected"]
+                            row
+                            for row in locator_statuses
+                            if not row["inspected"]
+                            and not str(
+                                row.get("accounting_outcome", "") or ""
+                            ).startswith("released_")
                         ]
             pending_locator_rows = tuple(
                 row
@@ -720,21 +813,19 @@ class VirtualVideoMultiRoundDriver:
             force_finalize = (
                 budget_exhausted or occurrence_recovery_active
             ) and not closure_repair_active
+            pending_pairs = sorted(
+                {
+                    _occurrence_locator_pair(row)
+                    for row in pending_locator_rows
+                    if all(_occurrence_locator_pair(row))
+                }
+            )
             if (
                 force_finalize
                 and budget_exhausted
-                and pending_locator_rows
+                and pending_pairs
                 and not locator_budget_exhaustion_recorded
             ):
-                pending_pairs = sorted(
-                    {
-                        (
-                            str(row.get("locator_attempt_id", "") or ""),
-                            str(row.get("occurrence_id", "") or ""),
-                        )
-                        for row in pending_locator_rows
-                    }
-                )
                 trace.append(
                     {
                         "type": "occurrence_locator_budget_exhausted_at_finalize",
@@ -747,6 +838,41 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
                 locator_budget_exhaustion_recorded = True
+            if force_finalize and pending_locator_rows:
+                for locator in pending_locator_rows:
+                    _record_occurrence_locator_outcome(
+                        trace,
+                        locator_terminal_outcomes,
+                        round_id=round_id,
+                        locator=locator,
+                        outcome="released_at_budget_exhaustion",
+                        reason="budget_exhausted_at_finalize",
+                    )
+                released_pairs = set(pending_pairs)
+                status["selected_occurrence_locators"] = [
+                    {
+                        **row,
+                        **(
+                            {
+                                "inspection_status": "released_unexecuted",
+                                "accounting_outcome": (
+                                    "released_at_budget_exhaustion"
+                                ),
+                                "release_reason": (
+                                    "budget_exhausted_at_finalize"
+                                ),
+                            }
+                            if _occurrence_locator_pair(row) in released_pairs
+                            else {}
+                        ),
+                    }
+                    for row in tuple(
+                        status.get("selected_occurrence_locators", ()) or ()
+                    )
+                    if isinstance(row, Mapping)
+                ]
+                status["active_occurrence_locators"] = []
+                pending_locator_rows = ()
             if self.controller_mode != "frozen_baseline":
                 status["closure_repair_active"] = closure_repair_active
                 status["closure_repair_count"] = closure_repair_count
@@ -902,6 +1028,7 @@ class VirtualVideoMultiRoundDriver:
                                     if isinstance(row, Mapping)
                                 ),
                                 investigation_budget_remaining=remaining,
+                                force_finalize=force_finalize,
                             )
                         )
                     if self.evidence_state_mode == "runtime_derived":
@@ -1026,6 +1153,11 @@ class VirtualVideoMultiRoundDriver:
                                 revision=document.revision,
                                 previous_feedback=feedback,
                             )
+                            _append_contradictory_gate_state(
+                                trace,
+                                feedback,
+                                round_id=round_id,
+                            )
                             retry_occurrence_next_round = True
                             break
                         trace.append(
@@ -1055,6 +1187,11 @@ class VirtualVideoMultiRoundDriver:
                         schema_errors,
                         revision=document.revision,
                         previous_feedback=feedback,
+                    )
+                    _append_contradictory_gate_state(
+                        trace,
+                        feedback,
+                        round_id=round_id,
                     )
                     continue
 
@@ -1090,6 +1227,11 @@ class VirtualVideoMultiRoundDriver:
                     "errors": [],
                     "applied": [],
                 }
+                previous_occurrence_locators = (
+                    occurrence_state.active_locators()
+                    if isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                    else ()
+                )
                 # Occurrence state is a separate runtime-owned transaction. A valid
                 # selection must survive an unrelated working-document rejection so
                 # the following forced call can complete the answer-only phase.
@@ -1098,6 +1240,38 @@ class VirtualVideoMultiRoundDriver:
                         decision.occurrence_ops
                     )
                     occurrence_state.save(occurrence_state_path)
+                if (
+                    isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                    and occurrence_apply_result["accepted"]
+                ):
+                    current_occurrence_locator_pairs = {
+                        _occurrence_locator_pair(locator)
+                        for locator in occurrence_state.active_locators()
+                    }
+                    for locator in previous_occurrence_locators:
+                        pair = _occurrence_locator_pair(locator)
+                        if (
+                            pair in current_occurrence_locator_pairs
+                            or pair in locator_terminal_outcomes
+                        ):
+                            continue
+                        revision_op = _revision_release_op(
+                            locator,
+                            tuple(
+                                operation
+                                for operation in decision.occurrence_ops
+                                if isinstance(operation, Mapping)
+                            ),
+                        )
+                        _record_occurrence_locator_outcome(
+                            trace,
+                            locator_terminal_outcomes,
+                            round_id=round_id,
+                            locator=locator,
+                            outcome="released_by_revision",
+                            reason=f"resolution_revision:{revision_op}",
+                            revision_op=revision_op,
+                        )
                 occurrence_selection_committed = bool(
                     occurrence_apply_result["accepted"]
                     and any(
@@ -1106,6 +1280,18 @@ class VirtualVideoMultiRoundDriver:
                             or ""
                         ).casefold()
                         == "select"
+                        for operation in decision.occurrence_ops
+                        if isinstance(operation, Mapping)
+                    )
+                )
+                occurrence_resolution_committed = bool(
+                    occurrence_apply_result["accepted"]
+                    and any(
+                        str(
+                            operation.get("op", operation.get("type", ""))
+                            or ""
+                        ).casefold()
+                        in {"select", "no_match"}
                         for operation in decision.occurrence_ops
                         if isinstance(operation, Mapping)
                     )
@@ -1124,6 +1310,15 @@ class VirtualVideoMultiRoundDriver:
                             round_id=round_id,
                             stage="occurrence_selection_committed",
                         )
+                elif (
+                    occurrence_resolution_committed
+                    and isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                    and force_finalize
+                ):
+                    grant_occurrence_recovery(
+                        round_id=round_id,
+                        stage="occurrence_resolution_committed",
+                    )
                 premature_occurrence_commit = bool(
                     occurrence_state is not None
                     and decision.action == "answer"
@@ -1154,6 +1349,9 @@ class VirtualVideoMultiRoundDriver:
                         ],
                         "occurrence_selection_committed": (
                             occurrence_selection_committed
+                        ),
+                        "occurrence_resolution_committed": (
+                            occurrence_resolution_committed
                         ),
                         "occurrence_state_revision": (
                             occurrence_state.revision
@@ -1285,6 +1483,11 @@ class VirtualVideoMultiRoundDriver:
                             revision=document.revision,
                             previous_feedback=feedback,
                         )
+                        _append_contradictory_gate_state(
+                            trace,
+                            feedback,
+                            round_id=round_id,
+                        )
                         retry_occurrence_next_round = True
                         decision = None
                         break
@@ -1315,6 +1518,11 @@ class VirtualVideoMultiRoundDriver:
                     workspace_errors,
                     revision=document.revision,
                     previous_feedback=feedback,
+                )
+                _append_contradictory_gate_state(
+                    trace,
+                    feedback,
+                    round_id=round_id,
                 )
 
             if retry_occurrence_next_round:
@@ -1401,7 +1609,7 @@ class VirtualVideoMultiRoundDriver:
                 if (
                     force_finalize
                     and not final_retry_available
-                    and not occurrence_selection_committed
+                    and not occurrence_resolution_committed
                 ):
                     break
                 continue
@@ -1835,6 +2043,115 @@ def _occurrence_answer_is_premature(
     return state.selection_required or state.search_required
 
 
+def _occurrence_locator_pair(
+    locator: Mapping[str, Any],
+) -> tuple[str, str]:
+    return (
+        str(
+            locator.get("locator_attempt_id", locator.get("set_id", ""))
+            or ""
+        ),
+        str(locator.get("occurrence_id", "") or ""),
+    )
+
+
+def _record_occurrence_locator_outcome(
+    trace: list[Mapping[str, Any]],
+    outcomes: dict[tuple[str, str], str],
+    *,
+    round_id: int,
+    locator: Mapping[str, Any],
+    outcome: str,
+    reason: str = "",
+    revision_op: str = "",
+) -> None:
+    pair = _occurrence_locator_pair(locator)
+    if not all(pair):
+        return
+    previous = outcomes.get(pair)
+    if previous == outcome:
+        return
+    if previous:
+        trace.append(
+            {
+                "type": "occurrence_locator_accounting_conflict",
+                "round": round_id,
+                "locator_attempt_id": pair[0],
+                "occurrence_id": pair[1],
+                "previous_outcome": previous,
+                "new_outcome": outcome,
+            }
+        )
+        return
+    outcomes[pair] = outcome
+    if outcome == "inspected":
+        trace.append(
+            {
+                "type": "occurrence_locator_inspected",
+                "round": round_id,
+                "locator_attempt_id": pair[0],
+                "occurrence_id": pair[1],
+                "outcome": outcome,
+            }
+        )
+        return
+    event: dict[str, Any] = {
+        "type": "occurrence_locator_released_unexecuted",
+        "round": round_id,
+        "locator_attempt_id": pair[0],
+        "occurrence_id": pair[1],
+        "outcome": outcome,
+        "reason": reason,
+    }
+    if revision_op:
+        event["revision_op"] = revision_op
+    trace.append(event)
+
+
+def _record_inspected_occurrence_locators(
+    trace: list[Mapping[str, Any]],
+    outcomes: dict[tuple[str, str], str],
+    *,
+    round_id: int,
+    locator_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    for locator in locator_rows:
+        if locator.get("inspected") is True:
+            _record_occurrence_locator_outcome(
+                trace,
+                outcomes,
+                round_id=round_id,
+                locator=locator,
+                outcome="inspected",
+            )
+
+
+def _revision_release_op(
+    locator: Mapping[str, Any],
+    operations: Sequence[Mapping[str, Any]],
+) -> str:
+    set_id, occurrence_id = _occurrence_locator_pair(locator)
+    for operation in operations:
+        if not isinstance(operation, Mapping):
+            continue
+        operation_set_id = str(
+            operation.get("set_id", operation.get("locator_attempt_id", ""))
+            or ""
+        )
+        if operation_set_id != set_id:
+            continue
+        op = str(
+            operation.get("op", operation.get("type", "")) or ""
+        ).casefold()
+        operation_occurrence_id = str(operation.get("occurrence_id", "") or "")
+        if op in {"defer", "no_match"} or (
+            op in {"eliminate", "reopen"}
+            and operation_occurrence_id == occurrence_id
+        ):
+            return op
+    return "state_revision"
+
+
 def _occurrence_locator_statuses(
     state: OccurrenceResolutionStateV2,
     observation_rows: Sequence[Mapping[str, Any]],
@@ -1886,8 +2203,9 @@ def _actionable_locator_errors(
     pending_locators: Sequence[Mapping[str, Any]],
     *,
     investigation_budget_remaining: int,
+    force_finalize: bool = False,
 ) -> list[dict[str, Any]]:
-    if not pending_locators:
+    if force_finalize or not pending_locators:
         return []
     pending = {
         (
@@ -1905,12 +2223,10 @@ def _actionable_locator_errors(
     if revises_resolution:
         return []
     if investigation_budget_remaining <= 0:
-        return [
-            {
-                "code": "occurrence_locator_budget_exhausted",
-                "pending_locator_count": len(pending),
-            }
-        ]
+        raise RuntimeError(
+            "pending actionable locators must enter finalization when the "
+            "investigation budget is exhausted"
+        )
     if decision.action != "investigate":
         return [
             {
@@ -2538,6 +2854,28 @@ def _control_retry_feedback(
     previous_feedback: Mapping[str, Any],
 ) -> dict[str, Any]:
     codes = [str(error.get("code", "decision_schema_invalid")) for error in errors]
+    must_answer_codes = sorted(
+        set(codes) & _MUST_ANSWER_OCCURRENCE_CODES
+    )
+    must_not_answer_codes = sorted(
+        set(codes) & _MUST_NOT_ANSWER_OCCURRENCE_CODES
+    )
+    if must_answer_codes and must_not_answer_codes:
+        return {
+            "type": "contradictory_gate_state",
+            "cause": "decision_schema_error",
+            "errors": [dict(error) for error in errors],
+            "revision": revision,
+            "previous_feedback_type": str(
+                previous_feedback.get("type", "") or ""
+            ),
+            "must_answer_codes": must_answer_codes,
+            "must_not_answer_codes": must_not_answer_codes,
+            "instruction": (
+                "Runtime detected contradictory occurrence gates. Do not infer "
+                "a repair action; finalization precedence must resolve the state."
+            ),
+        }
     details = tuple(str(error.get("detail", "") or "") for error in errors)
     repair_rules: list[str] = []
     if any("_already_exists:" in detail for detail in details):
@@ -2621,6 +2959,28 @@ def _control_retry_feedback(
         "previous_feedback_type": str(previous_feedback.get("type", "") or ""),
         "instruction": instruction,
     }
+
+
+def _append_contradictory_gate_state(
+    trace: list[Mapping[str, Any]],
+    feedback: Mapping[str, Any],
+    *,
+    round_id: int,
+) -> None:
+    if feedback.get("type") != "contradictory_gate_state":
+        return
+    trace.append(
+        {
+            "type": "contradictory_gate_state",
+            "round": round_id,
+            "must_answer_codes": list(
+                feedback.get("must_answer_codes", ()) or ()
+            ),
+            "must_not_answer_codes": list(
+                feedback.get("must_not_answer_codes", ()) or ()
+            ),
+        }
+    )
 
 
 def _append_normalization_task_outcomes(
