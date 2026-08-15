@@ -31,6 +31,7 @@ def audit_roots(
     case_sets: dict[str, set[str]] = {}
     replay_cases: dict[str, dict[str, dict[str, Any]]] = {}
     resolution_signatures: dict[str, dict[str, tuple[Any, ...]]] = {}
+    matched_response_cases: dict[str, dict[str, dict[str, Any]]] = {}
     for declared_arm, root in bindings.items():
         cases = []
         for prediction_path in sorted(Path(root).glob("cases/*/prediction.json")):
@@ -78,6 +79,9 @@ def audit_roots(
             )
             arm = str(config.get("occurrence_method_arm", "none") or "none")
             state = _read_json(run_dir / "occurrence_resolution_state.json")
+            matched_response = _read_json(
+                run_dir / "matched_response_cache.json"
+            )
             observations = _read_jsonl(run_dir / "observation_log.jsonl")
             occurrence_errors = tuple(
                 error
@@ -398,6 +402,7 @@ def audit_roots(
                         bool(row.get("premature_occurrence_commit"))
                         for row in decisions
                     ),
+                    "matched_response": matched_response,
                 }
             )
         case_sets[declared_arm] = {row["case_id"] for row in cases}
@@ -423,6 +428,11 @@ def audit_roots(
         }
         resolution_signatures[declared_arm] = {
             row["case_id"]: row["resolution_signature"] for row in cases
+        }
+        matched_response_cases[declared_arm] = {
+            row["case_id"]: dict(row["matched_response"])
+            for row in cases
+            if row["matched_response"]
         }
         per_arm[declared_arm] = {
             "n": len(cases),
@@ -626,12 +636,34 @@ def audit_roots(
             "occurrence_replay_post_fixture_reuse_count": sum(
                 row["replay_post_fixture_reuse_count"] for row in cases
             ),
+            "matched_response_modes": sorted(
+                {
+                    str(row["matched_response"].get("mode", ""))
+                    for row in cases
+                    if row["matched_response"]
+                }
+            ),
+            "matched_response_recorded_count": sum(
+                int(row["matched_response"].get("recorded_count", 0) or 0)
+                for row in cases
+            ),
+            "matched_response_replayed_count": sum(
+                int(row["matched_response"].get("replayed_count", 0) or 0)
+                for row in cases
+            ),
+            "matched_response_mismatch_count": sum(
+                int(row["matched_response"].get("mismatch_count", 0) or 0)
+                for row in cases
+            ),
         }
     common = set.intersection(*case_sets.values()) if case_sets else set()
     treatment_arms = tuple(arm for arm in bindings if arm != "a0")
     scoped_arms = tuple(arm for arm in bindings if arm in SCOPED_ARMS)
     post_selection_balance = _post_selection_only_divergence(
         resolution_signatures
+    )
+    matched_response_gate = _matched_pre_treatment_response_gate(
+        matched_response_cases
     )
     checks = {
         "expected_arms_present": bool(bindings)
@@ -732,6 +764,11 @@ def audit_roots(
             if post_selection_balance["applicable"]
             else True
         ),
+        "matched_pre_treatment_responses": (
+            matched_response_gate["passed"]
+            if matched_response_gate["applicable"]
+            else True
+        ),
         "no_contradictory_gate_states": all(
             row["contradictory_gate_state_count"] == 0
             for row in per_arm.values()
@@ -761,6 +798,7 @@ def audit_roots(
         "schema_version": "MMLifelongOccurrenceCanaryAuditV5",
         "per_arm": per_arm,
         "post_selection_only_divergence": post_selection_balance,
+        "matched_pre_treatment_responses": matched_response_gate,
         "checks": checks,
         "structural_gate_passed": all(checks.values()),
     }
@@ -930,6 +968,51 @@ def _post_selection_only_divergence(
     return {
         "applicable": True,
         "passed": set(clean) == set(actionable) and not mismatches,
+        "paired_case_count": len(paired),
+        "mismatch_case_ids": mismatches,
+    }
+
+
+def _matched_pre_treatment_response_gate(
+    cases: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    clean = cases.get("a2-clean", {})
+    actionable = cases.get("a3", {})
+    applicable = bool(clean or actionable)
+    if not applicable:
+        return {
+            "applicable": False,
+            "passed": None,
+            "paired_case_count": 0,
+            "mismatch_case_ids": [],
+        }
+    paired = sorted(set(clean) & set(actionable))
+    mismatches = []
+    for case_id in paired:
+        recorded = clean[case_id]
+        replayed = actionable[case_id]
+        if not all(
+            (
+                recorded.get("mode") == "record",
+                replayed.get("mode") == "replay",
+                dict(recorded.get("recorded", {}) or {})
+                == dict(replayed.get("replayed", {}) or {}),
+                int(recorded.get("mismatch_count", 0) or 0) == 0,
+                int(replayed.get("mismatch_count", 0) or 0) == 0,
+                recorded.get("active") is False,
+                replayed.get("active") is False,
+                recorded.get("deactivation_reason")
+                == "scoped_occurrence_resolution_persisted",
+                replayed.get("deactivation_reason")
+                == "scoped_occurrence_resolution_persisted",
+            )
+        ):
+            mismatches.append(case_id)
+    return {
+        "applicable": True,
+        "passed": bool(paired)
+        and set(clean) == set(actionable)
+        and not mismatches,
         "paired_case_count": len(paired),
         "mismatch_case_ids": mismatches,
     }

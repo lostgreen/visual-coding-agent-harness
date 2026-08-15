@@ -798,6 +798,60 @@ def test_post_selection_only_divergence_requires_paired_resolution_identity() ->
     ]
 
 
+def test_matched_pre_treatment_response_gate_requires_exact_role_counts() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    clean = _row("a2-clean", "c1", score=0.0, signature=signature)
+    actionable = _row("a3", "c1", score=0.0, signature=signature)
+    common = {
+        "resolved_set_id": "set_1",
+        "final_resolution": "selected",
+        "selected_occurrence_ids": ["occ_1"],
+        "selected_locators_accounted": True,
+        "selected_locator_silent_drop_count": 0,
+        "selected_locator_accounting_conflict_count": 0,
+    }
+    clean.update(common)
+    actionable.update(common)
+    clean["matched_response_control"] = {
+        "mode": "record",
+        "active": False,
+        "deactivation_reason": "scoped_occurrence_resolution_persisted",
+        "recorded": {"investigator": 2, "reasoner": 3},
+        "mismatch_count": 0,
+    }
+    actionable["matched_response_control"] = {
+        "mode": "replay",
+        "active": False,
+        "deactivation_reason": "scoped_occurrence_resolution_persisted",
+        "replayed": {"investigator": 2, "reasoner": 3},
+        "mismatch_count": 0,
+    }
+
+    report = ANALYSIS.build_report(
+        (clean, actionable),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=3,
+    )
+
+    assert report["structural_checks"]["matched_pre_treatment_responses"] is True
+    audit_gate = AUDIT._matched_pre_treatment_response_gate(
+        {
+            "a2-clean": {"c1": clean["matched_response_control"]},
+            "a3": {"c1": actionable["matched_response_control"]},
+        }
+    )
+    assert audit_gate["passed"] is True
+    actionable["matched_response_control"]["replayed"]["reasoner"] = 2
+    failed = ANALYSIS.build_report(
+        (clean, actionable),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=3,
+    )
+    assert failed["structural_checks"]["matched_pre_treatment_responses"] is False
+
+
 def test_scoped_canary_audit_requires_actionable_locator_accounting(
     tmp_path: Path,
 ) -> None:

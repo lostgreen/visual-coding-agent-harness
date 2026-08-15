@@ -101,6 +101,9 @@ def collect_rows(
                 and replay_prime_events[0][0] < first_reasoner_index
             )
             state = _read_json(run_dir / "occurrence_resolution_state.json")
+            matched_response = _read_json(
+                run_dir / "matched_response_cache.json"
+            )
             occurrence_metrics = _occurrence_resolution_metrics(
                 arm=arm,
                 state=state,
@@ -355,6 +358,7 @@ def collect_rows(
                         )
                     ),
                     "retired_locator_count": _retired_locator_count(state),
+                    "matched_response_control": matched_response,
                     "frozen_config": _frozen_config(config),
                 }
             )
@@ -402,6 +406,7 @@ def build_report(
     replay_parity = _frozen_replay_parity(by_arm)
     budget_symmetry = _budget_symmetry(by_arm)
     post_selection_balance = _post_selection_only_divergence(by_arm)
+    matched_response_gate = _matched_pre_treatment_response_gate(by_arm)
     structural_checks = {
         "arms_present": bool(arms),
         "case_sets_aligned": bool(case_sets)
@@ -454,6 +459,11 @@ def build_report(
             if post_selection_balance["applicable"]
             else True
         ),
+        "matched_pre_treatment_responses": (
+            matched_response_gate["passed"]
+            if matched_response_gate["applicable"]
+            else True
+        ),
         "no_contradictory_gate_states": all(
             int(row.get("contradictory_gate_state_count", 0) or 0) == 0
             for row in rows
@@ -496,6 +506,7 @@ def build_report(
             "selected_locator_usage_rate": "accepted selected (locator_attempt_id, occurrence_id) pairs with executed candidate-bound visual observations",
             "selected_locator_accounting": "every selected locator has exactly one terminal outcome: inspected or one explicit release category",
             "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
+            "matched_pre_treatment_responses": "A3 exactly replays A2-clean Reasoner and Investigator responses until scoped resolution is persisted; all later calls remain live",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
             "budget_symmetry_passed": "maximum arm mean semantic rounds minus minimum arm mean semantic rounds is at most 0.25",
         },
@@ -508,6 +519,7 @@ def build_report(
         "frozen_occurrence_replay": replay_parity,
         "budget_symmetry": budget_symmetry,
         "post_selection_only_divergence": post_selection_balance,
+        "matched_pre_treatment_responses": matched_response_gate,
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
             value is not False for value in structural_checks.values()
@@ -1121,6 +1133,59 @@ def _post_selection_only_divergence(
     return {
         "applicable": True,
         "passed": set(clean) == set(actionable) and not mismatches,
+        "paired_case_count": len(paired),
+        "mismatch_case_ids": mismatches,
+    }
+
+
+def _matched_pre_treatment_response_gate(
+    by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    clean = by_arm.get("a2-clean", {})
+    actionable = by_arm.get("a3", {})
+    applicable = any(
+        row.get("matched_response_control")
+        for cases in (clean, actionable)
+        for row in cases.values()
+    )
+    if not applicable:
+        return {
+            "applicable": False,
+            "passed": None,
+            "paired_case_count": 0,
+            "mismatch_case_ids": [],
+        }
+    paired = sorted(set(clean) & set(actionable))
+    mismatches = []
+    for case_id in paired:
+        recorded = dict(
+            clean[case_id].get("matched_response_control", {}) or {}
+        )
+        replayed = dict(
+            actionable[case_id].get("matched_response_control", {}) or {}
+        )
+        if not all(
+            (
+                recorded.get("mode") == "record",
+                replayed.get("mode") == "replay",
+                dict(recorded.get("recorded", {}) or {})
+                == dict(replayed.get("replayed", {}) or {}),
+                int(recorded.get("mismatch_count", 0) or 0) == 0,
+                int(replayed.get("mismatch_count", 0) or 0) == 0,
+                recorded.get("active") is False,
+                replayed.get("active") is False,
+                recorded.get("deactivation_reason")
+                == "scoped_occurrence_resolution_persisted",
+                replayed.get("deactivation_reason")
+                == "scoped_occurrence_resolution_persisted",
+            )
+        ):
+            mismatches.append(case_id)
+    return {
+        "applicable": True,
+        "passed": bool(paired)
+        and set(clean) == set(actionable)
+        and not mismatches,
         "paired_case_count": len(paired),
         "mismatch_case_ids": mismatches,
     }

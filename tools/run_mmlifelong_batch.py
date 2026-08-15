@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -111,6 +112,23 @@ def main() -> None:
             raise ValueError("O0 must not load --oracle-intervention-root")
     elif not args.oracle_intervention_root:
         raise ValueError(f"{args.oracle_arm} requires --oracle-intervention-root")
+    if args.matched_response_record_root and args.matched_response_replay_root:
+        raise ValueError(
+            "--matched-response-record-root and --matched-response-replay-root "
+            "are mutually exclusive"
+        )
+    if args.matched_response_record_root and occurrence_method_arm != "a2-clean":
+        raise ValueError("matched response recording requires occurrence arm a2-clean")
+    if args.matched_response_replay_root and occurrence_method_arm != "a3":
+        raise ValueError("matched response replay requires occurrence arm a3")
+    if (
+        args.matched_response_record_root or args.matched_response_replay_root
+    ) and not args.occurrence_replay_prime:
+        raise ValueError("matched response control requires occurrence replay priming")
+    if args.matched_response_replay_root and not (
+        Path(args.matched_response_replay_root) / "manifest.json"
+    ).is_file():
+        raise FileNotFoundError("matched response replay manifest is missing")
     protocol = Phase5Protocol(
         controller_mode=args.controller_mode,
         controller_evidence_visibility=args.controller_evidence_visibility,
@@ -190,6 +208,18 @@ def main() -> None:
         "occurrence_replay_prime": bool(
             getattr(args, "occurrence_replay_prime", False)
         ),
+        "matched_response_mode": (
+            "record"
+            if args.matched_response_record_root
+            else "replay"
+            if args.matched_response_replay_root
+            else "none"
+        ),
+        "matched_response_manifest": (
+            file_checksum(Path(args.matched_response_replay_root) / "manifest.json")
+            if args.matched_response_replay_root
+            else None
+        ),
         "occurrence_replay_manifest": (
             file_checksum(
                 Path(args.occurrence_replay_root) / "manifest.json"
@@ -253,6 +283,14 @@ def main() -> None:
             Path(args.occurrence_replay_record_root),
             selected,
             caption_config_digest=str(args.caption_config_digest),
+        )
+    if (
+        status_counts.get("success", 0) == len(selected)
+        and args.matched_response_record_root
+    ):
+        _write_matched_response_manifest(
+            Path(args.matched_response_record_root),
+            selected,
         )
     print(
         "BATCH_DONE "
@@ -461,6 +499,28 @@ def _case_command(
             / f"{case['case_id']}.json"
         )
         command.extend(("--occurrence-replay-record", str(record_path)))
+    if getattr(args, "matched_response_record_root", None):
+        command.extend(
+            (
+                "--matched-response-record",
+                str(
+                    Path(args.matched_response_record_root)
+                    / "cases"
+                    / str(case["case_id"])
+                ),
+            )
+        )
+    if getattr(args, "matched_response_replay_root", None):
+        command.extend(
+            (
+                "--matched-response-replay",
+                str(
+                    Path(args.matched_response_replay_root)
+                    / "cases"
+                    / str(case["case_id"])
+                ),
+            )
+        )
     return command
 
 
@@ -491,6 +551,10 @@ def _write_batch_summary(
             "occurrence_method_arm": selection.get("occurrence_method_arm"),
             "occurrence_replay_mode": selection.get("occurrence_replay_mode"),
             "occurrence_replay_prime": selection.get("occurrence_replay_prime"),
+            "matched_response_mode": selection.get("matched_response_mode"),
+            "matched_response_manifest": selection.get(
+                "matched_response_manifest"
+            ),
             "recorded_fixture_manifest": selection.get(
                 "recorded_fixture_manifest"
             ),
@@ -542,6 +606,56 @@ def _write_occurrence_replay_manifest(
     return manifest_path
 
 
+def _write_matched_response_manifest(
+    root: Path,
+    cases: Sequence[Mapping[str, Any]],
+) -> Path:
+    case_rows = []
+    for case in cases:
+        case_id = str(case["case_id"])
+        case_root = Path(root) / "cases" / case_id
+        entries = []
+        role_counts: dict[str, int] = {}
+        for role in ("reasoner", "investigator"):
+            role_root = case_root / role
+            if not role_root.is_dir():
+                raise FileNotFoundError(
+                    f"missing matched response role directory: {case_id}/{role}"
+                )
+            paths = tuple(sorted(role_root.glob("*.json")))
+            role_counts[role] = len(paths)
+            entries.extend(
+                {
+                    "path": path.relative_to(case_root).as_posix(),
+                    "sha256": file_checksum(path)["sha256"],
+                }
+                for path in paths
+            )
+        encoded = json.dumps(
+            entries,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        case_rows.append(
+            {
+                "case_id": case_id,
+                "digest": hashlib.sha256(encoded).hexdigest(),
+                "role_counts": role_counts,
+            }
+        )
+    manifest_path = Path(root) / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "schema_version": "MatchedPreTreatmentResponseManifestV1",
+            "case_count": len(case_rows),
+            "cases": case_rows,
+        },
+    )
+    return manifest_path
+
+
 def _subprocess_env() -> dict[str, str]:
     environment = os.environ.copy()
     repository_root = Path(__file__).resolve().parents[1]
@@ -573,6 +687,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--occurrence-replay-root")
     parser.add_argument("--occurrence-replay-record-root")
     parser.add_argument("--occurrence-replay-prime", action="store_true")
+    parser.add_argument("--matched-response-record-root")
+    parser.add_argument("--matched-response-replay-root")
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--case-ids", nargs="+")
@@ -631,6 +747,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error("occurrence replay requires --occurrence-method-arm")
     if args.occurrence_replay_prime and not args.occurrence_replay_root:
         parser.error("--occurrence-replay-prime requires --occurrence-replay-root")
+    if args.matched_response_record_root and args.matched_response_replay_root:
+        parser.error(
+            "--matched-response-record-root and --matched-response-replay-root "
+            "are mutually exclusive"
+        )
     return args
 
 

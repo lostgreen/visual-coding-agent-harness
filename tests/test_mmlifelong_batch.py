@@ -92,6 +92,8 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
         occurrence_replay_root=str(fixture_root),
         occurrence_replay_record_root=None,
         occurrence_replay_prime=False,
+        matched_response_record_root=None,
+        matched_response_replay_root=None,
     )
     case = {
         "case_id": "case-0072",
@@ -113,6 +115,13 @@ def test_recorded_fixture_is_bound_to_the_matching_case(tmp_path: Path) -> None:
     args.occurrence_replay_prime = True
     primed_command = BATCH._case_command(case, args, tmp_path / "primed-out")
     assert "--occurrence-replay-prime" in primed_command
+
+    matched_root = tmp_path / "matched"
+    args.matched_response_record_root = str(matched_root)
+    matched_command = BATCH._case_command(case, args, tmp_path / "matched-out")
+    assert matched_command[matched_command.index("--matched-response-record") + 1] == str(
+        matched_root / "cases" / "case-0072"
+    )
 
 
 def test_batch_subprocess_env_includes_repository_and_src() -> None:
@@ -143,3 +152,29 @@ def test_occurrence_replay_manifest_binds_case_files(tmp_path: Path) -> None:
     assert manifest["cases"][0]["case_id"] == "case-1"
     assert manifest["cases"][0]["packet_count"] == 2
     assert len(manifest["cases"][0]["sha256"]) == 64
+
+
+def test_matched_response_manifest_binds_role_sequences(tmp_path: Path) -> None:
+    case_root = tmp_path / "cases" / "case-1"
+    for role in ("reasoner", "investigator"):
+        role_root = case_root / role
+        role_root.mkdir(parents=True)
+        if role == "reasoner":
+            (role_root / "000001.json").write_text(
+                json.dumps({"role": role, "sequence": 1}),
+                encoding="utf-8",
+            )
+
+    manifest_path = BATCH._write_matched_response_manifest(
+        tmp_path,
+        ({"case_id": "case-1"},),
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["schema_version"] == "MatchedPreTreatmentResponseManifestV1"
+    assert manifest["case_count"] == 1
+    assert manifest["cases"][0]["role_counts"] == {
+        "investigator": 0,
+        "reasoner": 1,
+    }
+    assert len(manifest["cases"][0]["digest"]) == 64

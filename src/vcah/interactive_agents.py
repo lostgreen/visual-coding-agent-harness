@@ -13,7 +13,12 @@ from vcah.investigator import (
     ObservationAttempt,
     VirtualVideoInvestigator,
 )
-from vcah.model_client import ImageAttachmentError, OpenAICompatibleClient
+from vcah.model_client import (
+    ImageAttachmentError,
+    MatchedResponseCacheClient,
+    MatchedResponseSession,
+    OpenAICompatibleClient,
+)
 from vcah.multiround import InvestigationTask, ReasonerDecision
 from vcah.sampling import (
     bounded_profile_range,
@@ -369,12 +374,13 @@ class WorkspaceReasoner:
 
     def __init__(
         self,
-        api: OpenAICompatibleClient,
+        api: OpenAICompatibleClient | MatchedResponseCacheClient,
         *,
         trace_path: Path,
         controller_mode: str = "mger",
         controller_evidence_visibility: str = "full",
         measurement_control: str = "none",
+        matched_response_session: MatchedResponseSession | None = None,
     ) -> None:
         self.api = api
         self.trace_path = trace_path
@@ -385,6 +391,7 @@ class WorkspaceReasoner:
         self.measurement_control = str(
             measurement_control or "none"
         ).strip().casefold()
+        self.matched_response_session = matched_response_session
         self.calls = 0
         self._last_decision_metadata: dict[str, Any] = {}
         self._last_plan_metadata: dict[str, Any] = {}
@@ -426,6 +433,13 @@ class WorkspaceReasoner:
         return metadata
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
+        if (
+            self.matched_response_session is not None
+            and _scoped_occurrence_resolution_persisted(kwargs)
+        ):
+            self.matched_response_session.deactivate(
+                "scoped_occurrence_resolution_persisted"
+            )
         self.calls += 1
         self._last_decision_metadata = {}
         kwargs.setdefault("controller_mode", self.controller_mode)
@@ -524,6 +538,23 @@ class WorkspaceReasoner:
         metadata = dict(self._last_decision_metadata)
         self._last_decision_metadata = {}
         return metadata
+
+
+def _scoped_occurrence_resolution_persisted(kwargs: Mapping[str, Any]) -> bool:
+    mechanical_status = kwargs.get("mechanical_status")
+    if not isinstance(mechanical_status, Mapping):
+        return False
+    state = mechanical_status.get("occurrence_resolution_state")
+    if not isinstance(state, Mapping):
+        return False
+    if str(state.get("schema_version", "")) != "OccurrenceResolutionStateV2":
+        return False
+    return (
+        str(state.get("active_resolution", "") or "")
+        in {"selected", "no_match"}
+        and not bool(state.get("selection_required"))
+        and not bool(state.get("search_required"))
+    )
 
 class VisionInvestigator(VirtualVideoInvestigator):
     """Observation-only visual agent; it never evaluates options or claims."""

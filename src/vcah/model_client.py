@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from io import BytesIO
+import json
 import os
 from pathlib import Path
 import random
@@ -399,3 +401,277 @@ class OpenAICompatibleClient:
         if self.retry_jitter:
             delay *= random.uniform(1.0 - self.retry_jitter, 1.0 + self.retry_jitter)
         return max(0.0, delay)
+
+
+class MatchedResponseReplayError(RuntimeError):
+    """Raised when a pre-treatment matched response cannot be replayed exactly."""
+
+
+class MatchedResponseSession:
+    """Shared lifecycle and accounting for per-role matched response clients."""
+
+    def __init__(self, *, mode: str) -> None:
+        normalized = str(mode or "").strip().casefold()
+        if normalized not in {"record", "replay"}:
+            raise ValueError("matched response mode must be record or replay")
+        self.mode = normalized
+        self.active = True
+        self.deactivation_reason = ""
+        self._counts = {
+            "recorded": {},
+            "replayed": {},
+            "live_after_treatment": {},
+        }
+        self._mismatch_count = 0
+        self._lock = threading.Lock()
+
+    def deactivate(self, reason: str) -> None:
+        with self._lock:
+            if not self.active:
+                return
+            self.active = False
+            self.deactivation_reason = str(reason or "").strip()
+
+    def note(self, kind: str, namespace: str) -> None:
+        with self._lock:
+            counts = self._counts[str(kind)]
+            role = str(namespace or "").strip()
+            counts[role] = int(counts.get(role, 0)) + 1
+
+    def note_mismatch(self) -> None:
+        with self._lock:
+            self._mismatch_count += 1
+
+    def to_dict(self) -> dict[str, Any]:
+        with self._lock:
+            counts = {
+                kind: dict(sorted(values.items()))
+                for kind, values in self._counts.items()
+            }
+            return {
+                "schema_version": "MatchedPreTreatmentResponseV1",
+                "mode": self.mode,
+                "active": bool(self.active),
+                "deactivation_reason": self.deactivation_reason,
+                **counts,
+                "recorded_count": sum(counts["recorded"].values()),
+                "replayed_count": sum(counts["replayed"].values()),
+                "live_after_treatment_count": sum(
+                    counts["live_after_treatment"].values()
+                ),
+                "mismatch_count": int(self._mismatch_count),
+            }
+
+
+class MatchedResponseCacheClient:
+    """Record or replay exact API responses until the shared session deactivates."""
+
+    def __init__(
+        self,
+        delegate: OpenAICompatibleClient,
+        *,
+        root: Path,
+        mode: str,
+        namespace: str,
+        session: MatchedResponseSession,
+    ) -> None:
+        normalized_mode = str(mode or "").strip().casefold()
+        if normalized_mode not in {"record", "replay"}:
+            raise ValueError("matched response mode must be record or replay")
+        if session.mode != normalized_mode:
+            raise ValueError("matched response client/session mode mismatch")
+        role = str(namespace or "").strip().casefold()
+        if not role:
+            raise ValueError("matched response namespace is required")
+        self.delegate = delegate
+        self.root = Path(root)
+        self.mode = normalized_mode
+        self.namespace = role
+        self.session = session
+        self._sequence = 0
+        self._last_response_metadata: dict[str, Any] = {}
+        if self.mode == "record":
+            (self.root / self.namespace).mkdir(parents=True, exist_ok=True)
+        elif not (self.root / self.namespace).is_dir():
+            raise FileNotFoundError(
+                f"missing matched response role fixture: {self.root / self.namespace}"
+            )
+
+    @property
+    def model(self) -> str:
+        return self.delegate.model
+
+    def chat(
+        self,
+        prompt: str,
+        *,
+        image_paths: Sequence[str] = (),
+        image_labels: Sequence[str] = (),
+        prompt_position: str = "first",
+        max_tokens: int = 900,
+        _retry_truncation: bool = True,
+    ) -> str:
+        if not self.session.active:
+            response = self.delegate.chat(
+                prompt,
+                image_paths=image_paths,
+                image_labels=image_labels,
+                prompt_position=prompt_position,
+                max_tokens=max_tokens,
+                _retry_truncation=_retry_truncation,
+            )
+            self._last_response_metadata = {
+                **self.delegate.last_response_metadata,
+                "matched_response_cache_mode": self.mode,
+                "matched_response_cache_active": False,
+                "matched_response_cache_hit": False,
+            }
+            self.session.note("live_after_treatment", self.namespace)
+            return response
+
+        self._sequence += 1
+        request = _matched_response_request(
+            namespace=self.namespace,
+            model=self.model,
+            prompt=prompt,
+            image_paths=image_paths,
+            image_labels=image_labels,
+            prompt_position=prompt_position,
+            max_tokens=max_tokens,
+        )
+        request_digest = _stable_json_digest(request)
+        fixture_path = (
+            self.root / self.namespace / f"{self._sequence:06d}.json"
+        )
+        if self.mode == "replay":
+            if not fixture_path.is_file():
+                self.session.note_mismatch()
+                raise MatchedResponseReplayError(
+                    f"missing matched response fixture: {self.namespace}/{self._sequence:06d}"
+                )
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+            if str(fixture.get("request_digest", "")) != request_digest:
+                self.session.note_mismatch()
+                raise MatchedResponseReplayError(
+                    f"matched response request mismatch: {self.namespace}/{self._sequence:06d}"
+                )
+            response = str(fixture.get("response", "") or "")
+            self._last_response_metadata = {
+                **dict(fixture.get("response_metadata") or {}),
+                "matched_response_cache_mode": self.mode,
+                "matched_response_cache_active": True,
+                "matched_response_cache_hit": True,
+                "matched_response_sequence": self._sequence,
+                "matched_response_request_digest": request_digest,
+            }
+            self.session.note("replayed", self.namespace)
+            return response
+
+        response = self.delegate.chat(
+            prompt,
+            image_paths=image_paths,
+            image_labels=image_labels,
+            prompt_position=prompt_position,
+            max_tokens=max_tokens,
+            _retry_truncation=_retry_truncation,
+        )
+        response_metadata = dict(self.delegate.last_response_metadata)
+        fixture = {
+            "schema_version": "MatchedPreTreatmentResponseEntryV1",
+            "namespace": self.namespace,
+            "sequence": self._sequence,
+            "request": request,
+            "request_digest": request_digest,
+            "response": response,
+            "response_sha256": hashlib.sha256(response.encode("utf-8")).hexdigest(),
+            "response_metadata": response_metadata,
+        }
+        if fixture_path.exists():
+            existing = json.loads(fixture_path.read_text(encoding="utf-8"))
+            if (
+                str(existing.get("request_digest", "")) != request_digest
+                or str(existing.get("response_sha256", ""))
+                != fixture["response_sha256"]
+            ):
+                self.session.note_mismatch()
+                raise MatchedResponseReplayError(
+                    f"matched response record conflict: {self.namespace}/{self._sequence:06d}"
+                )
+        else:
+            _atomic_json_write(fixture_path, fixture)
+        self._last_response_metadata = {
+            **response_metadata,
+            "matched_response_cache_mode": self.mode,
+            "matched_response_cache_active": True,
+            "matched_response_cache_hit": False,
+            "matched_response_sequence": self._sequence,
+            "matched_response_request_digest": request_digest,
+        }
+        self.session.note("recorded", self.namespace)
+        return response
+
+    @property
+    def last_response_metadata(self) -> dict[str, Any]:
+        return dict(self._last_response_metadata)
+
+    @property
+    def replay_settings(self) -> dict[str, Any]:
+        return {
+            **self.delegate.replay_settings,
+            "matched_response_cache_mode": self.mode,
+        }
+
+    def set_requested_seed(self, seed: int | None) -> None:
+        self.delegate.set_requested_seed(seed)
+
+
+def _matched_response_request(
+    *,
+    namespace: str,
+    model: str,
+    prompt: str,
+    image_paths: Sequence[str],
+    image_labels: Sequence[str],
+    prompt_position: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    image_digests = []
+    for raw_path in image_paths:
+        path = Path(raw_path)
+        image_digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
+    return {
+        "namespace": str(namespace),
+        "model": str(model),
+        "prompt_sha256": hashlib.sha256(str(prompt).encode("utf-8")).hexdigest(),
+        "image_sha256": image_digests,
+        "image_labels": [str(value) for value in image_labels],
+        "prompt_position": str(prompt_position),
+        "max_tokens": int(max_tokens),
+    }
+
+
+def _stable_json_digest(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)

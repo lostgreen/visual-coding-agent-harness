@@ -18,7 +18,11 @@ from benchmarks.mmlifelong.oracle import (
 from vcah.caption_schema import stable_digest
 from vcah.embedding_adapter import SentenceTransformerEmbeddingAdapter
 from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
-from vcah.model_client import OpenAICompatibleClient
+from vcah.model_client import (
+    MatchedResponseCacheClient,
+    MatchedResponseSession,
+    OpenAICompatibleClient,
+)
 from vcah.multiround import InvestigationTask, VirtualVideoMultiRoundDriver
 from vcah.occurrence_agent import (
     OCCURRENCE_METHOD_ARMS,
@@ -58,6 +62,18 @@ def main() -> None:
         raise ValueError("occurrence replay prime requires --occurrence-replay-fixture")
     if args.occurrence_replay_prime and args.recorded_decisions:
         raise ValueError("occurrence replay prime is incompatible with recorded decisions")
+    if args.matched_response_record and args.matched_response_replay:
+        raise ValueError(
+            "--matched-response-record and --matched-response-replay are mutually exclusive"
+        )
+    if (args.matched_response_record or args.matched_response_replay) and args.recorded_decisions:
+        raise ValueError("matched response control is incompatible with recorded decisions")
+    if args.matched_response_record and occurrence_method_arm != "a2-clean":
+        raise ValueError("matched response recording requires occurrence arm a2-clean")
+    if args.matched_response_replay and occurrence_method_arm != "a3":
+        raise ValueError("matched response replay requires occurrence arm a3")
+    if (args.matched_response_record or args.matched_response_replay) and not args.occurrence_replay_prime:
+        raise ValueError("matched response control requires occurrence replay priming")
     protocol = Phase5Protocol(
         controller_mode=args.controller_mode,
         controller_evidence_visibility=args.controller_evidence_visibility,
@@ -149,13 +165,41 @@ def main() -> None:
         )
     if recorded_fixture and str(recorded_fixture.get("case_id", "")) != workspace.case.case_id:
         raise ValueError("recorded replay fixture case_id does not match the case workspace")
-    reasoner_api = (
+    reasoner_base_api = (
         None
         if recorded_fixture
         else OpenAICompatibleClient.from_yaml(
             Path(args.reasoner_config or args.config),
             section=args.reasoner_section,
         )
+    )
+    matched_response_mode = (
+        "record"
+        if args.matched_response_record
+        else "replay"
+        if args.matched_response_replay
+        else ""
+    )
+    matched_response_root = (
+        Path(args.matched_response_record or args.matched_response_replay)
+        if matched_response_mode
+        else None
+    )
+    matched_response_session = (
+        MatchedResponseSession(mode=matched_response_mode)
+        if matched_response_mode
+        else None
+    )
+    reasoner_api = (
+        MatchedResponseCacheClient(
+            reasoner_base_api,
+            root=matched_response_root,
+            mode=matched_response_mode,
+            namespace="reasoner",
+            session=matched_response_session,
+        )
+        if matched_response_session is not None
+        else reasoner_base_api
     )
     if protocol.measurement_control == "blind_prior":
         assert reasoner_api is not None
@@ -171,13 +215,24 @@ def main() -> None:
         raise RuntimeError(
             "minimal_tool is gated by Phase 5 Gate-0 and is not enabled in the measurement-control revision"
         )
-    investigator_api = (
+    investigator_base_api = (
         MechanicalReplayClient()
         if recorded_fixture
         else OpenAICompatibleClient.from_yaml(
             Path(args.investigator_config or args.config),
             section=args.investigator_section,
         )
+    )
+    investigator_api = (
+        MatchedResponseCacheClient(
+            investigator_base_api,
+            root=matched_response_root,
+            mode=matched_response_mode,
+            namespace="investigator",
+            session=matched_response_session,
+        )
+        if matched_response_session is not None
+        else investigator_base_api
     )
     embedding_adapter = None
     if args.caption_index_mode in {"dense", "hybrid"}:
@@ -202,6 +257,7 @@ def main() -> None:
             controller_mode=protocol.controller_mode,
             controller_evidence_visibility=protocol.controller_evidence_visibility,
             measurement_control=protocol.measurement_control,
+            matched_response_session=matched_response_session,
         )
     )
     investigator = VisionInvestigator(
@@ -273,6 +329,16 @@ def main() -> None:
         occurrence_method_arm=occurrence_method_arm,
     )
     result = driver.run(workspace)
+    matched_response_summary = (
+        matched_response_session.to_dict()
+        if matched_response_session is not None
+        else None
+    )
+    if matched_response_summary is not None:
+        _write_json(
+            workspace.root_dir / "matched_response_cache.json",
+            matched_response_summary,
+        )
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
     runtime_metrics = agent_run_metrics(
         result.trace,
@@ -338,6 +404,7 @@ def main() -> None:
             else None
         ),
         "occurrence_replay_prime": bool(args.occurrence_replay_prime),
+        "matched_response_control": matched_response_summary,
         "no_oracle_runtime_gate": (
             {
                 "schema_version": "MMLifelongNoOracleRuntimeGateV1",
@@ -647,6 +714,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/workspace.py"),
         Path("src/vcah/multiround.py"),
         Path("src/vcah/interactive_agents.py"),
+        Path("src/vcah/model_client.py"),
         Path("src/vcah/investigator.py"),
         Path("src/vcah/caption_lexical_index.py"),
         Path("src/vcah/caption_semantic_index.py"),
@@ -746,6 +814,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--occurrence-replay-fixture")
     parser.add_argument("--occurrence-replay-record")
     parser.add_argument("--occurrence-replay-prime", action="store_true")
+    parser.add_argument("--matched-response-record")
+    parser.add_argument("--matched-response-replay")
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")
