@@ -846,7 +846,9 @@ class OccurrencePacketTransform:
                 raise ValueError(
                     "grouped and flat occurrence text budgets differ"
                 )
-            occurrence_set["method_arm"] = self.arm
+            occurrence_set["method_arm"] = (
+                "scoped" if self.arm in {"a2-clean", "a3"} else self.arm
+            )
             if self.arm == "a1-flat":
                 representation = "flat"
                 occurrence_set["flat_candidate_passages"] = flat_passages

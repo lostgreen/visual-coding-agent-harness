@@ -237,6 +237,19 @@ def test_a1_flat_matches_a1_text_budget_without_occurrence_binding(tmp_path) -> 
     assert candidate_card_excerpt_digest(cards)
 
 
+def test_scoped_arms_share_identical_preselection_packet_surface(tmp_path) -> None:
+    packet = _packet()
+    clean = OccurrencePacketTransform(
+        arm="a2-clean", audit_path=tmp_path / "clean.json"
+    )(packet)
+    actionable = OccurrencePacketTransform(
+        arm="a3", audit_path=tmp_path / "actionable.json"
+    )(packet)
+
+    assert clean == actionable
+    assert clean["occurrence_set"]["method_arm"] == "scoped"
+
+
 def test_a2_occurrence_state_rejects_hidden_ids_transactionally() -> None:
     state = OccurrenceResolutionStateV1()
     state.sync_visible(("occ_1", "occ_2"))
