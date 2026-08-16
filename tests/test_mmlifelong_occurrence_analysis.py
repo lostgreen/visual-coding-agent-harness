@@ -1022,7 +1022,14 @@ def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
             "support_complete": True,
             "scope_occurrence_ids": ["occ_1", "occ_2"],
             "out_of_scope_occurrence_ids": [],
-            "implicit_unknown_support_count": 0,
+            "implicit_unknown_support_count": 1,
+            "support_contract": "sparse_supported_rows_omission_is_unknown",
+            "aggregation_rule": "unique_supported_count_margin",
+            "minimum_support_margin": 1,
+            "support_count_by_occurrence": {"occ_1": 1, "occ_2": 0},
+            "best_support_count": 1,
+            "runner_up_support_count": 0,
+            "sufficient_occurrence_ids": ["occ_1"],
         },
     )
 
@@ -1032,6 +1039,8 @@ def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
     assert valid["event_count_mismatch"] is False
     assert valid["support_surface_applicable"] is True
     assert valid["support_surface_failure_count"] == 0
+    assert valid["aggregation_applicable"] is True
+    assert valid["aggregation_failure_count"] == 0
 
     analyzer_metrics = ANALYSIS._sufficiency_transaction_metrics(
         (*valid_trace, *valid_decisions)
@@ -1039,6 +1048,7 @@ def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
     assert analyzer_metrics["sufficiency_support_complete"] is True
     assert analyzer_metrics["sufficiency_scope_candidate_count"] == 2
     assert analyzer_metrics["sufficiency_out_of_scope_candidate_count"] == 0
+    assert analyzer_metrics["sufficiency_aggregation_valid"] is True
 
     invalid = AUDIT._sufficiency_transaction_audit(
         (

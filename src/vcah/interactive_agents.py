@@ -2100,13 +2100,13 @@ def _occurrence_resolution_prompt_rule(
                 "selectable only if it satisfies the question-critical constraints. Before select, defer, or no_match, "
                 "place one assess_sufficiency operation first in the same occurrence_ops transaction. Derive one to six "
                 "concise critical constraints from the question using only identity, event, relation, temporal, state, "
-                "attribute, object, location, order, or outcome types. For every occurrence_id listed in "
-                "sufficiency_scope_occurrence_ids and every constraint, report supported, partial, unknown, or contradicted "
-                "and bind each supported status to one or more visible evidence_passage_ids from that candidate. Missing "
-                "in-scope rows are rejected as incomplete serialization; use explicit unknown when evidence cannot decide. "
+                "attribute, object, location, order, or outcome types. Report a supported row only when one or more visible "
+                "evidence_passage_ids from that candidate directly support the constraint. Omit unsupported, partial, unknown, "
+                "or contradicted rows; Runtime normalizes every omission to unknown, which contributes no positive support. "
                 "Candidates listed in sufficiency_out_of_scope_occurrence_ids need no rows and cannot be selected from this "
-                "assessment. Verdict sufficient is valid only when at least one in-scope candidate "
-                "supports every constraint; select only such candidates. Otherwise use verdict insufficient followed by "
+                "assessment. Runtime derives verdict sufficient only when one in-scope candidate has a unique highest count "
+                "of supported constraints and leads the runner-up by at least one; select only that candidate. Otherwise use "
+                "verdict insufficient followed by "
                 "defer for refined search or no_match. Runtime checks structure and visible foreign keys only; the Reasoner "
                 "remains solely responsible for defining and judging the constraints. "
             )
@@ -2371,13 +2371,13 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
                 '"occurrence_ops":[{"op":"assess_sufficiency","set_id":"attempt_visible_id",'
                 '"verdict":"sufficient|insufficient","constraints_checked":[{"constraint_id":"identity",'
                 '"constraint_type":"identity","description":"question-critical requirement",'
-                '"support":[{"occurrence_id":"occ_visible_id","status":"supported|partial|unknown|contradicted",'
+                '"support":[{"occurrence_id":"occ_visible_id","status":"supported",'
                 '"evidence_passage_ids":["visible_passage_id"]}]}]},{"op":"select|defer|no_match",'
                 '"set_id":"attempt_visible_id","occurrence_id":"occ_visible_id only for select"}]}. '
                 'Constraint types are action, identity, event, relation, temporal, state, attribute, object, location, '
-                'order, or outcome. Include one row per sufficiency_scope_occurrence_ids value under every constraint; '
-                'missing rows are rejected, and semantic unknown must be explicit. sufficiency_out_of_scope_occurrence_ids '
-                'need no rows and are not selectable. Runtime derives the verdict from the complete support matrix; finish '
+                'order, or outcome. Include only directly evidenced supported rows; omitted in-scope rows are mechanically '
+                'unknown and add no support. sufficiency_out_of_scope_occurrence_ids need no rows and are not selectable. '
+                'Runtime requires a unique supported-count leader with margin at least one; finish '
                 'finalization with select or no_match, never defer.\n'
             )
         else:

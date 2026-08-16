@@ -11,6 +11,11 @@ from typing import Any, Mapping
 
 SUPPORTED_ARMS = {"a0", "a1-flat", "a1", "a2", "a2-clean", "a3", "a4"}
 SCOPED_ARMS = {"a2-clean", "a3", "a4"}
+EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT = (
+    "sparse_supported_rows_omission_is_unknown"
+)
+EXPECTED_SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
+EXPECTED_SUFFICIENCY_SUPPORT_MARGIN = 1
 EXPECTED_LIFECYCLE_RETRY_CODES = {
     "occurrence_selection_required",
     "occurrence_answer_required_after_selection",
@@ -520,6 +525,14 @@ def audit_roots(
                 row["sufficiency_audit"]["support_surface_failure_count"] > 0
                 for row in cases
             ),
+            "sufficiency_aggregation_applicable_case_count": sum(
+                row["sufficiency_audit"]["aggregation_applicable"]
+                for row in cases
+            ),
+            "sufficiency_aggregation_failure_case_count": sum(
+                row["sufficiency_audit"]["aggregation_failure_count"] > 0
+                for row in cases
+            ),
             "sufficiency_incomplete_support_retry_count": sum(
                 row["sufficiency_audit"]["incomplete_support_retry_count"]
                 for row in cases
@@ -847,6 +860,16 @@ def audit_roots(
                 and per_arm["a4"]["sufficiency_support_surface_failure_case_count"] == 0
             )
         ),
+        "a4_sparse_support_aggregation_valid": (
+            "a4" not in per_arm
+            or per_arm["a4"]["sufficiency_aggregation_applicable_case_count"] == 0
+            or (
+                per_arm["a4"]["sufficiency_aggregation_applicable_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"]["sufficiency_aggregation_failure_case_count"]
+                == 0
+            )
+        ),
         "post_selection_only_divergence": (
             post_selection_balance["passed"]
             if post_selection_balance["applicable"]
@@ -896,6 +919,11 @@ def audit_roots(
                 and per_arm["a3"]["selected_locator_accounting_applicable"]
             ),
             "a4_sufficiency_transactions_valid": "a4" in per_arm,
+            "a4_sparse_support_aggregation_valid": bool(
+                "a4" in per_arm
+                and per_arm["a4"]["sufficiency_aggregation_applicable_case_count"]
+                > 0
+            ),
         },
         "post_selection_only_divergence": post_selection_balance,
         "matched_pre_treatment_responses": matched_response_gate,
@@ -1031,8 +1059,10 @@ def _sufficiency_transaction_audit(
             set(tuple(row.get("scope_occurrence_ids", ()) or ()))
             & set(tuple(row.get("out_of_scope_occurrence_ids", ()) or ()))
         )
-        or int(row.get("implicit_unknown_support_count", 0) or 0) != 0
         for row in support_surface_events
+    )
+    aggregation_events = tuple(
+        row for row in events if "aggregation_rule" in row
     )
     return {
         "activation_event_count": sum(
@@ -1054,6 +1084,11 @@ def _sufficiency_transaction_audit(
         ),
         "support_surface_applicable": bool(support_surface_events),
         "support_surface_failure_count": support_surface_failure_count,
+        "aggregation_applicable": bool(aggregation_events),
+        "aggregation_failure_count": sum(
+            not _sufficiency_aggregation_event_valid(row)
+            for row in aggregation_events
+        ),
         "incomplete_support_retry_count": sum(
             any(
                 str(error.get("code", "") or "")
@@ -1065,6 +1100,43 @@ def _sufficiency_transaction_audit(
             if row.get("type") == "decision_schema_error"
         ),
     }
+
+
+def _sufficiency_aggregation_event_valid(event: Mapping[str, Any]) -> bool:
+    if (
+        event.get("support_contract") != EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT
+        or event.get("aggregation_rule") != EXPECTED_SUFFICIENCY_AGGREGATION_RULE
+        or int(event.get("minimum_support_margin", 0) or 0)
+        != EXPECTED_SUFFICIENCY_SUPPORT_MARGIN
+    ):
+        return False
+    raw_counts = event.get("support_count_by_occurrence", {})
+    if not isinstance(raw_counts, Mapping) or not raw_counts:
+        return False
+    try:
+        counts = {str(key): int(value) for key, value in raw_counts.items()}
+        best_recorded = int(event.get("best_support_count", -1))
+        runner_up_recorded = int(event.get("runner_up_support_count", -1))
+    except (TypeError, ValueError):
+        return False
+    ordered = sorted(counts.items(), key=lambda item: -item[1])
+    best = ordered[0][1]
+    runner_up = ordered[1][1] if len(ordered) > 1 else 0
+    winners = [occurrence_id for occurrence_id, count in ordered if count == best]
+    expected_ids = (
+        winners
+        if best > 0
+        and len(winners) == 1
+        and best - runner_up >= EXPECTED_SUFFICIENCY_SUPPORT_MARGIN
+        else []
+    )
+    return bool(
+        best_recorded == best
+        and runner_up_recorded == runner_up
+        and list(event.get("sufficient_occurrence_ids", ()) or ()) == expected_ids
+        and str(event.get("verdict", "") or "")
+        == ("sufficient" if expected_ids else "insufficient")
+    )
 
 
 def _selected_locator_pairs(

@@ -15,6 +15,13 @@ import sys
 from typing import Any, Iterable, Mapping, Sequence
 
 
+EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT = (
+    "sparse_supported_rows_omission_is_unknown"
+)
+EXPECTED_SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
+EXPECTED_SUFFICIENCY_SUPPORT_MARGIN = 1
+
+
 FROZEN_CONFIG_KEYS = (
     "controller_mode",
     "controller_evidence_visibility",
@@ -527,8 +534,20 @@ def build_report(
             )
             or all(
                 row.get("sufficiency_support_complete") is True
-                and int(row.get("sufficiency_implicit_unknown_support_count", 0) or 0) == 0
-                and 1 <= int(row.get("sufficiency_scope_candidate_count", 0) or 0) <= 5
+                and 1
+                <= int(row.get("sufficiency_scope_candidate_count", 0) or 0)
+                <= 5
+                for row in by_arm["a4"].values()
+            )
+        ),
+        "a4_sparse_support_aggregation_valid": (
+            "a4" not in by_arm
+            or not any(
+                row.get("sufficiency_aggregation_valid") is not None
+                for row in by_arm["a4"].values()
+            )
+            or all(
+                row.get("sufficiency_aggregation_valid") is True
                 for row in by_arm["a4"].values()
             )
         ),
@@ -594,7 +613,7 @@ def build_report(
             "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
             "matched_pre_treatment_responses": "WP6 replays A2-clean into A3 until scoped resolution is persisted; WP8 replays A3 into A4 until the first scoped set is exposed; all later calls remain live",
             "sufficiency_transaction": "A4 records an explicit assessment before select/defer/no_match; structural validity checks ordering, visible bindings, and verdict-transition consistency but does not constrain endpoint values",
-            "sufficiency_support_surface": "A4.1 requires complete explicit support rows for the top-five in-scope candidates; out-of-scope candidates neither block nor become sufficient",
+            "sufficiency_support_surface": "A4 records sparse evidence-bound supported rows; omitted in-scope rows are mechanically unknown, and a unique supported-count leader with margin at least one is sufficient",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
             "budget_symmetry_passed": "configured semantic-round budgets are present, internally consistent, and equal across arms; realized semantic rounds remain a treatment cost endpoint",
         },
@@ -621,6 +640,10 @@ def build_report(
             "a4_sufficiency_transactions_valid": "a4" in by_arm,
             "a4_support_surface_complete": any(
                 row.get("sufficiency_support_complete") is not None
+                for row in by_arm.get("a4", {}).values()
+            ),
+            "a4_sparse_support_aggregation_valid": any(
+                row.get("sufficiency_aggregation_valid") is not None
                 for row in by_arm.get("a4", {}).values()
             ),
         },
@@ -1210,6 +1233,11 @@ def _aggregate_arm_result(
             row.get("sufficiency_support_complete")
             for row in rows
             if row.get("sufficiency_support_complete") is not None
+        ),
+        "sufficiency_aggregation_valid_rate": _mean_bool(
+            row.get("sufficiency_aggregation_valid")
+            for row in rows
+            if row.get("sufficiency_aggregation_valid") is not None
         ),
         "sufficiency_incomplete_support_retry_count": sum(
             int(row.get("sufficiency_incomplete_support_retry_count", 0) or 0)
@@ -2000,6 +2028,11 @@ def _sufficiency_transaction_metrics(
         for event in events
         if "support_complete" in event
     ]
+    aggregation_values = [
+        _sufficiency_aggregation_event_valid(event)
+        for event in events
+        if "aggregation_rule" in event
+    ]
     return {
         "sufficiency_activation_event_count": activations,
         "sufficiency_decision_event_count": len(events),
@@ -2029,6 +2062,14 @@ def _sufficiency_transaction_metrics(
         "sufficiency_support_complete": (
             all(support_complete_values) if support_complete_values else None
         ),
+        "sufficiency_aggregation_valid": (
+            all(aggregation_values) if aggregation_values else None
+        ),
+        "sufficiency_support_contract": final_event.get("support_contract"),
+        "sufficiency_aggregation_rule": final_event.get("aggregation_rule"),
+        "sufficiency_minimum_support_margin": final_event.get(
+            "minimum_support_margin"
+        ),
         "sufficiency_final_verdict": final_event.get("verdict"),
         "sufficiency_constraint_count": (
             len(tuple(final_event.get("constraints_checked", ()) or ()))
@@ -2051,6 +2092,43 @@ def _sufficiency_transaction_metrics(
             else None
         ),
     }
+
+
+def _sufficiency_aggregation_event_valid(event: Mapping[str, Any]) -> bool:
+    if (
+        event.get("support_contract") != EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT
+        or event.get("aggregation_rule") != EXPECTED_SUFFICIENCY_AGGREGATION_RULE
+        or int(event.get("minimum_support_margin", 0) or 0)
+        != EXPECTED_SUFFICIENCY_SUPPORT_MARGIN
+    ):
+        return False
+    raw_counts = event.get("support_count_by_occurrence", {})
+    if not isinstance(raw_counts, Mapping) or not raw_counts:
+        return False
+    try:
+        counts = {str(key): int(value) for key, value in raw_counts.items()}
+        best_recorded = int(event.get("best_support_count", -1))
+        runner_up_recorded = int(event.get("runner_up_support_count", -1))
+    except (TypeError, ValueError):
+        return False
+    ordered = sorted(counts.items(), key=lambda item: -item[1])
+    best = ordered[0][1]
+    runner_up = ordered[1][1] if len(ordered) > 1 else 0
+    winners = [occurrence_id for occurrence_id, count in ordered if count == best]
+    expected_ids = (
+        winners
+        if best > 0
+        and len(winners) == 1
+        and best - runner_up >= EXPECTED_SUFFICIENCY_SUPPORT_MARGIN
+        else []
+    )
+    return bool(
+        best_recorded == best
+        and runner_up_recorded == runner_up
+        and list(event.get("sufficient_occurrence_ids", ()) or ()) == expected_ids
+        and str(event.get("verdict", "") or "")
+        == ("sufficient" if expected_ids else "insufficient")
+    )
 
 
 def _state_sets(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:

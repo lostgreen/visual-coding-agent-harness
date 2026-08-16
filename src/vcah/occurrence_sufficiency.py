@@ -48,6 +48,9 @@ MAX_CONSTRAINTS = 6
 MAX_CONSTRAINT_DESCRIPTION_CHARS = 240
 MAX_EVIDENCE_PASSAGES = 3
 DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT = 5
+SUFFICIENCY_SUPPORT_CONTRACT = "sparse_supported_rows_omission_is_unknown"
+SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
+MIN_SUFFICIENCY_SUPPORT_MARGIN = 1
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,9 @@ class OccurrenceSufficiencyDecision:
     implicit_unknown_support_count: int
     scope_occurrence_ids: tuple[str, ...]
     out_of_scope_occurrence_ids: tuple[str, ...]
+    support_count_by_occurrence: tuple[tuple[str, int], ...]
+    best_support_count: int
+    runner_up_support_count: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +89,12 @@ class OccurrenceSufficiencyDecision:
             "scope_occurrence_ids": list(self.scope_occurrence_ids),
             "out_of_scope_occurrence_ids": list(self.out_of_scope_occurrence_ids),
             "support_complete": True,
+            "support_contract": SUFFICIENCY_SUPPORT_CONTRACT,
+            "aggregation_rule": SUFFICIENCY_AGGREGATION_RULE,
+            "minimum_support_margin": MIN_SUFFICIENCY_SUPPORT_MARGIN,
+            "support_count_by_occurrence": dict(self.support_count_by_occurrence),
+            "best_support_count": self.best_support_count,
+            "runner_up_support_count": self.runner_up_support_count,
         }
 
     def to_operation(self) -> dict[str, Any]:
@@ -133,7 +145,6 @@ def validate_sufficiency_operation(
     }
     seen_constraint_ids: set[str] = set()
     errors: list[dict[str, Any]] = []
-    incomplete_support: list[dict[str, Any]] = []
     for constraint_index, raw_constraint in enumerate(raw_constraints):
         if not isinstance(raw_constraint, Mapping):
             errors.append(
@@ -273,12 +284,13 @@ def validate_sufficiency_operation(
             for occurrence_id in viable_ids
             if occurrence_id not in seen_support_ids
         ]
-        if missing_ids:
-            incomplete_support.append(
+        for occurrence_id in missing_ids:
+            support_by_candidate[occurrence_id].append("unknown")
+            support_rows.append(
                 {
-                    "constraint_index": constraint_index,
-                    "constraint_id": constraint_id,
-                    "missing_occurrence_ids": missing_ids,
+                    "occurrence_id": occurrence_id,
+                    "status": "unknown",
+                    "evidence_passage_ids": [],
                 }
             )
         normalized_constraints.append(
@@ -287,36 +299,35 @@ def validate_sufficiency_operation(
                 "constraint_type": constraint_type,
                 "description": description,
                 "support": support_rows,
-                "implicit_unknown_occurrence_ids": [],
+                "implicit_unknown_occurrence_ids": missing_ids,
             }
         )
 
-    if incomplete_support:
-        errors.append(
-            _error(
-                "occurrence_sufficiency_support_incomplete",
-                operation_index,
-                set_id=set_id,
-                missing_by_constraint=incomplete_support,
-                missing_occurrence_ids=list(
-                    dict.fromkeys(
-                        occurrence_id
-                        for row in incomplete_support
-                        for occurrence_id in row["missing_occurrence_ids"]
-                    )
-                ),
-                required_occurrence_ids=list(viable_ids),
-            )
-        )
     if errors:
         return None, errors
-    sufficient_ids = tuple(
-        occurrence_id
-        for occurrence_id in viable_ids
-        if len(support_by_candidate[occurrence_id]) == len(normalized_constraints)
-        and all(
-            status == "supported" for status in support_by_candidate[occurrence_id]
+    support_counts = tuple(
+        (
+            occurrence_id,
+            sum(
+                status == "supported"
+                for status in support_by_candidate[occurrence_id]
+            ),
         )
+        for occurrence_id in viable_ids
+    )
+    ranked_counts = sorted(
+        support_counts,
+        key=lambda item: (-item[1], viable_ids.index(item[0])),
+    )
+    best_support_count = ranked_counts[0][1] if ranked_counts else 0
+    runner_up_support_count = ranked_counts[1][1] if len(ranked_counts) > 1 else 0
+    sufficient_ids = (
+        (ranked_counts[0][0],)
+        if ranked_counts
+        and best_support_count > 0
+        and best_support_count - runner_up_support_count
+        >= MIN_SUFFICIENCY_SUPPORT_MARGIN
+        else ()
     )
     expected_verdict = "sufficient" if sufficient_ids else "insufficient"
     return (
@@ -327,7 +338,10 @@ def validate_sufficiency_operation(
             sufficient_occurrence_ids=sufficient_ids,
             declared_verdict=verdict,
             verdict_normalized=verdict != expected_verdict,
-            implicit_unknown_support_count=0,
+            implicit_unknown_support_count=sum(
+                len(tuple(row.get("implicit_unknown_occurrence_ids", ()) or ()))
+                for row in normalized_constraints
+            ),
             scope_occurrence_ids=viable_ids,
             out_of_scope_occurrence_ids=tuple(
                 dict.fromkeys(
@@ -336,6 +350,9 @@ def validate_sufficiency_operation(
                     if str(value)
                 )
             ),
+            support_count_by_occurrence=support_counts,
+            best_support_count=best_support_count,
+            runner_up_support_count=runner_up_support_count,
         ),
         [],
     )

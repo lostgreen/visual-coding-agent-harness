@@ -514,25 +514,18 @@ def test_a4_finalization_retry_forbids_defer() -> None:
     assert "Do not use defer during finalization" in feedback["instruction"]
 
 
-def test_a4_incomplete_support_retry_requests_exact_missing_rows() -> None:
+def test_a4_retry_explains_sparse_support_contract() -> None:
     feedback = _control_retry_feedback(
-        (
-            {
-                "code": "occurrence_sufficiency_support_incomplete",
-                "constraint_id": "target_identity",
-                "missing_occurrence_ids": ["occ_2", "occ_3"],
-            },
-        ),
+        ({"code": "occurrence_sufficiency_assessment_required"},),
         revision=2,
         previous_feedback={},
         force_finalize=True,
     )
 
     instruction = feedback["instruction"]
-    assert "incomplete serialization" in instruction
-    assert "explicit status=unknown" in instruction
-    assert "occ_2" in instruction
-    assert "occ_3" in instruction
+    assert "Report a supported row only" in instruction
+    assert "normalizes omissions to unknown" in instruction
+    assert "supported-constraint count leads the runner-up" in instruction
     assert "select or no_match" in instruction
 
 
@@ -1222,6 +1215,14 @@ def test_a4_orders_sufficiency_selection_locator_and_answer(
     assert len(sufficiency) == 1
     assert sufficiency[0]["verdict"] == "sufficient"
     assert sufficiency[0]["sufficient_occurrence_ids"] == ["occ_2"]
+    assert sufficiency[0]["support_contract"] == (
+        "sparse_supported_rows_omission_is_unknown"
+    )
+    assert sufficiency[0]["aggregation_rule"] == "unique_supported_count_margin"
+    assert sufficiency[0]["support_count_by_occurrence"] == {
+        "occ_1": 0,
+        "occ_2": 1,
+    }
     assert decisions[1]["occurrence_selection_committed"] is True
     assert decisions[2]["action"] == "investigate"
     assert decisions[3]["action"] == "answer"
