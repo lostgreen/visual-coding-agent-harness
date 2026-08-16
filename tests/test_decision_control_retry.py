@@ -8,6 +8,7 @@ import pytest
 
 from vcah.interactive_agents import WorkspaceReasoner
 from vcah.investigator import InvestigationReport, ObservationAttempt
+from vcah.occurrence_agent import OccurrenceResolutionStateV2
 from vcah.multiround import (
     InvestigationTask,
     ReasonerDecision,
@@ -451,6 +452,66 @@ def test_occurrence_retry_feedback_rejects_contradictory_gate_state() -> None:
             ],
         }
     ]
+
+
+def test_a4_retry_feedback_uses_persisted_insufficient_verdict() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                ],
+            },
+        )
+    )
+    assert state.apply_ops(
+        (
+            {
+                "op": "assess_sufficiency",
+                "set_id": "attempt_sufficiency",
+                "verdict": "insufficient",
+                "constraints_checked": [
+                    {
+                        "constraint_id": "identity",
+                        "constraint_type": "identity",
+                        "description": "target identity",
+                        "support": [
+                            {
+                                "occurrence_id": "occ_1",
+                                "status": "unknown",
+                                "evidence_passage_ids": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+    )["accepted"] is True
+
+    feedback = _control_retry_feedback(
+        ({"code": "occurrence_sufficiency_already_assessed"},),
+        revision=2,
+        previous_feedback={},
+        occurrence_state=state,
+        force_finalize=True,
+    )
+
+    assert "Do not answer, reassess, select, or defer" in feedback["instruction"]
+    assert "exactly one no_match" in feedback["instruction"]
+
+
+def test_a4_finalization_retry_forbids_defer() -> None:
+    feedback = _control_retry_feedback(
+        ({"code": "occurrence_sufficiency_resolution_required"},),
+        revision=2,
+        previous_feedback={},
+        force_finalize=True,
+    )
+
+    assert "select or no_match" in feedback["instruction"]
+    assert "Do not use defer during finalization" in feedback["instruction"]
 
 
 def test_occurrence_locator_terminal_outcomes_are_explicit_and_exclusive() -> None:

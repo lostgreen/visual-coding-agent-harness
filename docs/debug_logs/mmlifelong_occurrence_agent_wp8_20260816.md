@@ -18,9 +18,10 @@ accuracy when the correct occurrence is present.
 - The assessment and terminal resolution may be submitted in one atomic
   occurrence transaction, but the assessment must precede the terminal op.
 - After selection, A4 reuses the repaired A3 locator actionability policy.
-- The runtime validates structure, visible foreign keys, ordering, and verdict
-  consistency. It does not determine semantic sufficiency and does not enforce
-  a favorable endpoint.
+- The model determines every semantic support status. The runtime validates
+  structure, visible foreign keys, and ordering, fills omitted candidate rows
+  as explicit `unknown`, and mechanically derives the verdict from that support
+  matrix. It does not enforce a favorable endpoint.
 
 ## Matched-control boundary
 
@@ -64,10 +65,41 @@ False-commit, no-match, OSA, and locator-use values are endpoints, not gates.
   passed.
 - Full suite: 472 passed.
 
+## Full-cohort blocker and repair
+
+The first frozen39 A4 replay completed 39 runtime records but produced only 30
+answers. Eight cases ended with unresolved occurrence transactions; one more
+used `decision` as the answer-text field and lost the otherwise recoverable
+answer during normalization. The failure was after matched exposure, not in
+replay identity or the no-oracle boundary.
+
+The structured failure fingerprint was:
+
+- omitted candidate support rows rejected the whole atomic assessment;
+- declared verdicts could disagree with the matrix-derived verdict;
+- finalization retry guidance still allowed `defer`, although only `select` or
+  `no_match` can close the active set;
+- the answer parser did not accept the observed string-valued `decision` alias.
+
+The repair keeps semantic decisions model-owned while making the transaction
+mechanically total:
+
+- allow `action` as a question-critical constraint type;
+- normalize omitted candidate rows to `unknown` and record the normalization;
+- derive and record the verdict from the normalized support matrix, retaining
+  the declared verdict for diagnostics;
+- make retry feedback state-aware and require `select` or `no_match` at
+  finalization;
+- accept a string-valued `decision` as an answer alias only when
+  `action=answer` and `answer` is absent.
+
+Focused tests pass 78/78 and the updated full suite passes 476/476. The invalid
+39-case A4 root is structural-debug evidence only and must never be judged.
+
 ## Next actions
 
-1. Commit and push the isolated WP8 implementation.
+1. Commit and push the lifecycle repair.
 2. Pull and run the full suite on the KML development machine.
-3. Run a matched A3-record/A4-replay structural canary.
-4. If all structural gates pass, launch the frozen 39-case matched run and
-   judge only after runtime completion.
+3. Run a failed-category matched A3-record/A4-replay structural canary.
+4. If all structural gates pass, rerun both frozen39 arms at the same repaired
+   commit into new roots and judge only the new matched records.

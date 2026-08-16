@@ -1923,6 +1923,13 @@ def _sufficiency_transaction_metrics(
         "sufficiency_ordering_failure_count": ordering_failures,
         "sufficiency_verdict_transition_failure_count": transition_failures,
         "sufficiency_transaction_valid": valid,
+        "sufficiency_verdict_normalization_count": sum(
+            bool(event.get("verdict_normalized")) for event in events
+        ),
+        "sufficiency_implicit_unknown_support_count": sum(
+            int(event.get("implicit_unknown_support_count", 0) or 0)
+            for event in events
+        ),
         "sufficiency_final_verdict": final_event.get("verdict"),
         "sufficiency_constraint_count": (
             len(tuple(final_event.get("constraints_checked", ()) or ()))

@@ -335,6 +335,25 @@ def test_reasoner_repairs_schema_invalid_json_object(tmp_path: Path) -> None:
     assert rows[-1]["format_repaired"] is True
 
 
+def test_reasoner_accepts_decision_as_answer_text_alias(tmp_path: Path) -> None:
+    api = FakeAPI((json.dumps({"action": "answer", "decision": "B"}),))
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="What does the person raise?",
+        options={"A": "A book", "B": "A cup"},
+        remaining_budget=0,
+        force_finalize=True,
+        mechanical_status={},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    assert decision.action == "answer"
+    assert decision.answer == "B. A cup"
+    assert len(api.calls) == 1
+
+
 def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> None:
     api = FakeAPI((json.dumps({"action": "answer", "answer": "B"}),))
     reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")

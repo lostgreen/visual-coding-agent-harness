@@ -1011,6 +1011,13 @@ def _sufficiency_transaction_audit(
         "event_count_mismatch": len(events) != assessment_op_count,
         "ordering_failure_count": ordering_failure_count,
         "verdict_transition_failure_count": verdict_transition_failure_count,
+        "verdict_normalization_count": sum(
+            bool(row.get("verdict_normalized")) for row in events
+        ),
+        "implicit_unknown_support_count": sum(
+            int(row.get("implicit_unknown_support_count", 0) or 0)
+            for row in events
+        ),
     }
 
 

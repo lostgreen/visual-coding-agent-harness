@@ -635,6 +635,12 @@ class OccurrenceResolutionStateV2:
                     "code": "occurrence_sufficiency_already_assessed",
                     "occurrence_op_index": index,
                     "set_id": set_id,
+                    "current_sufficiency_verdict": (
+                        occurrence_set.sufficiency.verdict
+                    ),
+                    "sufficient_occurrence_ids": list(
+                        occurrence_set.sufficiency.sufficient_occurrence_ids
+                    ),
                 }
             decision, errors = validate_sufficiency_operation(
                 operation,
@@ -668,6 +674,16 @@ class OccurrenceResolutionStateV2:
                     "occurrence_op_index": index,
                     "set_id": set_id,
                     "op": op,
+                    "current_sufficiency_verdict": (
+                        occurrence_set.sufficiency.verdict
+                        if occurrence_set.sufficiency is not None
+                        else None
+                    ),
+                    "sufficient_occurrence_ids": list(
+                        occurrence_set.sufficiency.sufficient_occurrence_ids
+                        if occurrence_set.sufficiency is not None
+                        else ()
+                    ),
                 }
             occurrence_set.selected_occurrence_ids = ()
             for candidate_id, status in tuple(occurrence_set.states.items()):
@@ -709,6 +725,12 @@ class OccurrenceResolutionStateV2:
                     "occurrence_op_index": index,
                     "set_id": set_id,
                     "occurrence_id": occurrence_id,
+                    "current_sufficiency_verdict": (
+                        occurrence_set.sufficiency.verdict
+                    ),
+                    "sufficient_occurrence_ids": list(
+                        occurrence_set.sufficiency.sufficient_occurrence_ids
+                    ),
                 }
             if self.sufficiency_enabled and (
                 occurrence_set.sufficiency is not None
@@ -720,6 +742,12 @@ class OccurrenceResolutionStateV2:
                     "occurrence_op_index": index,
                     "set_id": set_id,
                     "occurrence_id": occurrence_id,
+                    "current_sufficiency_verdict": (
+                        occurrence_set.sufficiency.verdict
+                    ),
+                    "sufficient_occurrence_ids": list(
+                        occurrence_set.sufficiency.sufficient_occurrence_ids
+                    ),
                 }
             if occurrence_set.resolution == "no_match":
                 return {

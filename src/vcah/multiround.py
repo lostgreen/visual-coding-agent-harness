@@ -1188,6 +1188,8 @@ class VirtualVideoMultiRoundDriver:
                                 schema_errors,
                                 revision=document.revision,
                                 previous_feedback=feedback,
+                                occurrence_state=occurrence_state,
+                                force_finalize=force_finalize,
                             )
                             _append_contradictory_gate_state(
                                 trace,
@@ -1223,6 +1225,8 @@ class VirtualVideoMultiRoundDriver:
                         schema_errors,
                         revision=document.revision,
                         previous_feedback=feedback,
+                        occurrence_state=occurrence_state,
+                        force_finalize=force_finalize,
                     )
                     _append_contradictory_gate_state(
                         trace,
@@ -1304,6 +1308,16 @@ class VirtualVideoMultiRoundDriver:
                                 else 0
                             ),
                             "verdict": str(operation.get("verdict", "") or ""),
+                            "declared_verdict": str(
+                                operation.get("declared_verdict", "") or ""
+                            ),
+                            "verdict_normalized": bool(
+                                operation.get("verdict_normalized")
+                            ),
+                            "implicit_unknown_support_count": int(
+                                operation.get("implicit_unknown_support_count", 0)
+                                or 0
+                            ),
                             "constraints_checked": [
                                 str(row.get("constraint_id", "") or "")
                                 for row in constraints
@@ -1559,6 +1573,8 @@ class VirtualVideoMultiRoundDriver:
                             workspace_errors,
                             revision=document.revision,
                             previous_feedback=feedback,
+                            occurrence_state=occurrence_state,
+                            force_finalize=force_finalize,
                         )
                         _append_contradictory_gate_state(
                             trace,
@@ -1595,6 +1611,8 @@ class VirtualVideoMultiRoundDriver:
                     workspace_errors,
                     revision=document.revision,
                     previous_feedback=feedback,
+                    occurrence_state=occurrence_state,
+                    force_finalize=force_finalize,
                 )
                 _append_contradictory_gate_state(
                     trace,
@@ -2934,6 +2952,10 @@ def _control_retry_feedback(
     *,
     revision: int,
     previous_feedback: Mapping[str, Any],
+    occurrence_state: OccurrenceResolutionStateV1
+    | OccurrenceResolutionStateV2
+    | None = None,
+    force_finalize: bool = False,
 ) -> dict[str, Any]:
     codes = [str(error.get("code", "decision_schema_invalid")) for error in errors]
     must_answer_codes = sorted(
@@ -3002,10 +3024,57 @@ def _control_retry_feedback(
         repair_rules.append(
             "Do not answer. Resolve only the active scoped occurrence set: return action=update_workspace with one or more select operations, or one no_match operation when none of that set's candidates fit. Every operation must copy the active set_id and visible occurrence_id exactly."
         )
-    if any(code.startswith("occurrence_sufficiency_") for code in codes):
-        repair_rules.append(
-            "Do not answer. Begin occurrence_ops with assess_sufficiency for the active set. Check one to six question-critical constraints across every viable candidate, bind each supported status to visible evidence_passage_ids, then select only a candidate supported on every constraint; otherwise follow the insufficient verdict with defer or no_match."
+    sufficiency_errors = tuple(
+        error
+        for error in errors
+        if str(error.get("code", "")).startswith("occurrence_sufficiency_")
+    )
+    if sufficiency_errors:
+        active_sufficiency = None
+        if isinstance(occurrence_state, OccurrenceResolutionStateV2):
+            active = occurrence_state.active_set
+            if active is not None:
+                active_sufficiency = active.sufficiency
+        error_verdict = next(
+            (
+                str(error.get("current_sufficiency_verdict", "") or "")
+                for error in sufficiency_errors
+                if error.get("current_sufficiency_verdict")
+            ),
+            "",
         )
+        sufficient_ids = tuple(
+            dict.fromkeys(
+                str(value)
+                for error in sufficiency_errors
+                for value in tuple(
+                    error.get("sufficient_occurrence_ids", ()) or ()
+                )
+                if str(value)
+            )
+        )
+        if active_sufficiency is not None:
+            error_verdict = active_sufficiency.verdict
+            sufficient_ids = active_sufficiency.sufficient_occurrence_ids
+        if error_verdict == "sufficient" and sufficient_ids:
+            repair_rules.append(
+                "Do not answer or reassess sufficiency. The active assessment is sufficient; return action=update_workspace and select only one occurrence_id from its sufficient_occurrence_ids."
+            )
+        elif error_verdict == "insufficient":
+            repair_rules.append(
+                "Do not answer, reassess, select, or defer. The active assessment is insufficient; return action=update_workspace with exactly one no_match operation for the active set."
+            )
+        else:
+            terminal_rule = (
+                "End the same transaction with exactly one terminal select or no_match operation: use select only when the normalized matrix supports that candidate on every constraint; otherwise use no_match. Do not use defer during finalization."
+                if force_finalize
+                or "occurrence_sufficiency_resolution_required" in codes
+                else "End the same transaction with a compatible select, defer, or no_match operation."
+            )
+            repair_rules.append(
+                "Do not answer. Submit one assess_sufficiency operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. Bind supported rows to visible evidence_passage_ids; omitted candidates are mechanically recorded as unknown and Runtime derives the verdict from the matrix. "
+                + terminal_rule
+            )
     if "occurrence_search_required" in codes:
         repair_rules.append(
             "The active scoped set was deferred. Do not answer; issue a refined search_caption investigation, or persist no_match for that exact set_id when further search cannot resolve it."

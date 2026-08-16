@@ -765,6 +765,49 @@ def test_a4_supported_constraint_must_bind_visible_candidate_passage() -> None:
     )
 
 
+def test_a4_normalizes_omitted_support_and_derives_verdict() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                    {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                ],
+            },
+        )
+    )
+    assessment = _sufficiency_op(verdict="insufficient")
+    assessment["constraints_checked"][0]["constraint_type"] = "action"
+    assessment["constraints_checked"][0]["support"] = [
+        assessment["constraints_checked"][0]["support"][0]
+    ]
+
+    result = state.apply_ops(
+        (
+            assessment,
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+
+    assert result["accepted"] is True
+    normalized = result["applied"][0]
+    assert normalized["declared_verdict"] == "insufficient"
+    assert normalized["verdict"] == "sufficient"
+    assert normalized["verdict_normalized"] is True
+    assert normalized["implicit_unknown_support_count"] == 1
+    assert normalized["constraints_checked"][0]["support"][1] == {
+        "occurrence_id": "occ_2",
+        "status": "unknown",
+        "evidence_passage_ids": [],
+    }
+
+
 def test_a3_requires_selected_locator_binding_before_answer() -> None:
     state = OccurrenceResolutionStateV2()
     state.sync_sets(

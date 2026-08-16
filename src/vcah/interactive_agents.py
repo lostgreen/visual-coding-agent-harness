@@ -339,10 +339,17 @@ def _normalize_decision(
     action = str(payload.get("action", "") or "").strip().casefold()
     if action not in _DECISION_ACTIONS:
         action = "update_workspace"
+    answer = payload.get("answer", "")
+    if (
+        action == "answer"
+        and not answer
+        and isinstance(payload.get("decision"), str)
+    ):
+        answer = payload["decision"]
     return {
         "action": action,
         "tasks": tuple(tasks),
-        "answer": payload.get("answer", ""),
+        "answer": answer,
         "citations": tuple(str(item) for item in payload.get("citations", ()) or () if str(item).strip()),
         "workspace_ops": tuple(dict(item) for item in raw_workspace_ops if isinstance(item, Mapping)),
         "occurrence_ops": tuple(
@@ -2363,7 +2370,10 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
                 '"constraint_type":"identity","description":"question-critical requirement",'
                 '"support":[{"occurrence_id":"occ_visible_id","status":"supported|partial|unknown|contradicted",'
                 '"evidence_passage_ids":["visible_passage_id"]}]}]},{"op":"select|defer|no_match",'
-                '"set_id":"attempt_visible_id","occurrence_id":"occ_visible_id only for select"}]}.\n'
+                '"set_id":"attempt_visible_id","occurrence_id":"occ_visible_id only for select"}]}. '
+                'Constraint types are action, identity, event, relation, temporal, state, attribute, object, location, '
+                'order, or outcome. Omitted viable candidates are recorded as unknown. Runtime derives the verdict '
+                'from the support matrix; finish finalization with select or no_match, never defer.\n'
             )
         else:
             occurrence_selection_schema = (

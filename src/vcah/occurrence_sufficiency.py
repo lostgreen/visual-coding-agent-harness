@@ -11,6 +11,7 @@ CONSTRAINT_SUPPORT_STATUSES = frozenset(
 )
 QUESTION_CRITICAL_CONSTRAINT_TYPES = frozenset(
     {
+        "action",
         "identity",
         "event",
         "relation",
@@ -34,6 +35,9 @@ class OccurrenceSufficiencyDecision:
     verdict: str
     constraints_checked: tuple[dict[str, Any], ...]
     sufficient_occurrence_ids: tuple[str, ...]
+    declared_verdict: str
+    verdict_normalized: bool
+    implicit_unknown_support_count: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +54,9 @@ class OccurrenceSufficiencyDecision:
                 for constraint in self.constraints_checked
             ],
             "sufficient_occurrence_ids": list(self.sufficient_occurrence_ids),
+            "declared_verdict": self.declared_verdict,
+            "verdict_normalized": self.verdict_normalized,
+            "implicit_unknown_support_count": self.implicit_unknown_support_count,
         }
 
     def to_operation(self) -> dict[str, Any]:
@@ -233,16 +240,19 @@ def validate_sufficiency_operation(
                     "evidence_passage_ids": list(evidence_ids),
                 }
             )
-        missing_ids = sorted(viable_set - seen_support_ids)
-        if missing_ids:
-            errors.append(
-                _error(
-                    "occurrence_sufficiency_support_incomplete",
-                    operation_index,
-                    set_id=set_id,
-                    constraint_index=constraint_index,
-                    missing_occurrence_ids=missing_ids,
-                )
+        missing_ids = [
+            occurrence_id
+            for occurrence_id in viable_ids
+            if occurrence_id not in seen_support_ids
+        ]
+        for occurrence_id in missing_ids:
+            support_by_candidate[occurrence_id].append("unknown")
+            support_rows.append(
+                {
+                    "occurrence_id": occurrence_id,
+                    "status": "unknown",
+                    "evidence_passage_ids": [],
+                }
             )
         normalized_constraints.append(
             {
@@ -250,6 +260,7 @@ def validate_sufficiency_operation(
                 "constraint_type": constraint_type,
                 "description": description,
                 "support": support_rows,
+                "implicit_unknown_occurrence_ids": missing_ids,
             }
         )
 
@@ -264,22 +275,18 @@ def validate_sufficiency_operation(
         )
     )
     expected_verdict = "sufficient" if sufficient_ids else "insufficient"
-    if verdict != expected_verdict:
-        return None, [
-            _error(
-                "occurrence_sufficiency_verdict_inconsistent",
-                operation_index,
-                set_id=set_id,
-                verdict=verdict,
-                mechanically_supported_occurrence_ids=list(sufficient_ids),
-            )
-        ]
     return (
         OccurrenceSufficiencyDecision(
             set_id=set_id,
-            verdict=verdict,
+            verdict=expected_verdict,
             constraints_checked=tuple(normalized_constraints),
             sufficient_occurrence_ids=sufficient_ids,
+            declared_verdict=verdict,
+            verdict_normalized=verdict != expected_verdict,
+            implicit_unknown_support_count=sum(
+                len(tuple(row.get("implicit_unknown_occurrence_ids", ()) or ()))
+                for row in normalized_constraints
+            ),
         ),
         [],
     )
