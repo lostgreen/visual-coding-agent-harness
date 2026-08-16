@@ -24,6 +24,26 @@ QUESTION_CRITICAL_CONSTRAINT_TYPES = frozenset(
         "outcome",
     }
 )
+REFERENT_IDENTIFYING_CONSTRAINT_TYPES = frozenset(
+    {
+        "action",
+        "identity",
+        "event",
+        "relation",
+        "temporal",
+        "location",
+        "order",
+    }
+)
+ANSWER_TARGET_CONSTRAINT_TYPES = frozenset(
+    {"state", "attribute", "object", "outcome"}
+)
+if (
+    REFERENT_IDENTIFYING_CONSTRAINT_TYPES | ANSWER_TARGET_CONSTRAINT_TYPES
+    != QUESTION_CRITICAL_CONSTRAINT_TYPES
+    or REFERENT_IDENTIFYING_CONSTRAINT_TYPES & ANSWER_TARGET_CONSTRAINT_TYPES
+):
+    raise RuntimeError("occurrence sufficiency constraint taxonomy is incomplete")
 MAX_CONSTRAINTS = 6
 MAX_CONSTRAINT_DESCRIPTION_CHARS = 240
 MAX_EVIDENCE_PASSAGES = 3

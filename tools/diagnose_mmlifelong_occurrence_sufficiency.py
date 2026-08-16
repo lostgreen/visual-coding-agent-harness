@@ -12,6 +12,11 @@ import random
 from statistics import mean
 from typing import Any, Iterable, Mapping, Sequence
 
+from vcah.occurrence_sufficiency import (
+    ANSWER_TARGET_CONSTRAINT_TYPES,
+    REFERENT_IDENTIFYING_CONSTRAINT_TYPES,
+)
+
 
 BLOCKER_CATEGORIES = (
     "explicit_unsupported",
@@ -34,6 +39,8 @@ STRONG_SUPPORT_GAP = 0.15
 STRONG_POSITIVE_TYPE_FRACTION = 2 / 3
 STRONG_BOOTSTRAP_POSITIVE_PROBABILITY = 0.90
 TOP_K_RETENTION_THRESHOLD = 0.95
+TARGET_MIN_RECALL = 0.70
+TARGET_MAX_FALSE_COMMIT = 0.20
 
 
 def load_diagnostic_cases(
@@ -269,6 +276,7 @@ def build_support_discrimination(
         if gap is not None:
             eligible_gaps.append(gap)
         type_rows[constraint_type] = {
+            "semantic_group": _constraint_semantic_group(constraint_type),
             "gold": gold,
             "non_gold": non_gold,
             "support_gap": gap,
@@ -389,6 +397,352 @@ def build_gold_at_k(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_aggregation_rule_sweep(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    observed_selection_rows: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Replay fixed support matrices with deterministic, gold-blind rules."""
+    snapshots = tuple(_final_sufficiency_snapshot(case) for case in cases)
+    if len(snapshots) != len(cases):
+        raise ValueError("every diagnosis case must have a sufficiency snapshot")
+
+    max_constraint_count = max(
+        (
+            int(candidate["constraint_count"])
+            for snapshot in snapshots
+            for candidate in snapshot["candidates"]
+        ),
+        default=0,
+    )
+    ratio_thresholds = sorted(
+        {
+            0.0,
+            1.0,
+            *(
+                float(candidate["supported_ratio"])
+                for snapshot in snapshots
+                for candidate in snapshot["candidates"]
+            ),
+        }
+    )
+    rule_specs: list[dict[str, Any]] = [
+        {
+            "rule_id": "R0",
+            "variant_id": "R0:all_supported",
+            "description": "all constraints are supported",
+            "parameters": {},
+        },
+        {
+            "rule_id": "R1",
+            "variant_id": "R1:supported_or_partial",
+            "description": "all constraints are supported or partial",
+            "parameters": {},
+        },
+        {
+            "rule_id": "R2",
+            "variant_id": "R2:referent_all_supported",
+            "description": "all present referent-identifying constraints are supported",
+            "parameters": {},
+        },
+    ]
+    rule_specs.extend(
+        {
+            "rule_id": "R3",
+            "variant_id": f"R3:min_supported={minimum}",
+            "description": "no contradiction and at least m supported constraints",
+            "parameters": {"minimum_supported": minimum},
+        }
+        for minimum in range(1, max_constraint_count + 1)
+    )
+    rule_specs.extend(
+        {
+            "rule_id": "R4",
+            "variant_id": f"R4:min_ratio={threshold:.6g}",
+            "description": "supported-constraint ratio meets theta",
+            "parameters": {"minimum_supported_ratio": threshold},
+        }
+        for threshold in ratio_thresholds
+    )
+    rule_specs.extend(
+        (
+            {
+                "rule_id": "R5",
+                "variant_id": "R5:support_margin=1",
+                "description": "unique best candidate leads runner-up by one support",
+                "parameters": {"minimum_support_margin": 1},
+            },
+            {
+                "rule_id": "R6",
+                "variant_id": "R6:referent_and_margin",
+                "description": "R2 referent sufficiency and R5 comparative margin",
+                "parameters": {"minimum_support_margin": 1},
+            },
+        )
+    )
+
+    variants: list[dict[str, Any]] = []
+    for spec in rule_specs:
+        rows = tuple(
+            _simulate_snapshot(snapshot, spec["rule_id"], spec["parameters"])
+            for snapshot in snapshots
+        )
+        metrics = _selection_metrics(rows)
+        target_met = bool(
+            _at_least(metrics.get("recall"), TARGET_MIN_RECALL)
+            and metrics.get("false_commit_rate") is not None
+            and float(metrics["false_commit_rate"]) <= TARGET_MAX_FALSE_COMMIT
+        )
+        variants.append({**spec, "metrics": metrics, "target_met": target_met})
+
+    r0 = next(row for row in variants if row["rule_id"] == "R0")
+    observed_a4 = tuple(
+        row
+        for row in observed_selection_rows
+        if str(row.get("arm", "") or "") == "a4"
+    )
+    observed_metrics = _selection_metrics(observed_a4) if observed_a4 else None
+    parity_fields = ("case_count", "tp", "fp", "fn", "tn")
+    parity = {
+        "applicable": observed_metrics is not None,
+        "passed": (
+            all(
+                r0["metrics"].get(field) == observed_metrics.get(field)
+                for field in parity_fields
+            )
+            if observed_metrics is not None
+            else None
+        ),
+        "fields": list(parity_fields),
+        "replayed": {field: r0["metrics"].get(field) for field in parity_fields},
+        "observed": (
+            {field: observed_metrics.get(field) for field in parity_fields}
+            if observed_metrics is not None
+            else None
+        ),
+    }
+    target_points = [row["variant_id"] for row in variants if row["target_met"]]
+    return {
+        "unit": "final_sufficiency_event_per_case",
+        "selection_policy": (
+            "choose the highest-ranked eligible candidate; R5/R6 require a unique "
+            "support-count winner"
+        ),
+        "case_count": len(snapshots),
+        "source_event_count": sum(
+            int(snapshot["source_event_count"]) for snapshot in snapshots
+        ),
+        "final_event_count": len(snapshots),
+        "max_constraint_count": max_constraint_count,
+        "target": {
+            "minimum_recall": TARGET_MIN_RECALL,
+            "maximum_false_commit_rate": TARGET_MAX_FALSE_COMMIT,
+        },
+        "target_achievable": bool(target_points),
+        "target_working_points": target_points,
+        "r0_observed_parity": parity,
+        "variants": variants,
+        "best_f1": _best_rule(variants, "f1"),
+        "best_balanced_accuracy": _best_rule(variants, "balanced_accuracy"),
+        "best_youden_j": _best_rule(variants, "youden_j"),
+    }
+
+
+def _final_sufficiency_snapshot(case: Mapping[str, Any]) -> dict[str, Any]:
+    events = tuple(case.get("events", ()) or ())
+    if not events:
+        raise ValueError(f"case {case.get('case_id')} has no sufficiency event")
+    event = events[-1]
+    set_id = str(event.get("set_id", "") or "")
+    candidate_sets = dict(case.get("candidate_sets", {}) or {})
+    ranked, _ = _ranked_candidates(tuple(candidate_sets.get(set_id, ()) or ()))
+    support_ids = tuple(
+        dict.fromkeys(
+            str(row.get("occurrence_id", "") or "")
+            for constraint in tuple(event.get("constraints_checked", ()) or ())
+            if isinstance(constraint, Mapping)
+            for row in tuple(constraint.get("support", ()) or ())
+            if isinstance(row, Mapping) and str(row.get("occurrence_id", "") or "")
+        )
+    )
+    recorded_scope = tuple(
+        str(value)
+        for value in tuple(event.get("scope_occurrence_ids", ()) or ())
+        if str(value)
+    )
+    scope_ids = recorded_scope or support_ids
+    scope_set = set(scope_ids)
+    ranked_ids = [
+        str(candidate.get("occurrence_id", "") or "")
+        for candidate in ranked
+        if str(candidate.get("occurrence_id", "") or "") in scope_set
+    ]
+    missing_metadata = scope_set - set(ranked_ids)
+    if missing_metadata:
+        raise ValueError(
+            f"missing candidate metadata for case {case.get('case_id')} set {set_id}"
+        )
+    constraints = tuple(event.get("constraints_checked", ()) or ())
+    candidates: list[dict[str, Any]] = []
+    for rank, occurrence_id in enumerate(ranked_ids, start=1):
+        statuses: list[dict[str, str]] = []
+        for constraint in constraints:
+            if not isinstance(constraint, Mapping):
+                continue
+            match = next(
+                (
+                    row
+                    for row in tuple(constraint.get("support", ()) or ())
+                    if isinstance(row, Mapping)
+                    and str(row.get("occurrence_id", "") or "") == occurrence_id
+                ),
+                None,
+            )
+            if match is None:
+                raise ValueError(
+                    f"incomplete reconstructed support for case {case.get('case_id')}"
+                )
+            statuses.append(
+                {
+                    "constraint_type": str(
+                        constraint.get("constraint_type", "unknown") or "unknown"
+                    ).casefold(),
+                    "status": str(match.get("status", "unknown") or "unknown").casefold(),
+                }
+            )
+        supported_count = sum(row["status"] == "supported" for row in statuses)
+        candidates.append(
+            {
+                "occurrence_id": occurrence_id,
+                "rank": rank,
+                "statuses": statuses,
+                "constraint_count": len(statuses),
+                "supported_count": supported_count,
+                "supported_ratio": _ratio(supported_count, len(statuses)) or 0.0,
+            }
+        )
+    clues = tuple(case.get("clues", ()) or ())
+    metadata_by_id = {
+        str(candidate.get("occurrence_id", "") or ""): candidate
+        for candidate in ranked
+    }
+    gold_ids = {
+        occurrence_id
+        for occurrence_id in ranked_ids
+        if _candidate_is_gold(metadata_by_id[occurrence_id], clues)
+    }
+    return {
+        "case_id": str(case.get("case_id", "") or ""),
+        "set_id": set_id,
+        "source_event_count": len(events),
+        "candidates": candidates,
+        "gold_occurrence_ids": gold_ids,
+    }
+
+
+def _simulate_snapshot(
+    snapshot: Mapping[str, Any], rule_id: str, parameters: Mapping[str, Any]
+) -> dict[str, Any]:
+    candidates = tuple(snapshot.get("candidates", ()) or ())
+    selected_id: str | None = None
+    if rule_id in {"R5", "R6"}:
+        winner = _comparative_winner(candidates)
+        if winner is not None and (
+            rule_id == "R5" or _candidate_eligible(winner, "R2", parameters)
+        ):
+            selected_id = str(winner["occurrence_id"])
+    else:
+        selected = next(
+            (
+                candidate
+                for candidate in candidates
+                if _candidate_eligible(candidate, rule_id, parameters)
+            ),
+            None,
+        )
+        if selected is not None:
+            selected_id = str(selected["occurrence_id"])
+    gold_ids = set(snapshot.get("gold_occurrence_ids", ()) or ())
+    return {
+        "case_id": str(snapshot.get("case_id", "") or ""),
+        "candidate_recall_resolved_set": bool(gold_ids),
+        "final_resolution": "selected" if selected_id is not None else "no_match",
+        "osa_strict": selected_id in gold_ids if selected_id is not None else False,
+    }
+
+
+def _candidate_eligible(
+    candidate: Mapping[str, Any], rule_id: str, parameters: Mapping[str, Any]
+) -> bool:
+    statuses = tuple(candidate.get("statuses", ()) or ())
+    raw_statuses = tuple(str(row.get("status", "") or "") for row in statuses)
+    if not raw_statuses:
+        return False
+    if rule_id == "R0":
+        return all(status == "supported" for status in raw_statuses)
+    if rule_id == "R1":
+        return all(status in {"supported", "partial"} for status in raw_statuses)
+    if rule_id == "R2":
+        referent = tuple(
+            str(row.get("status", "") or "")
+            for row in statuses
+            if str(row.get("constraint_type", "") or "")
+            in REFERENT_IDENTIFYING_CONSTRAINT_TYPES
+        )
+        return bool(referent) and all(status == "supported" for status in referent)
+    if rule_id == "R3":
+        return "contradicted" not in raw_statuses and int(
+            candidate.get("supported_count", 0) or 0
+        ) >= int(parameters["minimum_supported"])
+    if rule_id == "R4":
+        return float(candidate.get("supported_ratio", 0.0) or 0.0) >= float(
+            parameters["minimum_supported_ratio"]
+        )
+    raise ValueError(f"unsupported aggregation rule: {rule_id}")
+
+
+def _comparative_winner(
+    candidates: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    if not candidates:
+        return None
+    ordered = sorted(
+        candidates,
+        key=lambda row: (
+            -int(row.get("supported_count", 0) or 0),
+            int(row.get("rank", 0) or 0),
+        ),
+    )
+    best = int(ordered[0].get("supported_count", 0) or 0)
+    runner_up = (
+        int(ordered[1].get("supported_count", 0) or 0)
+        if len(ordered) > 1
+        else 0
+    )
+    if best <= 0 or best - runner_up < 1:
+        return None
+    if len(ordered) > 1 and best == runner_up:
+        return None
+    return ordered[0]
+
+
+def _best_rule(
+    variants: Sequence[Mapping[str, Any]], metric: str
+) -> dict[str, Any] | None:
+    eligible = [
+        row
+        for row in variants
+        if isinstance(dict(row.get("metrics", {}) or {}).get(metric), (int, float))
+    ]
+    if not eligible:
+        return None
+    best = max(eligible, key=lambda row: float(row["metrics"][metric]))
+    return {
+        "variant_id": best["variant_id"],
+        "value": best["metrics"][metric],
+    }
+
+
 def build_selection_diagnostics(
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -425,24 +779,33 @@ def build_diagnosis(
         seed=seed,
     )
     gold_at_k = build_gold_at_k(cases)
-    support_positive = bool(discrimination["strong_gold_non_gold_discrimination"])
+    selection_diagnostics = build_selection_diagnostics(selection_rows)
+    aggregation_sweep = build_aggregation_rule_sweep(
+        cases,
+        observed_selection_rows=selection_rows,
+    )
+    target_achievable = bool(aggregation_sweep["target_achievable"])
     recommendation = (
-        "PROCEED_A4_1_SUPPORT_SURFACE_CALIBRATION"
-        if support_positive
-        else "STOP_THRESHOLD_CALIBRATION_REDESIGN_EVIDENCE"
+        "PROCEED_WITH_OFFLINE_SELECTED_AGGREGATION_RULE"
+        if target_achievable
+        else "REPRESENTATION_INSUFFICIENT_FOR_TARGET_WORKING_POINT"
     )
     return {
-        "schema_version": "OccurrenceSufficiencyOfflineDiagnosisV1",
+        "schema_version": "OccurrenceSufficiencyOfflineDiagnosisV2",
         "case_count": len(cases),
         "bootstrap_samples": bootstrap_samples,
         "seed": seed,
         "d1_blocker_decomposition": blockers,
         "d2_support_discrimination": discrimination,
         "d3_gold_at_k": gold_at_k,
-        "selection_diagnostics": build_selection_diagnostics(selection_rows),
+        "d4_aggregation_rule_sweep": aggregation_sweep,
+        "selection_diagnostics": selection_diagnostics,
         "recommendation": {
             "decision": recommendation,
-            "support_surface_calibration_authorized": support_positive,
+            "target_working_point_found": target_achievable,
+            "target_working_points": aggregation_sweep["target_working_points"],
+            "a4_1_support_surface_calibration_authorized": False,
+            "a4_2_requires_separate_representation_test": not target_achievable,
             "top_k_authorized": gold_at_k["recommended_top_k"] is not None,
             "recommended_top_k": gold_at_k["recommended_top_k"],
             "runtime_or_model_calls_used": False,
@@ -454,6 +817,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     d1 = report["d1_blocker_decomposition"]
     d2 = report["d2_support_discrimination"]
     d3 = report["d3_gold_at_k"]
+    d4 = report["d4_aggregation_rule_sweep"]
     recommendation = report["recommendation"]
     lines = [
         "# WP8 Sufficiency Offline Diagnosis",
@@ -505,14 +869,17 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"{_fmt(d2['case_cluster_bootstrap']['positive_probability'])}."
             ),
             "",
-            "| Constraint | Gold supported | Non-gold supported | Gap | Gold explicit | Non-gold explicit |",
-            "|---|---:|---:|---:|---:|---:|",
+            "| Constraint | Group | Gold supported | Non-gold supported | Gap | Gold explicit | Non-gold explicit |",
+            "|---|---|---:|---:|---:|---:|---:|",
         ]
     )
     for constraint_type, row in d2["by_constraint_type"].items():
         lines.append(
-            f"| {constraint_type} | {_fmt(row['gold']['supported_rate'])} | "
-            f"{_fmt(row['non_gold']['supported_rate'])} | "
+            f"| {constraint_type} | {row['semantic_group']} | "
+            f"{_fraction(row['gold']['counts']['supported'], row['gold']['total'])} "
+            f"({_fmt(row['gold']['supported_rate'])}) | "
+            f"{_fraction(row['non_gold']['counts']['supported'], row['non_gold']['total'])} "
+            f"({_fmt(row['non_gold']['supported_rate'])}) | "
             f"{_fmt(row['support_gap'])} | "
             f"{_fmt(row['gold']['explicit_coverage'])} | "
             f"{_fmt(row['non_gold']['explicit_coverage'])} |"
@@ -540,6 +907,38 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"min={distribution['min']}, median={distribution['median']}, "
                 f"p75={distribution['p75']}, max={distribution['max']}, "
                 f"mean={_fmt(distribution['mean'])}."
+            ),
+            "",
+            "## D4: Aggregation-rule sweep",
+            "",
+            (
+                f"R0 observed parity: **{_pass_fail(d4['r0_observed_parity']['passed'])}**. "
+                f"Target recall >= {_fmt(d4['target']['minimum_recall'])} and "
+                f"false commit <= {_fmt(d4['target']['maximum_false_commit_rate'])}: "
+                f"**{'ACHIEVABLE' if d4['target_achievable'] else 'NOT ACHIEVABLE'}**."
+            ),
+            "",
+            "| Variant | Precision | Recall | Specificity | Youden J | F1 | Balanced acc. | False commit | False abstention | Target |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for variant in d4["variants"]:
+        metrics = variant["metrics"]
+        lines.append(
+            f"| {variant['variant_id']} | {_fmt(metrics['precision'])} | "
+            f"{_fmt(metrics['recall'])} | {_fmt(metrics['specificity'])} | "
+            f"{_fmt(metrics['youden_j'])} | {_fmt(metrics['f1'])} | "
+            f"{_fmt(metrics['balanced_accuracy'])} | "
+            f"{_fmt(metrics['false_commit_rate'])} | "
+            f"{_fmt(metrics['false_abstention_rate'])} | "
+            f"{'yes' if variant['target_met'] else 'no'} |"
+        )
+    lines.extend(
+        [
+            "",
+            (
+                "The sweep replays fixed final support matrices only. It does not "
+                "counterfactually alter search, evidence acquisition, or model outputs."
             ),
             "",
             "## Selection diagnostics",
@@ -886,6 +1285,15 @@ def _support_category(status: str, *, implicit: bool) -> str:
     return "declared_unknown"
 
 
+def _constraint_semantic_group(constraint_type: str) -> str:
+    normalized = str(constraint_type or "").strip().casefold()
+    if normalized in REFERENT_IDENTIFYING_CONSTRAINT_TYPES:
+        return "referent_identifying"
+    if normalized in ANSWER_TARGET_CONSTRAINT_TYPES:
+        return "answer_target"
+    return "unmapped"
+
+
 def _blocker_category(support_category: str) -> str:
     return (
         "explicit_unsupported"
@@ -974,6 +1382,11 @@ def _selection_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     precision = _ratio(tp, tp + fp)
     recall = _ratio(tp, tp + fn)
     specificity = _ratio(tn, candidate_absent)
+    youden_j = (
+        recall + specificity - 1
+        if recall is not None and specificity is not None
+        else None
+    )
     return {
         "case_count": len(rows),
         "candidate_present_count": candidate_present,
@@ -986,6 +1399,7 @@ def _selection_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "recall": recall,
         "f1": _f1(precision, recall),
         "specificity": specificity,
+        "youden_j": youden_j,
         "balanced_accuracy": _mean_optional((recall, specificity)),
         "false_commit_rate": _ratio(
             sum(
@@ -1024,6 +1438,11 @@ def _always_abstain_metrics(
         "recall": recall,
         "f1": 0.0 if candidate_present else None,
         "specificity": specificity,
+        "youden_j": (
+            recall + specificity - 1
+            if recall is not None and specificity is not None
+            else None
+        ),
         "balanced_accuracy": _mean_optional((recall, specificity)),
         "false_commit_rate": 0.0 if candidate_absent else None,
         "no_match_accuracy": specificity,
@@ -1122,6 +1541,16 @@ def _at_least(value: float | None, threshold: float) -> bool:
 
 def _fmt(value: Any) -> str:
     return "NA" if value is None else f"{float(value):.4f}"
+
+
+def _fraction(numerator: int, denominator: int) -> str:
+    return f"{int(numerator)}/{int(denominator)}"
+
+
+def _pass_fail(value: Any) -> str:
+    if value is None:
+        return "NA"
+    return "PASS" if value is True else "FAIL"
 
 
 def _read_json(path: Path) -> dict[str, Any]:

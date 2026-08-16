@@ -254,6 +254,10 @@ def test_support_discrimination_uses_gold_labels_and_case_bootstrap() -> None:
         ]
         == 1
     )
+    assert (
+        result["by_constraint_type"]["identity"]["semantic_group"]
+        == "referent_identifying"
+    )
     assert result["case_cluster_bootstrap"]["positive_probability"] == 1.0
     assert result["strong_gold_non_gold_discrimination"] is True
 
@@ -309,3 +313,73 @@ def test_selection_metrics_compare_observed_with_always_abstain() -> None:
     assert result["a4"]["observed"]["balanced_accuracy"] == 0.5
     assert result["a4"]["always_abstain"]["f1"] == 0.0
     assert result["a4"]["always_abstain"]["no_match_accuracy"] == 1.0
+
+
+def test_aggregation_rule_sweep_replays_r0_and_finds_referent_working_point() -> None:
+    present_gold = "present-gold"
+    present_other = "present-other"
+    present = _case(
+        "present",
+        "set-present",
+        _event(
+            "set-present",
+            [
+                _constraint(
+                    "identity",
+                    {present_gold: "supported", present_other: "unknown"},
+                ),
+                _constraint(
+                    "outcome",
+                    {present_gold: "unknown", present_other: "unknown"},
+                ),
+            ],
+        ),
+    )
+    absent_gold = "absent-gold"
+    absent_other = "absent-other"
+    absent = _case(
+        "absent",
+        "set-absent",
+        _event(
+            "set-absent",
+            [
+                _constraint(
+                    "identity",
+                    {absent_gold: "unknown", absent_other: "unknown"},
+                ),
+                _constraint(
+                    "outcome",
+                    {absent_gold: "unknown", absent_other: "unknown"},
+                ),
+            ],
+        ),
+    )
+    absent["clues"] = ((80.0, 90.0),)
+    observed = (
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+    )
+
+    result = DIAGNOSIS.build_aggregation_rule_sweep(
+        (present, absent), observed_selection_rows=observed
+    )
+
+    variants = {row["variant_id"]: row for row in result["variants"]}
+    assert result["r0_observed_parity"]["passed"] is True
+    assert variants["R0:all_supported"]["metrics"]["tp"] == 0
+    assert variants["R2:referent_all_supported"]["metrics"]["tp"] == 1
+    assert variants["R2:referent_all_supported"]["metrics"]["tn"] == 1
+    assert variants["R2:referent_all_supported"]["target_met"] is True
+    assert any(row["rule_id"] == "R3" for row in result["variants"])
+    assert any(row["rule_id"] == "R4" for row in result["variants"])
+    assert any(row["rule_id"] == "R5" for row in result["variants"])

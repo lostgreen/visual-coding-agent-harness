@@ -561,6 +561,7 @@ def build_report(
             for row in by_arm.get(arm, {}).values()
         ),
     }
+    analysis_warnings = _analysis_warnings(primary_analysis["arms"])
     return {
         "schema_version": "MMLifelongOccurrenceAgentReportV3",
         "primary_endpoint_note": (
@@ -627,6 +628,7 @@ def build_report(
         "structural_gate_passed": all(
             value is not False for value in structural_checks.values()
         ),
+        "analysis_warnings": analysis_warnings,
         "judge_models": sorted(
             {
                 str(row["judge_model"])
@@ -779,6 +781,39 @@ def _aggregate_arm(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         selected_rows=selected_rows,
         final_resolution_counts=final_resolution_counts,
     )
+
+
+def _analysis_warnings(
+    arm_metrics: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for arm, metrics in sorted(arm_metrics.items(), key=lambda item: _arm_sort_key(item[0])):
+        scored_n = int(metrics.get("scored_n", 0) or 0)
+        if scored_n and int(metrics.get("verified_correct_count", 0) or 0) == 0:
+            warnings.append(
+                {
+                    "code": "zero_verified_correct",
+                    "arm": arm,
+                    "scored_n": scored_n,
+                    "message": (
+                        "No judged-correct answer was runtime-verified; treat raw QA "
+                        "gains as ungrounded until replicated with verified evidence."
+                    ),
+                }
+            )
+        if scored_n and int(metrics.get("grounded_correct_ref300_count", 0) or 0) == 0:
+            warnings.append(
+                {
+                    "code": "zero_grounded_correct_ref300",
+                    "arm": arm,
+                    "scored_n": scored_n,
+                    "message": (
+                        "No judged-correct answer satisfies ref@300 grounding; this is "
+                        "an analysis warning, not a structural validity failure."
+                    ),
+                }
+            )
+    return warnings
 
 
 def build_decomposition(
@@ -1058,14 +1093,23 @@ def _aggregate_arm_result(
         "verified_correct_rate": _mean_bool(
             row.get("verified_correct") for row in scored
         ),
+        "verified_correct_count": sum(
+            row.get("verified_correct") is True for row in scored
+        ),
         "correct_and_ref_300_rate": _mean_bool(
             row.get("correct_and_ref_300") for row in scored
         ),
         "grounded_correct_ref300_rate": _mean_bool(
             row.get("grounded_correct_ref300") for row in scored
         ),
+        "grounded_correct_ref300_count": sum(
+            row.get("grounded_correct_ref300") is True for row in scored
+        ),
         "grounded_correct_bound_visual_rate": _mean_bool(
             row.get("grounded_correct_bound_visual") for row in scored
+        ),
+        "grounded_correct_bound_visual_count": sum(
+            row.get("grounded_correct_bound_visual") is True for row in scored
         ),
         "candidate_recall": _mean_bool(row.get("candidate_recall") for row in rows),
         "legacy_candidate_recall": _mean_bool(
@@ -2767,6 +2811,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             )
             + " |"
         )
+    if report.get("analysis_warnings"):
+        lines.extend(["", "## Analysis Warnings", ""])
+        for warning in report["analysis_warnings"]:
+            lines.append(
+                f"- `{warning['code']}` ({warning['arm']}, n={warning['scored_n']}): "
+                f"{warning['message']}"
+            )
     lines.extend(["", "## Paired Comparisons", ""])
     for name, comparison in report["comparisons"].items():
         lines.append(

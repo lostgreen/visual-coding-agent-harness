@@ -146,6 +146,11 @@ def test_report_separates_pre_treatment_divergence_and_a2_osa() -> None:
     assert report["text_budget_parity"]["comparable_n"] == 2
     assert report["text_budget_parity"]["passed"] is True
     assert report["structural_gate_passed"] is True
+    assert report["arms"]["a1"]["verified_correct_count"] == 0
+    assert any(
+        warning["code"] == "zero_verified_correct" and warning["arm"] == "a1"
+        for warning in report["analysis_warnings"]
+    )
 
 
 def test_candidate_recall_is_scoped_to_the_resolved_set() -> None:
