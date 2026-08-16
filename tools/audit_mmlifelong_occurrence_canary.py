@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-SUPPORTED_ARMS = {"a0", "a1-flat", "a1", "a2", "a2-clean", "a3"}
-SCOPED_ARMS = {"a2-clean", "a3"}
+SUPPORTED_ARMS = {"a0", "a1-flat", "a1", "a2", "a2-clean", "a3", "a4"}
+SCOPED_ARMS = {"a2-clean", "a3", "a4"}
 EXPECTED_LIFECYCLE_RETRY_CODES = {
     "occurrence_selection_required",
     "occurrence_answer_required_after_selection",
@@ -22,6 +22,27 @@ EXPECTED_LIFECYCLE_RETRY_CODES = {
     "occurrence_locator_inspection_required",
     "occurrence_locator_binding_required",
     "occurrence_locator_unbound_window_forbidden",
+    "occurrence_sufficiency_resolution_required",
+    "occurrence_sufficiency_not_enabled",
+    "occurrence_sufficiency_forbids_occurrence_id",
+    "occurrence_sufficiency_already_assessed",
+    "occurrence_sufficiency_assessment_required",
+    "occurrence_sufficiency_requires_insufficient",
+    "occurrence_sufficiency_forbids_selection",
+    "occurrence_sufficiency_candidate_not_supported",
+    "occurrence_sufficiency_verdict_invalid",
+    "occurrence_sufficiency_constraints_required",
+    "occurrence_sufficiency_constraint_must_be_object",
+    "occurrence_sufficiency_constraint_id_invalid",
+    "occurrence_sufficiency_constraint_type_invalid",
+    "occurrence_sufficiency_constraint_description_invalid",
+    "occurrence_sufficiency_support_must_be_object",
+    "occurrence_sufficiency_support_candidate_invalid",
+    "occurrence_sufficiency_support_status_invalid",
+    "occurrence_sufficiency_evidence_not_visible",
+    "occurrence_sufficiency_supported_requires_evidence",
+    "occurrence_sufficiency_support_incomplete",
+    "occurrence_sufficiency_verdict_inconsistent",
 }
 
 
@@ -121,6 +142,7 @@ def audit_roots(
                 for operation in tuple(row.get("occurrence_ops", ()) or ())
                 if isinstance(operation, Mapping)
             )
+            sufficiency_audit = _sufficiency_transaction_audit(decisions, trace)
             prior_selection_indices = tuple(
                 index
                 for index, row in enumerate(decisions)
@@ -343,6 +365,7 @@ def audit_roots(
                         _operation_name(operation) == "no_match"
                         for _, operation in accepted_ops
                     ),
+                    "sufficiency_audit": sufficiency_audit,
                     "multi_selection_sets": sum(
                         len(value["selected_occurrence_ids"]) > 1
                         for value in scoped_sets.values()
@@ -477,6 +500,27 @@ def audit_roots(
             ),
             "duplicate_resolution_activation_case_count": sum(
                 row["resolution_activation_events"] > 1 for row in cases
+            ),
+            "sufficiency_activation_case_count": sum(
+                row["sufficiency_audit"]["activation_event_count"] > 0
+                for row in cases
+            ),
+            "duplicate_sufficiency_activation_case_count": sum(
+                row["sufficiency_audit"]["activation_event_count"] > 1
+                for row in cases
+            ),
+            "sufficiency_decision_event_count": sum(
+                row["sufficiency_audit"]["decision_event_count"] for row in cases
+            ),
+            "sufficiency_transaction_failure_case_count": sum(
+                row["sufficiency_audit"]["event_shape_failure_count"] > 0
+                or row["sufficiency_audit"]["event_count_mismatch"]
+                or row["sufficiency_audit"]["ordering_failure_count"] > 0
+                or row["sufficiency_audit"][
+                    "verdict_transition_failure_count"
+                ]
+                > 0
+                for row in cases
             ),
             "activation_threshold_failure_case_count": sum(
                 not row["resolution_activation_threshold_valid"]
@@ -748,16 +792,36 @@ def audit_roots(
             per_arm[arm]["resolution_missing_before_answer_case_count"] == 0
             for arm in scoped_arms
         ),
+        "actionable_selected_locators_accounted": all(
+            per_arm[arm]["selected_locator_accounting_failure_case_count"] == 0
+            and per_arm[arm]["selected_locator_silent_drop_count"] == 0
+            and per_arm[arm]["selected_locator_accounting_conflict_count"] == 0
+            for arm in ("a3", "a4")
+            if arm in per_arm
+        ),
         "a3_selected_locators_accounted": (
             "a3" not in per_arm
             or (
-                per_arm["a3"][
-                    "selected_locator_accounting_failure_case_count"
-                ]
+                per_arm["a3"]["selected_locator_accounting_failure_case_count"]
                 == 0
                 and per_arm["a3"]["selected_locator_silent_drop_count"] == 0
-                and per_arm["a3"][
-                    "selected_locator_accounting_conflict_count"
+                and per_arm["a3"]["selected_locator_accounting_conflict_count"]
+                == 0
+            )
+        ),
+        "a4_sufficiency_transactions_valid": (
+            "a4" not in per_arm
+            or (
+                per_arm["a4"]["sufficiency_activation_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"][
+                    "duplicate_sufficiency_activation_case_count"
+                ]
+                == 0
+                and per_arm["a4"]["sufficiency_decision_event_count"]
+                >= int(expected_cases)
+                and per_arm["a4"][
+                    "sufficiency_transaction_failure_case_count"
                 ]
                 == 0
             )
@@ -801,12 +865,16 @@ def audit_roots(
         "schema_version": "MMLifelongOccurrenceCanaryAuditV5",
         "per_arm": per_arm,
         "check_applicability": {
+            "actionable_selected_locators_accounted": any(
+                arm in per_arm
+                and per_arm[arm]["selected_locator_accounting_applicable"]
+                for arm in ("a3", "a4")
+            ),
             "a3_selected_locators_accounted": bool(
                 "a3" in per_arm
-                and per_arm["a3"][
-                    "selected_locator_accounting_applicable"
-                ]
-            )
+                and per_arm["a3"]["selected_locator_accounting_applicable"]
+            ),
+            "a4_sufficiency_transactions_valid": "a4" in per_arm,
         },
         "post_selection_only_divergence": post_selection_balance,
         "matched_pre_treatment_responses": matched_response_gate,
@@ -862,12 +930,88 @@ def _scoped_operation_valid(
         return False
     op = _operation_name(operation)
     occurrence_id = str(operation.get("occurrence_id", "") or "")
-    if op in {"defer", "no_match"}:
+    if op in {"defer", "no_match", "assess_sufficiency"}:
         return not occurrence_id
     return bool(
         occurrence_id
         and occurrence_id in scoped_sets[set_id].get("candidate_ids", set())
     )
+
+
+def _sufficiency_transaction_audit(
+    decisions: tuple[Mapping[str, Any], ...],
+    trace: tuple[Mapping[str, Any], ...],
+) -> dict[str, Any]:
+    events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_sufficiency_decision"
+    )
+    events_by_set: dict[str, list[tuple[tuple[int, int], Mapping[str, Any]]]] = {}
+    for row in events:
+        set_id = str(row.get("set_id", "") or "")
+        events_by_set.setdefault(set_id, []).append(
+            (
+                (
+                    int(row.get("round", 0) or 0),
+                    int(row.get("occurrence_op_index", 0) or 0),
+                ),
+                row,
+            )
+        )
+    assessment_op_count = 0
+    terminal_op_count = 0
+    ordering_failure_count = 0
+    verdict_transition_failure_count = 0
+    for decision in decisions:
+        if decision.get("occurrence_ops_accepted") is False:
+            continue
+        round_id = int(decision.get("round", 0) or 0)
+        operations = tuple(decision.get("occurrence_ops", ()) or ())
+        assessment_op_count += sum(
+            isinstance(operation, Mapping)
+            and _operation_name(operation) == "assess_sufficiency"
+            for operation in operations
+        )
+        for operation_index, operation in enumerate(operations):
+            if not isinstance(operation, Mapping):
+                continue
+            op = _operation_name(operation)
+            if op not in {"select", "defer", "no_match"}:
+                continue
+            terminal_op_count += 1
+            set_id = _operation_set_id(operation)
+            prior = [
+                (position, event)
+                for position, event in events_by_set.get(set_id, ())
+                if position < (round_id, operation_index)
+            ]
+            if not prior:
+                ordering_failure_count += 1
+                continue
+            verdict = str(max(prior, key=lambda item: item[0])[1].get("verdict", ""))
+            if (op == "select" and verdict != "sufficient") or (
+                op in {"defer", "no_match"} and verdict != "insufficient"
+            ):
+                verdict_transition_failure_count += 1
+    event_shape_failure_count = sum(
+        str(row.get("verdict", "")) not in {"sufficient", "insufficient"}
+        or int(row.get("candidate_count", 0) or 0) < 1
+        or not tuple(row.get("constraints_checked", ()) or ())
+        for row in events
+    )
+    return {
+        "activation_event_count": sum(
+            row.get("type") == "occurrence_sufficiency_activated" for row in trace
+        ),
+        "decision_event_count": len(events),
+        "assessment_op_count": assessment_op_count,
+        "terminal_op_count": terminal_op_count,
+        "event_shape_failure_count": event_shape_failure_count,
+        "event_count_mismatch": len(events) != assessment_op_count,
+        "ordering_failure_count": ordering_failure_count,
+        "verdict_transition_failure_count": verdict_transition_failure_count,
+    }
 
 
 def _selected_locator_pairs(
@@ -987,45 +1131,83 @@ def _post_selection_only_divergence(
 def _matched_pre_treatment_response_gate(
     cases: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> dict[str, Any]:
-    clean = cases.get("a2-clean", {})
-    actionable = cases.get("a3", {})
-    applicable = bool(clean or actionable)
-    if not applicable:
+    pair_specs = (
+        (
+            "a2-clean",
+            "a3",
+            "scoped_occurrence_resolution_persisted",
+        ),
+        (
+            "a3",
+            "a4",
+            "scoped_occurrence_resolution_exposed",
+        ),
+    )
+    applicable_specs = [
+        spec
+        for spec in pair_specs
+        if any(
+            row.get("mode") == "record" for row in cases.get(spec[0], {}).values()
+        )
+        or any(
+            row.get("mode") == "replay" for row in cases.get(spec[1], {}).values()
+        )
+    ]
+    if not applicable_specs:
         return {
             "applicable": False,
             "passed": None,
             "paired_case_count": 0,
             "mismatch_case_ids": [],
+            "comparisons": [],
         }
-    paired = sorted(set(clean) & set(actionable))
-    mismatches = []
-    for case_id in paired:
-        recorded = clean[case_id]
-        replayed = actionable[case_id]
-        if not all(
-            (
-                recorded.get("mode") == "record",
-                replayed.get("mode") == "replay",
-                dict(recorded.get("recorded", {}) or {})
-                == dict(replayed.get("replayed", {}) or {}),
-                int(recorded.get("mismatch_count", 0) or 0) == 0,
-                int(replayed.get("mismatch_count", 0) or 0) == 0,
-                recorded.get("active") is False,
-                replayed.get("active") is False,
-                recorded.get("deactivation_reason")
-                == "scoped_occurrence_resolution_persisted",
-                replayed.get("deactivation_reason")
-                == "scoped_occurrence_resolution_persisted",
-            )
-        ):
-            mismatches.append(case_id)
+    comparisons = []
+    all_mismatches: list[str] = []
+    paired_count = 0
+    all_passed = True
+    for record_arm, replay_arm, boundary in applicable_specs:
+        recorded_cases = cases.get(record_arm, {})
+        replayed_cases = cases.get(replay_arm, {})
+        paired = sorted(set(recorded_cases) & set(replayed_cases))
+        mismatches = []
+        for case_id in paired:
+            recorded = recorded_cases[case_id]
+            replayed = replayed_cases[case_id]
+            if not all(
+                (
+                    recorded.get("mode") == "record",
+                    replayed.get("mode") == "replay",
+                    dict(recorded.get("recorded", {}) or {})
+                    == dict(replayed.get("replayed", {}) or {}),
+                    int(recorded.get("mismatch_count", 0) or 0) == 0,
+                    int(replayed.get("mismatch_count", 0) or 0) == 0,
+                    recorded.get("active") is False,
+                    replayed.get("active") is False,
+                    recorded.get("deactivation_reason") == boundary,
+                    replayed.get("deactivation_reason") == boundary,
+                )
+            ):
+                mismatches.append(case_id)
+        passed = bool(paired) and set(recorded_cases) == set(replayed_cases) and not mismatches
+        all_passed &= passed
+        paired_count += len(paired)
+        all_mismatches.extend(f"{record_arm}-{replay_arm}:{value}" for value in mismatches)
+        comparisons.append(
+            {
+                "record_arm": record_arm,
+                "replay_arm": replay_arm,
+                "deactivation_boundary": boundary,
+                "passed": passed,
+                "paired_case_count": len(paired),
+                "mismatch_case_ids": mismatches,
+            }
+        )
     return {
         "applicable": True,
-        "passed": bool(paired)
-        and set(clean) == set(actionable)
-        and not mismatches,
-        "paired_case_count": len(paired),
-        "mismatch_case_ids": mismatches,
+        "passed": all_passed,
+        "paired_case_count": paired_count,
+        "mismatch_case_ids": all_mismatches,
+        "comparisons": comparisons,
     }
 
 

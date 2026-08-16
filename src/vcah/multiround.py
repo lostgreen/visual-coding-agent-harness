@@ -64,6 +64,11 @@ _MUST_NOT_ANSWER_OCCURRENCE_CODES = frozenset(
         "occurrence_resolution_required",
         "occurrence_search_required",
         "occurrence_no_match_required_at_finalization",
+        "occurrence_sufficiency_resolution_required",
+        "occurrence_sufficiency_assessment_required",
+        "occurrence_sufficiency_requires_insufficient",
+        "occurrence_sufficiency_forbids_selection",
+        "occurrence_sufficiency_candidate_not_supported",
         "occurrence_locator_inspection_required",
         "occurrence_locator_binding_required",
         "occurrence_locator_unbound_window_forbidden",
@@ -454,8 +459,10 @@ class VirtualVideoMultiRoundDriver:
         occurrence_state: OccurrenceResolutionStateV1 | OccurrenceResolutionStateV2 | None
         if self.occurrence_method_arm == "a2":
             occurrence_state = OccurrenceResolutionStateV1()
-        elif self.occurrence_method_arm in {"a2-clean", "a3"}:
-            occurrence_state = OccurrenceResolutionStateV2()
+        elif self.occurrence_method_arm in {"a2-clean", "a3", "a4"}:
+            occurrence_state = OccurrenceResolutionStateV2(
+                sufficiency_enabled=self.occurrence_method_arm == "a4"
+            )
         else:
             occurrence_state = None
 
@@ -495,6 +502,7 @@ class VirtualVideoMultiRoundDriver:
         treatment_exposed_recorded = False
         resolution_activated_recorded = False
         arbitration_activated_recorded = False
+        sufficiency_activated_recorded = False
         if isinstance(occurrence_state, OccurrenceResolutionStateV1):
             occurrence_state.save(occurrence_state_path)
 
@@ -763,6 +771,20 @@ class VirtualVideoMultiRoundDriver:
                             }
                         )
                         arbitration_activated_recorded = True
+                    if (
+                        occurrence_state.sufficiency_enabled
+                        and not sufficiency_activated_recorded
+                    ):
+                        trace.append(
+                            {
+                                "type": "occurrence_sufficiency_activated",
+                                "round": round_id,
+                                "method_arm": self.occurrence_method_arm,
+                                "active_set_id": occurrence_state.active_set_id,
+                                "candidate_count": occurrence_state.candidate_count,
+                            }
+                        )
+                        sufficiency_activated_recorded = True
                     occurrence_state.save(occurrence_state_path)
                     status["occurrence_resolution_state"] = occurrence_state.to_dict()
                     locator_statuses = _occurrence_locator_statuses(
@@ -775,7 +797,7 @@ class VirtualVideoMultiRoundDriver:
                         round_id=round_id,
                         locator_rows=locator_statuses,
                     )
-                    if self.occurrence_method_arm == "a3" and locator_statuses:
+                    if self.occurrence_method_arm in {"a3", "a4"} and locator_statuses:
                         locator_statuses = tuple(
                             {
                                 **row,
@@ -1027,7 +1049,7 @@ class VirtualVideoMultiRoundDriver:
                             )
                         )
                     if (
-                        self.occurrence_method_arm == "a3"
+                        self.occurrence_method_arm in {"a3", "a4"}
                         and isinstance(occurrence_state, OccurrenceResolutionStateV2)
                     ):
                         schema_errors.extend(
@@ -1254,6 +1276,47 @@ class VirtualVideoMultiRoundDriver:
                         decision.occurrence_ops
                     )
                     occurrence_state.save(occurrence_state_path)
+                for operation_index, operation in enumerate(
+                    tuple(occurrence_apply_result.get("applied", ()) or ())
+                ):
+                    if not isinstance(operation, Mapping) or str(
+                        operation.get("op", "") or ""
+                    ) != "assess_sufficiency":
+                        continue
+                    constraints = tuple(
+                        row
+                        for row in tuple(
+                            operation.get("constraints_checked", ()) or ()
+                        )
+                        if isinstance(row, Mapping)
+                    )
+                    trace.append(
+                        {
+                            "type": "occurrence_sufficiency_decision",
+                            "round": round_id,
+                            "occurrence_op_index": operation_index,
+                            "set_id": str(operation.get("set_id", "") or ""),
+                            "candidate_count": (
+                                occurrence_state.candidate_count
+                                if isinstance(
+                                    occurrence_state, OccurrenceResolutionStateV2
+                                )
+                                else 0
+                            ),
+                            "verdict": str(operation.get("verdict", "") or ""),
+                            "constraints_checked": [
+                                str(row.get("constraint_id", "") or "")
+                                for row in constraints
+                            ],
+                            "constraint_types": [
+                                str(row.get("constraint_type", "") or "")
+                                for row in constraints
+                            ],
+                            "sufficient_occurrence_ids": list(
+                                operation.get("sufficient_occurrence_ids", ()) or ()
+                            ),
+                        }
+                    )
                 if (
                     isinstance(occurrence_state, OccurrenceResolutionStateV2)
                     and occurrence_apply_result["accepted"]
@@ -2376,11 +2439,16 @@ def _scoped_occurrence_answer_errors(
         ) or (decision.action == "answer" and decision.answer):
             return [
                 {
-                    "code": "occurrence_resolution_required",
+                    "code": (
+                        "occurrence_sufficiency_resolution_required"
+                        if state.sufficiency_enabled
+                        else "occurrence_resolution_required"
+                    ),
                     "set_id": active.set_id,
                     "viable_occurrence_count": len(active.viable_occurrence_ids),
                     "selection_must_precede_answer": True,
                     "no_match_allowed": True,
+                    "sufficiency_required": state.sufficiency_required,
                 }
             ]
         return []
@@ -2933,6 +3001,10 @@ def _control_retry_feedback(
     if "occurrence_resolution_required" in codes:
         repair_rules.append(
             "Do not answer. Resolve only the active scoped occurrence set: return action=update_workspace with one or more select operations, or one no_match operation when none of that set's candidates fit. Every operation must copy the active set_id and visible occurrence_id exactly."
+        )
+    if any(code.startswith("occurrence_sufficiency_") for code in codes):
+        repair_rules.append(
+            "Do not answer. Begin occurrence_ops with assess_sufficiency for the active set. Check one to six question-critical constraints across every viable candidate, bind each supported status to visible evidence_passage_ids, then select only a candidate supported on every constraint; otherwise follow the insufficient verdict with defer or no_match."
         )
     if "occurrence_search_required" in codes:
         repair_rules.append(

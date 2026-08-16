@@ -929,6 +929,121 @@ def test_matched_control_keeps_declared_cohort_when_replay_stops_post_treatment(
     assert frame_delta["mean_delta"] == 2.0
 
 
+def test_wp8_matched_control_allows_post_exposure_resolution_divergence() -> None:
+    signature = [{"action": "investigate", "tasks": []}]
+    actionable = _row("a3", "c1", score=0.0, signature=signature)
+    sufficient = _row("a4", "c1", score=1.0, signature=signature)
+    actionable.update(
+        {
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "selected",
+            "selected_occurrence_ids": ["occ_1"],
+            "false_commit": True,
+            "no_match_correct": False,
+            "selected_locators_accounted": True,
+            "selected_locator_silent_drop_count": 0,
+            "selected_locator_accounting_conflict_count": 0,
+            "frozen_replay_full_consumption": False,
+        }
+    )
+    sufficient.update(
+        {
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "no_match",
+            "selected_occurrence_ids": [],
+            "false_commit": False,
+            "no_match_correct": True,
+            "sufficiency_activation_event_count": 1,
+            "sufficiency_decision_event_count": 1,
+            "sufficiency_transaction_valid": True,
+            "frozen_replay_full_consumption": False,
+        }
+    )
+    actionable["matched_response_control"] = {
+        "mode": "record",
+        "active": False,
+        "deactivation_reason": "scoped_occurrence_resolution_exposed",
+        "recorded": {"investigator": 2, "reasoner": 2},
+        "mismatch_count": 0,
+    }
+    sufficient["matched_response_control"] = {
+        "mode": "replay",
+        "active": False,
+        "deactivation_reason": "scoped_occurrence_resolution_exposed",
+        "replayed": {"investigator": 2, "reasoner": 2},
+        "mismatch_count": 0,
+    }
+
+    report = ANALYSIS.build_report(
+        (actionable, sufficient),
+        expected_cases=1,
+        bootstrap_samples=10,
+        seed=3,
+    )
+
+    assert report["primary_analysis_set"] == "matched_aligned"
+    assert report["structural_gate_passed"] is True
+    assert report["matched_pre_treatment_responses"][
+        "requires_post_selection_identity"
+    ] is False
+    assert report["post_selection_only_divergence"]["applicable"] is False
+    delta = report["comparisons"]["a4-a3"]["mechanism_deltas"]
+    assert delta["false_commit"]["mean_delta"] == -1.0
+    assert delta["no_match_correct"]["mean_delta"] == 1.0
+
+
+def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
+    valid_decisions = (
+        {
+            "type": "reasoner_decision",
+            "round": 2,
+            "occurrence_ops_accepted": True,
+            "occurrence_ops": [
+                {"op": "assess_sufficiency", "set_id": "set_1"},
+                {"op": "select", "set_id": "set_1", "occurrence_id": "occ_1"},
+            ],
+        },
+    )
+    valid_trace = (
+        {"type": "occurrence_sufficiency_activated", "round": 1},
+        {
+            "type": "occurrence_sufficiency_decision",
+            "round": 2,
+            "occurrence_op_index": 0,
+            "set_id": "set_1",
+            "candidate_count": 2,
+            "verdict": "sufficient",
+            "constraints_checked": ["identity"],
+        },
+    )
+
+    valid = AUDIT._sufficiency_transaction_audit(valid_decisions, valid_trace)
+    assert valid["ordering_failure_count"] == 0
+    assert valid["verdict_transition_failure_count"] == 0
+    assert valid["event_count_mismatch"] is False
+
+    invalid = AUDIT._sufficiency_transaction_audit(
+        (
+            {
+                **valid_decisions[0],
+                "occurrence_ops": [
+                    {"op": "select", "set_id": "set_1", "occurrence_id": "occ_1"},
+                    {"op": "assess_sufficiency", "set_id": "set_1"},
+                ],
+            },
+        ),
+        (
+            valid_trace[0],
+            {
+                **valid_trace[1],
+                "occurrence_op_index": 1,
+                "verdict": "insufficient",
+            },
+        ),
+    )
+    assert invalid["ordering_failure_count"] == 1
+
+
 def test_locator_outcomes_are_pair_weighted_not_case_macro_averaged() -> None:
     signature = [{"action": "investigate", "tasks": []}]
     inspected = _row("a3", "c1", score=0.0, signature=signature)

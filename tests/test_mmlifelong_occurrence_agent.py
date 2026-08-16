@@ -67,6 +67,32 @@ def _packet() -> dict:
     }
 
 
+def _sufficiency_op(*, verdict: str, supported_id: str = "occ_1") -> dict:
+    support = []
+    for occurrence_id, passage_id in (("occ_1", "p1"), ("occ_2", "p2")):
+        supported = occurrence_id == supported_id
+        support.append(
+            {
+                "occurrence_id": occurrence_id,
+                "status": "supported" if supported else "unknown",
+                "evidence_passage_ids": [passage_id] if supported else [],
+            }
+        )
+    return {
+        "op": "assess_sufficiency",
+        "set_id": "attempt_sufficiency",
+        "verdict": verdict,
+        "constraints_checked": [
+            {
+                "constraint_id": "target_identity",
+                "constraint_type": "identity",
+                "description": "the occurrence depicts the question target",
+                "support": support,
+            }
+        ],
+    }
+
+
 def test_a0_is_an_identity_transform_with_no_oracle_audit(tmp_path) -> None:
     packet = _packet()
     before = stable_digest(packet)
@@ -614,6 +640,131 @@ def test_a2_clean_supports_abstention_and_multiple_selections() -> None:
     ) == []
 
 
+def test_a4_requires_constraint_sufficiency_before_selection() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "semantic_target": ["question target"],
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                    {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                ],
+            },
+        )
+    )
+
+    bypass = state.apply_ops(
+        (
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+    assert bypass["accepted"] is False
+    assert bypass["errors"][0]["code"] == (
+        "occurrence_sufficiency_assessment_required"
+    )
+
+    committed = state.apply_ops(
+        (
+            _sufficiency_op(verdict="sufficient"),
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+    assert committed["accepted"] is True
+    assert [row["op"] for row in committed["applied"]] == [
+        "assess_sufficiency",
+        "select",
+    ]
+    assert state.selected_occurrence_ids == ("occ_1",)
+    assert state.to_dict()["active_sufficiency"]["verdict"] == "sufficient"
+
+
+def test_a4_insufficient_candidates_can_only_defer_or_no_match() -> None:
+    def state() -> OccurrenceResolutionStateV2:
+        value = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+        value.sync_sets(
+            (
+                {
+                    "attempt_id": "attempt_sufficiency",
+                    "candidates": [
+                        {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                        {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                    ],
+                },
+            )
+        )
+        return value
+
+    insufficient = _sufficiency_op(verdict="insufficient", supported_id="")
+    rejected = state().apply_ops(
+        (
+            insufficient,
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+    assert rejected["accepted"] is False
+    assert rejected["errors"][0]["code"] == (
+        "occurrence_sufficiency_forbids_selection"
+    )
+
+    deferred = state()
+    assert deferred.apply_ops(
+        (
+            insufficient,
+            {"op": "defer", "set_id": "attempt_sufficiency"},
+        )
+    )["accepted"] is True
+    assert deferred.search_required is True
+
+    no_match = state()
+    assert no_match.apply_ops(
+        (
+            insufficient,
+            {"op": "no_match", "set_id": "attempt_sufficiency"},
+        )
+    )["accepted"] is True
+    assert no_match.resolution_committed is True
+
+
+def test_a4_supported_constraint_must_bind_visible_candidate_passage() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                    {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                ],
+            },
+        )
+    )
+    assessment = _sufficiency_op(verdict="sufficient")
+    assessment["constraints_checked"][0]["support"][0][
+        "evidence_passage_ids"
+    ] = ["foreign"]
+
+    result = state.apply_ops((assessment,))
+
+    assert result["accepted"] is False
+    assert result["errors"][0]["code"] == (
+        "occurrence_sufficiency_evidence_not_visible"
+    )
+
+
 def test_a3_requires_selected_locator_binding_before_answer() -> None:
     state = OccurrenceResolutionStateV2()
     state.sync_sets(
@@ -754,6 +905,27 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
         }
     )
     assert "Scoped occurrence arbitration is enabled" in arbitration_prompt
+
+    sufficiency_prompt = _frozen_reasoner_prompt(
+        {
+            **base,
+            "mechanical_status": {
+                "occurrence_resolution_state": {
+                    **scoped_state,
+                    "sufficiency_enabled": True,
+                    "sufficiency_required": True,
+                    "active_sufficiency": None,
+                }
+            },
+        }
+    )
+    assert (
+        "Retrieval rank or semantic similarity alone is not sufficient"
+        in sufficiency_prompt
+    )
+    assert "question-critical constraints" in sufficiency_prompt
+    assert "assess_sufficiency" in sufficiency_prompt
+    assert "evidence_passage_ids" in sufficiency_prompt
 
     actionable_prompt = _frozen_reasoner_prompt(
         {

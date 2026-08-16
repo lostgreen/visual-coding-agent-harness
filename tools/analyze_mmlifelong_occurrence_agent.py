@@ -111,6 +111,7 @@ def collect_rows(
                 observations=observations,
                 clues=clues,
             )
+            sufficiency_metrics = _sufficiency_transaction_metrics(trace)
             locator_scope_single_set_passed = _locator_scope_single_set_passed(
                 state
             )
@@ -166,7 +167,7 @@ def collect_rows(
             )
             treatment_cutoff_round = (
                 resolution_activation_round
-                if arm in {"a2-clean", "a3"}
+                if arm in {"a2-clean", "a3", "a4"}
                 else eligibility_round
             )
             exposure = _event(trace, "occurrence_treatment_exposed")
@@ -220,6 +221,7 @@ def collect_rows(
                     ),
                     "visual_windows": _visual_window_count(observations),
                     **occurrence_metrics,
+                    **sufficiency_metrics,
                     "clue_count": len(clues),
                     "occurrence_handle_usage_rate": _handle_usage_rate(
                         trace, treatment_cutoff_round
@@ -426,11 +428,19 @@ def build_report(
     budget_symmetry = _budget_symmetry(by_arm)
     post_selection_balance = _post_selection_only_divergence(by_arm)
     matched_response_gate = _matched_pre_treatment_response_gate(by_arm)
+    requires_post_selection_identity = bool(
+        matched_response_gate.get("requires_post_selection_identity")
+    )
     matched_control_primary = bool(
         matched_response_gate.get("applicable")
         and matched_response_gate.get("passed")
-        and post_selection_balance.get("applicable")
-        and post_selection_balance.get("passed")
+        and (
+            not requires_post_selection_identity
+            or (
+                post_selection_balance.get("applicable")
+                and post_selection_balance.get("passed")
+            )
+        )
     )
     primary_analysis = all_analysis if matched_control_primary else frozen_analysis
     primary_analysis_set = (
@@ -458,7 +468,7 @@ def build_report(
         ),
         "no_pre_activation_occurrence_state": all(
             not row.get("pre_activation_state_exposure")
-            for arm in ("a2-clean", "a3")
+            for arm in ("a2-clean", "a3", "a4")
             for row in by_arm.get(arm, {}).values()
         ),
         "a3_selected_locators_accounted": (
@@ -483,6 +493,32 @@ def build_report(
                 for row in by_arm["a3"].values()
             )
         ),
+        "actionable_selected_locators_accounted": all(
+            row.get(
+                "selected_locators_accounted",
+                row.get("selected_locator_usage_rate") in {None, 1.0},
+            )
+            is True
+            and int(row.get("selected_locator_silent_drop_count", 0) or 0)
+            == 0
+            and int(
+                row.get("selected_locator_accounting_conflict_count", 0) or 0
+            )
+            == 0
+            for arm in ("a3", "a4")
+            for row in by_arm.get(arm, {}).values()
+        ),
+        "a4_sufficiency_transactions_valid": (
+            "a4" not in by_arm
+            or all(
+                int(row.get("sufficiency_activation_event_count", 0) or 0)
+                == 1
+                and int(row.get("sufficiency_decision_event_count", 0) or 0)
+                >= 1
+                and row.get("sufficiency_transaction_valid") is True
+                for row in by_arm["a4"].values()
+            )
+        ),
         "post_selection_only_divergence": (
             post_selection_balance["passed"]
             if post_selection_balance["applicable"]
@@ -502,27 +538,27 @@ def build_report(
         "budget_symmetry_passed": budget_symmetry.get("passed"),
         "locator_scope_single_set_passed": all(
             row.get("locator_scope_single_set_passed") is True
-            for arm in ("a2-clean", "a3")
+            for arm in ("a2-clean", "a3", "a4")
             for row in by_arm.get(arm, {}).values()
         ),
         "occurrence_activation_thresholds_valid": all(
             row.get("resolution_activation_threshold_valid") is True
             and row.get("arbitration_activation_threshold_valid") is True
-            for arm in ("a2-clean", "a3")
+            for arm in ("a2-clean", "a3", "a4")
             for row in by_arm.get(arm, {}).values()
         ),
     }
     return {
-        "schema_version": "MMLifelongOccurrenceAgentReportV2",
+        "schema_version": "MMLifelongOccurrenceAgentReportV3",
         "primary_endpoint_note": (
             "QA accuracy is a secondary endpoint; mechanism metrics are the "
             "primary endpoint during development."
         ),
         "primary_analysis_set": primary_analysis_set,
         "primary_analysis_reason": (
-            "Exact matched pre-treatment responses and paired scoped-resolution "
-            "identity fix the declared aligned cohort before post-treatment "
-            "replay consumption can diverge."
+            "Exact matched pre-treatment responses fix the declared aligned "
+            "cohort at the configured treatment boundary. WP6 additionally "
+            "requires paired scoped-resolution identity."
             if matched_control_primary
             else "Use cases with complete frozen occurrence replay."
         ),
@@ -542,7 +578,8 @@ def build_report(
             "selected_locator_usage_rate": "accepted selected (locator_attempt_id, occurrence_id) pairs with executed candidate-bound visual observations",
             "selected_locator_accounting": "every selected locator has exactly one terminal outcome: inspected or one explicit release category",
             "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
-            "matched_pre_treatment_responses": "A3 exactly replays A2-clean Reasoner and Investigator responses until scoped resolution is persisted; all later calls remain live",
+            "matched_pre_treatment_responses": "WP6 replays A2-clean into A3 until scoped resolution is persisted; WP8 replays A3 into A4 until the first scoped set is exposed; all later calls remain live",
+            "sufficiency_transaction": "A4 records an explicit assessment before select/defer/no_match; structural validity checks ordering, visible bindings, and verdict-transition consistency but does not constrain endpoint values",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
             "budget_symmetry_passed": "configured semantic-round budgets are present, internally consistent, and equal across arms; realized semantic rounds remain a treatment cost endpoint",
         },
@@ -560,7 +597,13 @@ def build_report(
             "a3_selected_locators_accounted": any(
                 bool(row.get("selected_locator_accounting_applicable"))
                 for row in by_arm.get("a3", {}).values()
-            )
+            ),
+            "actionable_selected_locators_accounted": any(
+                bool(row.get("selected_locator_accounting_applicable"))
+                for arm in ("a3", "a4")
+                for row in by_arm.get(arm, {}).values()
+            ),
+            "a4_sufficiency_transactions_valid": "a4" in by_arm,
         },
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
@@ -604,7 +647,11 @@ def _build_analysis_slice(
         comparison_pairs.extend(
             (arm, "a0") for arm in arms if arm != "a0"
         )
-    for left, right in (("a2-clean", "a1"), ("a3", "a2-clean")):
+    for left, right in (
+        ("a2-clean", "a1"),
+        ("a3", "a2-clean"),
+        ("a4", "a3"),
+    ):
         if left in selected and right in selected:
             comparison_pairs.append((left, right))
     for index, (left, right) in enumerate(dict.fromkeys(comparison_pairs)):
@@ -671,6 +718,10 @@ def _per_case_metrics(
         "semantic_rounds_used",
         "extra_rounds_granted",
         "retired_locator_count",
+        "sufficiency_final_verdict",
+        "sufficiency_constraint_count",
+        "sufficiency_sufficient_candidate_count",
+        "sufficiency_transaction_valid",
         "frozen_replay_full_consumption",
     )
     return {
@@ -1065,6 +1116,33 @@ def _aggregate_arm_result(
         "false_abstention_count": sum(
             row.get("false_abstention") is True for row in candidate_present
         ),
+        "sufficiency_activation_case_count": sum(
+            int(row.get("sufficiency_activation_event_count", 0) or 0) > 0
+            for row in rows
+        ),
+        "sufficiency_decision_event_count": sum(
+            int(row.get("sufficiency_decision_event_count", 0) or 0)
+            for row in rows
+        ),
+        "sufficiency_sufficient_case_count": sum(
+            row.get("sufficiency_final_verdict") == "sufficient"
+            for row in rows
+        ),
+        "sufficiency_insufficient_case_count": sum(
+            row.get("sufficiency_final_verdict") == "insufficient"
+            for row in rows
+        ),
+        "sufficiency_mean_constraint_count": _optional_mean(
+            row.get("sufficiency_constraint_count") for row in rows
+        ),
+        "sufficiency_mean_sufficient_candidate_count": _optional_mean(
+            row.get("sufficiency_sufficient_candidate_count") for row in rows
+        ),
+        "sufficiency_transaction_valid_rate": _mean_bool(
+            row.get("sufficiency_transaction_valid")
+            for row in rows
+            if int(row.get("sufficiency_activation_event_count", 0) or 0) > 0
+        ),
         "defer_rate": _mean_bool(
             row.get("deferred_occurrence_set") for row in rows
         ),
@@ -1230,53 +1308,106 @@ def _post_selection_only_divergence(
 def _matched_pre_treatment_response_gate(
     by_arm: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> dict[str, Any]:
-    clean = by_arm.get("a2-clean", {})
-    actionable = by_arm.get("a3", {})
-    applicable = any(
-        row.get("matched_response_control")
-        for cases in (clean, actionable)
-        for row in cases.values()
+    pair_specs = (
+        (
+            "a2-clean",
+            "a3",
+            "scoped_occurrence_resolution_persisted",
+            True,
+        ),
+        (
+            "a3",
+            "a4",
+            "scoped_occurrence_resolution_exposed",
+            False,
+        ),
     )
-    if not applicable:
+    applicable_specs = []
+    for record_arm, replay_arm, boundary, requires_identity in pair_specs:
+        recorded_cases = by_arm.get(record_arm, {})
+        replayed_cases = by_arm.get(replay_arm, {})
+        if any(
+            dict(row.get("matched_response_control", {}) or {}).get("mode")
+            == "record"
+            for row in recorded_cases.values()
+        ) or any(
+            dict(row.get("matched_response_control", {}) or {}).get("mode")
+            == "replay"
+            for row in replayed_cases.values()
+        ):
+            applicable_specs.append(
+                (record_arm, replay_arm, boundary, requires_identity)
+            )
+    if not applicable_specs:
         return {
             "applicable": False,
             "passed": None,
             "paired_case_count": 0,
             "mismatch_case_ids": [],
+            "comparisons": [],
+            "requires_post_selection_identity": False,
         }
-    paired = sorted(set(clean) & set(actionable))
-    mismatches = []
-    for case_id in paired:
-        recorded = dict(
-            clean[case_id].get("matched_response_control", {}) or {}
-        )
-        replayed = dict(
-            actionable[case_id].get("matched_response_control", {}) or {}
-        )
-        if not all(
-            (
-                recorded.get("mode") == "record",
-                replayed.get("mode") == "replay",
-                dict(recorded.get("recorded", {}) or {})
-                == dict(replayed.get("replayed", {}) or {}),
-                int(recorded.get("mismatch_count", 0) or 0) == 0,
-                int(replayed.get("mismatch_count", 0) or 0) == 0,
-                recorded.get("active") is False,
-                replayed.get("active") is False,
-                recorded.get("deactivation_reason")
-                == "scoped_occurrence_resolution_persisted",
-                replayed.get("deactivation_reason")
-                == "scoped_occurrence_resolution_persisted",
+    comparisons = []
+    all_mismatches: list[str] = []
+    paired_count = 0
+    all_passed = True
+    requires_identity = False
+    for record_arm, replay_arm, boundary, pair_requires_identity in applicable_specs:
+        recorded_cases = by_arm.get(record_arm, {})
+        replayed_cases = by_arm.get(replay_arm, {})
+        paired = sorted(set(recorded_cases) & set(replayed_cases))
+        mismatches = []
+        for case_id in paired:
+            recorded = dict(
+                recorded_cases[case_id].get("matched_response_control", {}) or {}
             )
-        ):
-            mismatches.append(case_id)
+            replayed = dict(
+                replayed_cases[case_id].get("matched_response_control", {}) or {}
+            )
+            if not all(
+                (
+                    recorded.get("mode") == "record",
+                    replayed.get("mode") == "replay",
+                    dict(recorded.get("recorded", {}) or {})
+                    == dict(replayed.get("replayed", {}) or {}),
+                    int(recorded.get("mismatch_count", 0) or 0) == 0,
+                    int(replayed.get("mismatch_count", 0) or 0) == 0,
+                    recorded.get("active") is False,
+                    replayed.get("active") is False,
+                    recorded.get("deactivation_reason") == boundary,
+                    replayed.get("deactivation_reason") == boundary,
+                )
+            ):
+                mismatches.append(case_id)
+        passed = (
+            bool(paired)
+            and set(recorded_cases) == set(replayed_cases)
+            and not mismatches
+        )
+        all_passed &= passed
+        requires_identity |= pair_requires_identity
+        paired_count += len(paired)
+        all_mismatches.extend(
+            f"{record_arm}-{replay_arm}:{case_id}" for case_id in mismatches
+        )
+        comparisons.append(
+            {
+                "record_arm": record_arm,
+                "replay_arm": replay_arm,
+                "boundary": boundary,
+                "requires_post_selection_identity": pair_requires_identity,
+                "passed": passed,
+                "paired_case_count": len(paired),
+                "mismatch_case_ids": mismatches,
+            }
+        )
     return {
         "applicable": True,
-        "passed": bool(paired)
-        and set(clean) == set(actionable)
-        and not mismatches,
-        "paired_case_count": len(paired),
-        "mismatch_case_ids": mismatches,
+        "passed": all_passed,
+        "paired_case_count": paired_count,
+        "mismatch_case_ids": all_mismatches,
+        "comparisons": comparisons,
+        "requires_post_selection_identity": requires_identity,
     }
 
 
@@ -1461,6 +1592,10 @@ def _paired_comparison(
         == right[case_id]["pre_treatment_prompt_digests"]
     ]
     mechanism_metrics = (
+        "false_commit",
+        "no_match_correct",
+        "osa_strict",
+        "false_abstention",
         "selected_locator_usage_rate",
         "released_unexecuted_rate",
         "bound_visual_clue_recall",
@@ -1696,6 +1831,112 @@ def _accepted_resolution_ops(
     return tuple(accepted)
 
 
+def _sufficiency_transaction_metrics(
+    trace: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_sufficiency_decision"
+    )
+    activations = sum(
+        row.get("type") == "occurrence_sufficiency_activated" for row in trace
+    )
+    events_by_set: dict[str, list[tuple[tuple[int, int], Mapping[str, Any]]]] = (
+        defaultdict(list)
+    )
+    for event in events:
+        events_by_set[str(event.get("set_id", "") or "")].append(
+            (
+                (
+                    int(event.get("round", 0) or 0),
+                    int(event.get("occurrence_op_index", 0) or 0),
+                ),
+                event,
+            )
+        )
+
+    assessment_count = 0
+    terminal_count = 0
+    ordering_failures = 0
+    transition_failures = 0
+    for decision in trace:
+        if (
+            decision.get("type") != "reasoner_decision"
+            or decision.get("occurrence_ops_accepted") is False
+        ):
+            continue
+        round_id = int(decision.get("round", 0) or 0)
+        for operation_index, operation in enumerate(
+            tuple(decision.get("occurrence_ops", ()) or ())
+        ):
+            if not isinstance(operation, Mapping):
+                continue
+            op = str(operation.get("op", operation.get("type", "")) or "").casefold()
+            if op == "assess_sufficiency":
+                assessment_count += 1
+                continue
+            if op not in {"select", "defer", "no_match"}:
+                continue
+            terminal_count += 1
+            set_id = str(
+                operation.get("set_id", operation.get("locator_attempt_id", ""))
+                or ""
+            )
+            prior = [
+                (position, event)
+                for position, event in events_by_set.get(set_id, ())
+                if position < (round_id, operation_index)
+            ]
+            if not prior:
+                ordering_failures += 1
+                continue
+            verdict = str(max(prior, key=lambda item: item[0])[1].get("verdict", ""))
+            if (op == "select" and verdict != "sufficient") or (
+                op in {"defer", "no_match"} and verdict != "insufficient"
+            ):
+                transition_failures += 1
+
+    shape_failures = sum(
+        str(event.get("verdict", "")) not in {"sufficient", "insufficient"}
+        or int(event.get("candidate_count", 0) or 0) < 1
+        or not tuple(event.get("constraints_checked", ()) or ())
+        for event in events
+    )
+    applicable = bool(activations or events or assessment_count)
+    valid = (
+        bool(events)
+        and len(events) == assessment_count
+        and shape_failures == 0
+        and ordering_failures == 0
+        and transition_failures == 0
+        if applicable
+        else None
+    )
+    final_event = events[-1] if events else {}
+    return {
+        "sufficiency_activation_event_count": activations,
+        "sufficiency_decision_event_count": len(events),
+        "sufficiency_assessment_op_count": assessment_count,
+        "sufficiency_terminal_op_count": terminal_count,
+        "sufficiency_event_shape_failure_count": shape_failures,
+        "sufficiency_ordering_failure_count": ordering_failures,
+        "sufficiency_verdict_transition_failure_count": transition_failures,
+        "sufficiency_transaction_valid": valid,
+        "sufficiency_final_verdict": final_event.get("verdict"),
+        "sufficiency_constraint_count": (
+            len(tuple(final_event.get("constraints_checked", ()) or ()))
+            if final_event
+            else None
+        ),
+        "sufficiency_sufficient_candidate_count": (
+            len(tuple(final_event.get("sufficient_occurrence_ids", ()) or ()))
+            if final_event
+            else None
+        ),
+    }
+
+
 def _state_sets(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {
         str(raw_set.get("set_id", raw_set.get("locator_attempt_id", "")) or ""):
@@ -1830,7 +2071,7 @@ def _occurrence_resolution_metrics(
     trajectory_recall = _set_candidate_recall(trajectory_candidates, clues)
     active_recall = _set_candidate_recall(active_candidates, clues)
     resolved_recall = _set_candidate_recall(resolved_candidates, clues)
-    scoped = arm in {"a2", "a2-clean", "a3"}
+    scoped = arm in {"a2", "a2-clean", "a3", "a4"}
     osa_eligible = scoped and resolved_recall is True
     osa_any = (
         bool(correct_selected_count > 0) if osa_eligible else None
@@ -1885,14 +2126,14 @@ def _occurrence_resolution_metrics(
         "abstention_eligible": absent,
         "abstention_correct": no_match_correct,
         "legacy_abstention_eligible": (
-            arm in {"a2-clean", "a3"} and trajectory_recall is False
+            arm in {"a2-clean", "a3", "a4"} and trajectory_recall is False
         ),
         "legacy_abstention_correct": (
             bool(
                 state.get("active_resolution") == "no_match"
                 or _accepted_occurrence_op(trace, "no_match")
             )
-            if arm in {"a2-clean", "a3"} and trajectory_recall is False
+            if arm in {"a2-clean", "a3", "a4"} and trajectory_recall is False
             else None
         ),
         "no_match_correct": no_match_correct,
@@ -2409,6 +2650,7 @@ def _arm_sort_key(arm: str) -> tuple[int, str]:
         "a2": 3,
         "a2-clean": 4,
         "a3": 5,
+        "a4": 6,
     }
     return order.get(arm, 99), arm
 
@@ -2421,7 +2663,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         "**QA accuracy is a secondary endpoint; mechanism metrics are the primary endpoint during development.**",
         "",
-        f"Primary analysis: frozen_complete (n={report['frozen_complete']['n']}); all_cases sensitivity n={report['all_cases']['n']}.",
+        f"Primary analysis: {report['primary_analysis_set']} (n={report['case_count']}); frozen_complete n={report['frozen_complete']['n']}; all_cases sensitivity n={report['all_cases']['n']}.",
         f"Trajectory provenance: `{report['trajectory_provenance']}`.",
         "",
         "| Arm | N | Mean | Raw exact | Verified | Grounded ref300 | Grounded visual | Recall trajectory | Recall resolved | OSA any | OSA strict | No-match | False commit | Locator use | Released | Bound visual recall | Rounds |",

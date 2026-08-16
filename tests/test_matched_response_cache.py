@@ -231,3 +231,50 @@ def test_workspace_reasoner_deactivates_cache_after_resolution(tmp_path: Path) -
     assert summary["active"] is False
     assert summary["recorded_count"] == 0
     assert summary["live_after_treatment_count"] == 1
+
+
+def test_workspace_reasoner_deactivates_wp8_cache_at_set_exposure(
+    tmp_path: Path,
+) -> None:
+    session = MatchedResponseSession(
+        mode="record",
+        deactivation_boundary="scoped_occurrence_resolution_exposed",
+    )
+    delegate = StubClient(
+        (json.dumps({"action": "update_workspace", "workspace_ops": []}),)
+    )
+    client = MatchedResponseCacheClient(
+        delegate,
+        root=tmp_path / "fixtures",
+        mode="record",
+        namespace="reasoner",
+        session=session,
+    )
+    reasoner = WorkspaceReasoner(
+        client,
+        trace_path=tmp_path / "interactions.jsonl",
+        controller_mode="frozen_baseline",
+        matched_response_session=session,
+    )
+
+    reasoner.decide(
+        question="Question?",
+        options={},
+        mechanical_status={
+            "occurrence_resolution_state": {
+                "schema_version": "OccurrenceResolutionStateV2",
+                "active_set_id": "attempt_visible",
+                "active_resolution": "unresolved",
+                "selection_required": True,
+                "search_required": False,
+            }
+        },
+    )
+
+    summary = session.to_dict()
+    assert summary["active"] is False
+    assert summary["deactivation_reason"] == (
+        "scoped_occurrence_resolution_exposed"
+    )
+    assert summary["recorded_count"] == 0
+    assert summary["live_after_treatment_count"] == 1

@@ -433,13 +433,15 @@ class WorkspaceReasoner:
         return metadata
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
-        if (
-            self.matched_response_session is not None
-            and _scoped_occurrence_resolution_persisted(kwargs)
-        ):
-            self.matched_response_session.deactivate(
-                "scoped_occurrence_resolution_persisted"
+        if self.matched_response_session is not None:
+            boundary = self.matched_response_session.deactivation_boundary
+            reached = (
+                _scoped_occurrence_resolution_persisted(kwargs)
+                if boundary == "scoped_occurrence_resolution_persisted"
+                else _scoped_occurrence_resolution_exposed(kwargs)
             )
+            if reached:
+                self.matched_response_session.deactivate(boundary)
         self.calls += 1
         self._last_decision_metadata = {}
         kwargs.setdefault("controller_mode", self.controller_mode)
@@ -590,6 +592,18 @@ def _scoped_occurrence_resolution_persisted(kwargs: Mapping[str, Any]) -> bool:
         in {"selected", "no_match"}
         and not bool(state.get("selection_required"))
         and not bool(state.get("search_required"))
+    )
+
+
+def _scoped_occurrence_resolution_exposed(kwargs: Mapping[str, Any]) -> bool:
+    mechanical_status = kwargs.get("mechanical_status")
+    if not isinstance(mechanical_status, Mapping):
+        return False
+    state = mechanical_status.get("occurrence_resolution_state")
+    return bool(
+        isinstance(state, Mapping)
+        and str(state.get("schema_version", "")) == "OccurrenceResolutionStateV2"
+        and state.get("active_set_id")
     )
 
 class VisionInvestigator(VirtualVideoInvestigator):
@@ -2072,8 +2086,24 @@ def _occurrence_resolution_prompt_rule(
             if state.get("arbitration_required")
             else "Scoped occurrence resolution is enabled because a candidate set is now exposed. Each set_id "
         )
+        sufficiency_rule = ""
+        if state.get("sufficiency_enabled"):
+            sufficiency_rule = (
+                "Retrieval rank or semantic similarity alone is not sufficient for selection. A candidate becomes "
+                "selectable only if it satisfies the question-critical constraints. Before select, defer, or no_match, "
+                "place one assess_sufficiency operation first in the same occurrence_ops transaction. Derive one to six "
+                "concise critical constraints from the question using only identity, event, relation, temporal, state, "
+                "attribute, object, location, order, or outcome types. For every viable candidate and every constraint, "
+                "report supported, partial, unknown, or contradicted and bind each supported status to one or more visible "
+                "evidence_passage_ids from that candidate. Verdict sufficient is valid only when at least one candidate "
+                "supports every constraint; select only such candidates. Otherwise use verdict insufficient followed by "
+                "defer for refined search or no_match. Runtime checks structure and visible foreign keys only; the Reasoner "
+                "remains solely responsible for defining and judging the constraints. "
+            )
         return protocol + (
-            "is one Caption locator attempt for one semantic target; never compare, eliminate, or select candidates "
+            "is one Caption locator attempt for one semantic target. "
+            + sufficiency_rule
+            + "Never compare, eliminate, or select candidates "
             "across different sets. Use top-level occurrence_ops with an explicit set_id. Candidate operations are "
             '[{"op":"keep|eliminate|select|reopen","set_id":"attempt_...",'
             '"occurrence_id":"occ_..."}]. '
@@ -2115,6 +2145,9 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     occurrence_state_version = str(
         occurrence_state.get("schema_version", "") or ""
     )
+    occurrence_sufficiency_enabled = False
+    occurrence_sufficiency_required = False
+    occurrence_sufficiency_verdict = ""
     if occurrence_state_version == "OccurrenceResolutionStateV2":
         selected_occurrence_ids = tuple(
             occurrence_state.get("selected_occurrence_ids", ()) or ()
@@ -2126,6 +2159,17 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         occurrence_answer_pending = str(
             occurrence_state.get("active_resolution", "") or ""
         ) in {"selected", "no_match"}
+        occurrence_sufficiency_enabled = bool(
+            occurrence_state.get("sufficiency_enabled")
+        )
+        occurrence_sufficiency_required = bool(
+            occurrence_state.get("sufficiency_required")
+        )
+        active_sufficiency = occurrence_state.get("active_sufficiency")
+        if isinstance(active_sufficiency, Mapping):
+            occurrence_sufficiency_verdict = str(
+                active_sufficiency.get("verdict", "") or ""
+            )
     else:
         viable_occurrence_ids = tuple(
             occurrence_state.get("viable_occurrence_ids", ()) or ()
@@ -2243,10 +2287,27 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             )
     elif occurrence_selection_pending and final:
         if occurrence_state_version == "OccurrenceResolutionStateV2":
-            action_rule = (
-                "Do not answer in this decision. Investigation is closed; resolve the active set with one or more scoped "
-                "occurrence_ops select operations, or no_match when none is suitable. A separate answer decision will follow."
-            )
+            if occurrence_sufficiency_required:
+                action_rule = (
+                    "Do not answer in this decision. Investigation is closed. First assess question-critical sufficiency, "
+                    "then in the same occurrence_ops transaction either select only mechanically supported candidates or "
+                    "commit no_match after an insufficient verdict. A separate answer decision will follow."
+                )
+            elif occurrence_sufficiency_verdict == "sufficient":
+                action_rule = (
+                    "Do not answer in this decision. Investigation is closed; select only an occurrence listed in the "
+                    "active sufficiency decision's sufficient_occurrence_ids. A separate answer decision will follow."
+                )
+            elif occurrence_sufficiency_verdict == "insufficient":
+                action_rule = (
+                    "Do not answer in this decision. Investigation is closed; commit no_match for the active set because "
+                    "its recorded sufficiency verdict is insufficient. A separate answer decision will follow."
+                )
+            else:
+                action_rule = (
+                    "Do not answer in this decision. Investigation is closed; resolve the active set with one or more scoped "
+                    "occurrence_ops select operations, or no_match when none is suitable. A separate answer decision will follow."
+                )
         else:
             action_rule = (
                 "Do not answer in this decision. Investigation is closed; return action=update_workspace with no answer and "
@@ -2254,10 +2315,27 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             )
     elif occurrence_selection_pending:
         if occurrence_state_version == "OccurrenceResolutionStateV2":
-            action_rule = (
-                "Do not answer while the active occurrence set is unresolved. Investigate evidence to discriminate it, "
-                "select one or more candidates in that set, defer for a refined Caption search, or commit no_match."
-            )
+            if occurrence_sufficiency_required:
+                action_rule = (
+                    "Do not answer while the active occurrence set is unresolved. Assess question-critical constraints "
+                    "before any select, defer, or no_match; the assessment and resolution may be one ordered occurrence_ops "
+                    "transaction. Investigate first only when the visible locator evidence cannot support that assessment."
+                )
+            elif occurrence_sufficiency_verdict == "sufficient":
+                action_rule = (
+                    "Do not answer while the active occurrence set is unresolved. Select only candidates recorded in "
+                    "sufficient_occurrence_ids, or investigate if additional visual discrimination is still needed."
+                )
+            elif occurrence_sufficiency_verdict == "insufficient":
+                action_rule = (
+                    "Do not answer while the active occurrence set is unresolved. Defer for a refined Caption search or "
+                    "commit no_match; selection is forbidden by the recorded insufficient verdict."
+                )
+            else:
+                action_rule = (
+                    "Do not answer while the active occurrence set is unresolved. Investigate evidence to discriminate it, "
+                    "select one or more candidates in that set, defer for a refined Caption search, or commit no_match."
+                )
         else:
             action_rule = (
                 "Do not answer while multiple viable occurrences remain unselected. Investigate/read evidence to discriminate them, "
@@ -2277,11 +2355,22 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Provide the best evidence-grounded answer available and list supporting_claim_ids when valid."
         )
     if occurrence_state_version == "OccurrenceResolutionStateV2":
-        occurrence_selection_schema = (
-            'Scoped resolution schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
-            '"occurrence_ops":[{"op":"select","set_id":"attempt_visible_id",'
-            '"occurrence_id":"occ_visible_id"}]}.\n'
-        )
+        if occurrence_sufficiency_enabled:
+            occurrence_selection_schema = (
+                'Sufficiency resolution schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
+                '"occurrence_ops":[{"op":"assess_sufficiency","set_id":"attempt_visible_id",'
+                '"verdict":"sufficient|insufficient","constraints_checked":[{"constraint_id":"identity",'
+                '"constraint_type":"identity","description":"question-critical requirement",'
+                '"support":[{"occurrence_id":"occ_visible_id","status":"supported|partial|unknown|contradicted",'
+                '"evidence_passage_ids":["visible_passage_id"]}]}]},{"op":"select|defer|no_match",'
+                '"set_id":"attempt_visible_id","occurrence_id":"occ_visible_id only for select"}]}.\n'
+            )
+        else:
+            occurrence_selection_schema = (
+                'Scoped resolution schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
+                '"occurrence_ops":[{"op":"select","set_id":"attempt_visible_id",'
+                '"occurrence_id":"occ_visible_id"}]}.\n'
+            )
     else:
         occurrence_selection_schema = (
             'Selection commit schema: {"action":"update_workspace","answer":"","workspace_ops":[],'

@@ -410,11 +410,23 @@ class MatchedResponseReplayError(RuntimeError):
 class MatchedResponseSession:
     """Shared lifecycle and accounting for per-role matched response clients."""
 
-    def __init__(self, *, mode: str) -> None:
+    def __init__(
+        self,
+        *,
+        mode: str,
+        deactivation_boundary: str = "scoped_occurrence_resolution_persisted",
+    ) -> None:
         normalized = str(mode or "").strip().casefold()
         if normalized not in {"record", "replay"}:
             raise ValueError("matched response mode must be record or replay")
         self.mode = normalized
+        boundary = str(deactivation_boundary or "").strip()
+        if boundary not in {
+            "scoped_occurrence_resolution_persisted",
+            "scoped_occurrence_resolution_exposed",
+        }:
+            raise ValueError("unsupported matched response deactivation boundary")
+        self.deactivation_boundary = boundary
         self.active = True
         self.deactivation_reason = ""
         self._counts = {
@@ -451,6 +463,7 @@ class MatchedResponseSession:
             return {
                 "schema_version": "MatchedPreTreatmentResponseV1",
                 "mode": self.mode,
+                "deactivation_boundary": self.deactivation_boundary,
                 "active": bool(self.active),
                 "deactivation_reason": self.deactivation_reason,
                 **counts,

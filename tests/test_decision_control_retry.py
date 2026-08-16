@@ -167,6 +167,21 @@ class SingleScopedOccurrenceInvestigator(ScopedOccurrenceInvestigator):
     }
 
 
+class SufficiencyScopedOccurrenceInvestigator(ScopedOccurrenceInvestigator):
+    occurrence_set = {
+        **ScopedOccurrenceInvestigator.occurrence_set,
+        "candidates": [
+            {
+                **candidate,
+                "passage_ids": [f"p{index}"],
+            }
+            for index, candidate in enumerate(
+                ScopedOccurrenceInvestigator.occurrence_set["candidates"], start=1
+            )
+        ],
+    }
+
+
 class RotatingScopedOccurrenceInvestigator(ScopedOccurrenceInvestigator):
     locator_attempt_ids = tuple(
         stable_attempt_id(
@@ -1033,6 +1048,100 @@ def test_a3_rejects_answer_until_selected_locator_is_inspected(
         == ScopedOccurrenceInvestigator.locator_attempt_id
     )
     assert bound[0].occurrence_id == "occ_2"
+    assert result.answer_present is True
+
+
+def test_a4_orders_sufficiency_selection_locator_and_answer(
+    tmp_path: Path,
+) -> None:
+    set_id = SufficiencyScopedOccurrenceInvestigator.locator_attempt_id
+    reasoner = ScriptedReasoner(
+        (
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="locate",
+                        goal="locate target event",
+                        inspection_mode="search_caption",
+                        caption_queries=("target event",),
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="update_workspace",
+                occurrence_ops=(
+                    {
+                        "op": "assess_sufficiency",
+                        "set_id": set_id,
+                        "verdict": "sufficient",
+                        "constraints_checked": [
+                            {
+                                "constraint_id": "target_identity",
+                                "constraint_type": "identity",
+                                "description": "candidate depicts the target",
+                                "support": [
+                                    {
+                                        "occurrence_id": "occ_1",
+                                        "status": "unknown",
+                                        "evidence_passage_ids": [],
+                                    },
+                                    {
+                                        "occurrence_id": "occ_2",
+                                        "status": "supported",
+                                        "evidence_passage_ids": ["p2"],
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "op": "select",
+                        "set_id": set_id,
+                        "occurrence_id": "occ_2",
+                    },
+                ),
+            ),
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="inspect_selected",
+                        goal="inspect selected target",
+                        occurrence_id="occ_2",
+                        locator_attempt_id=set_id,
+                    ),
+                ),
+            ),
+            ReasonerDecision(action="answer", answer="resolved"),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=SufficiencyScopedOccurrenceInvestigator(),
+        max_rounds=4,
+        control_retry_budget=1,
+        controller_mode="frozen_baseline",
+        evidence_control_mode="shadow",
+        evidence_state_mode="llm_authored",
+        occurrence_method_arm="a4",
+    ).run(_workspace(tmp_path))
+
+    decisions = [
+        row for row in result.trace if row.get("type") == "reasoner_decision"
+    ]
+    sufficiency = [
+        row
+        for row in result.trace
+        if row.get("type") == "occurrence_sufficiency_decision"
+    ]
+    assert len(sufficiency) == 1
+    assert sufficiency[0]["verdict"] == "sufficient"
+    assert sufficiency[0]["sufficient_occurrence_ids"] == ["occ_2"]
+    assert decisions[1]["occurrence_selection_committed"] is True
+    assert decisions[2]["action"] == "investigate"
+    assert decisions[3]["action"] == "answer"
     assert result.answer_present is True
 
 

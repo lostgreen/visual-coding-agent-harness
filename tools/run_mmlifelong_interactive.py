@@ -68,10 +68,15 @@ def main() -> None:
         )
     if (args.matched_response_record or args.matched_response_replay) and args.recorded_decisions:
         raise ValueError("matched response control is incompatible with recorded decisions")
-    if args.matched_response_record and occurrence_method_arm != "a2-clean":
-        raise ValueError("matched response recording requires occurrence arm a2-clean")
-    if args.matched_response_replay and occurrence_method_arm != "a3":
-        raise ValueError("matched response replay requires occurrence arm a3")
+    if args.matched_response_record and occurrence_method_arm not in {
+        "a2-clean",
+        "a3",
+    }:
+        raise ValueError(
+            "matched response recording requires occurrence arm a2-clean or a3"
+        )
+    if args.matched_response_replay and occurrence_method_arm not in {"a3", "a4"}:
+        raise ValueError("matched response replay requires occurrence arm a3 or a4")
     if (args.matched_response_record or args.matched_response_replay) and not args.occurrence_replay_prime:
         raise ValueError("matched response control requires occurrence replay priming")
     protocol = Phase5Protocol(
@@ -186,7 +191,18 @@ def main() -> None:
         else None
     )
     matched_response_session = (
-        MatchedResponseSession(mode=matched_response_mode)
+        MatchedResponseSession(
+            mode=matched_response_mode,
+            deactivation_boundary=(
+                "scoped_occurrence_resolution_exposed"
+                if occurrence_method_arm == "a4"
+                or (
+                    occurrence_method_arm == "a3"
+                    and matched_response_mode == "record"
+                )
+                else "scoped_occurrence_resolution_persisted"
+            ),
+        )
         if matched_response_mode
         else None
     )

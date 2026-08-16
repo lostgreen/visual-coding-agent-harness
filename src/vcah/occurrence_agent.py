@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from vcah.caption_schema import stable_digest
+from vcah.occurrence_sufficiency import (
+    OccurrenceSufficiencyDecision,
+    SUFFICIENCY_OPERATION,
+    validate_sufficiency_operation,
+)
 
 
 OCCURRENCE_METHOD_ARMS = (
@@ -16,6 +21,7 @@ OCCURRENCE_METHOD_ARMS = (
     "a2",
     "a2-clean",
     "a3",
+    "a4",
 )
 FORBIDDEN_AGENT_VISIBLE_KEYS = frozenset(
     {
@@ -37,7 +43,15 @@ DEFAULT_CARD_QUERY_LIMIT = 4
 DEFAULT_CARD_QUERY_CHARS = 160
 OCCURRENCE_RESOLUTION_OPS = frozenset({"keep", "eliminate", "select", "reopen"})
 SCOPED_OCCURRENCE_RESOLUTION_OPS = frozenset(
-    {"keep", "eliminate", "select", "reopen", "defer", "no_match"}
+    {
+        "keep",
+        "eliminate",
+        "select",
+        "reopen",
+        "defer",
+        "no_match",
+        SUFFICIENCY_OPERATION,
+    }
 )
 
 
@@ -208,6 +222,7 @@ class OccurrenceSetStateV2:
     selected_occurrence_ids: tuple[str, ...] = ()
     resolution: str = "unresolved"
     lifecycle: str = "active"
+    sufficiency: OccurrenceSufficiencyDecision | None = None
     revision: int = 0
 
     @property
@@ -239,6 +254,8 @@ class OccurrenceSetStateV2:
             if occurrence_id:
                 normalized[occurrence_id] = dict(raw_candidate)
         changed = target != self.semantic_target or normalized != self.candidates
+        if changed:
+            self.sufficiency = None
         self.semantic_target = target
         self.candidates = normalized
         for occurrence_id in normalized:
@@ -280,6 +297,9 @@ class OccurrenceSetStateV2:
             ],
             "viable_occurrence_ids": list(self.viable_occurrence_ids),
             "selected_occurrence_ids": list(self.selected_occurrence_ids),
+            "sufficiency": (
+                self.sufficiency.to_dict() if self.sufficiency is not None else None
+            ),
         }
 
 
@@ -289,6 +309,7 @@ class OccurrenceResolutionStateV2:
 
     sets: dict[str, OccurrenceSetStateV2] = field(default_factory=dict)
     active_set_id: str = ""
+    sufficiency_enabled: bool = False
     revision: int = 0
 
     @property
@@ -342,6 +363,16 @@ class OccurrenceResolutionStateV2:
     def selected_occurrence_ids(self) -> tuple[str, ...]:
         active = self.active_set
         return active.selected_occurrence_ids if active is not None else ()
+
+    @property
+    def sufficiency_required(self) -> bool:
+        active = self.active_set
+        return bool(
+            self.sufficiency_enabled
+            and active is not None
+            and active.resolution in {"unresolved", "deferred"}
+            and active.sufficiency is None
+        )
 
     def sync_sets(self, occurrence_sets: Sequence[Mapping[str, Any]]) -> bool:
         # A selected/no-match result is the scoped decision endpoint. Later
@@ -430,7 +461,15 @@ class OccurrenceResolutionStateV2:
                 allow_resolution_transaction=allow_resolution_transaction,
             )
             assert error is None
-            applied.append(_normalized_scoped_occurrence_op(operation))
+            operation_name = str(
+                operation.get("op", operation.get("type", "")) or ""
+            ).strip().casefold()
+            if operation_name == SUFFICIENCY_OPERATION:
+                active = self.active_set
+                assert active is not None and active.sufficiency is not None
+                applied.append(active.sufficiency.to_operation())
+            else:
+                applied.append(_normalized_scoped_occurrence_op(operation))
         if applied:
             self.revision += 1
         return {"accepted": True, "errors": [], "applied": applied}
@@ -485,6 +524,13 @@ class OccurrenceResolutionStateV2:
             "resolution_required": self.resolution_required,
             "arbitration_required": self.arbitration_required,
             "selected_occurrence_ids": list(self.selected_occurrence_ids),
+            "sufficiency_enabled": self.sufficiency_enabled,
+            "sufficiency_required": self.sufficiency_required,
+            "active_sufficiency": (
+                active.sufficiency.to_dict()
+                if active is not None and active.sufficiency is not None
+                else None
+            ),
             "retired_set_ids": list(self.retired_set_ids),
             "active_locators": list(self.active_locators()),
             "retired_locators": list(self.retired_locators()),
@@ -515,11 +561,13 @@ class OccurrenceResolutionStateV2:
                     selected_occurrence_ids=value.selected_occurrence_ids,
                     resolution=value.resolution,
                     lifecycle=value.lifecycle,
+                    sufficiency=value.sufficiency,
                     revision=value.revision,
                 )
                 for set_id, value in self.sets.items()
             },
             active_set_id=self.active_set_id,
+            sufficiency_enabled=self.sufficiency_enabled,
             revision=self.revision,
         )
 
@@ -569,10 +617,54 @@ class OccurrenceResolutionStateV2:
                 "set_id": set_id,
                 "resolution": occurrence_set.resolution,
             }
+        if op == SUFFICIENCY_OPERATION:
+            if not self.sufficiency_enabled:
+                return {
+                    "code": "occurrence_sufficiency_not_enabled",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                }
+            if occurrence_id:
+                return {
+                    "code": "occurrence_sufficiency_forbids_occurrence_id",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                }
+            if occurrence_set.sufficiency is not None:
+                return {
+                    "code": "occurrence_sufficiency_already_assessed",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                }
+            decision, errors = validate_sufficiency_operation(
+                operation,
+                set_id=set_id,
+                candidates=occurrence_set.candidates,
+                viable_occurrence_ids=occurrence_set.viable_occurrence_ids,
+                operation_index=index,
+            )
+            if errors:
+                return errors[0]
+            assert decision is not None
+            occurrence_set.sufficiency = decision
+            if occurrence_set.resolution == "deferred":
+                occurrence_set.resolution = "unresolved"
+            occurrence_set.revision += 1
+            return None
         if op in {"defer", "no_match"}:
             if occurrence_id:
                 return {
                     "code": "set_resolution_op_forbids_occurrence_id",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                    "op": op,
+                }
+            if self.sufficiency_enabled and (
+                occurrence_set.sufficiency is None
+                or occurrence_set.sufficiency.verdict != "insufficient"
+            ):
+                return {
+                    "code": "occurrence_sufficiency_requires_insufficient",
                     "occurrence_op_index": index,
                     "set_id": set_id,
                     "op": op,
@@ -601,6 +693,34 @@ class OccurrenceResolutionStateV2:
             }
         selected = list(occurrence_set.selected_occurrence_ids)
         if op == "select":
+            if self.sufficiency_enabled and occurrence_set.sufficiency is None:
+                return {
+                    "code": "occurrence_sufficiency_assessment_required",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                    "occurrence_id": occurrence_id,
+                }
+            if self.sufficiency_enabled and (
+                occurrence_set.sufficiency is not None
+                and occurrence_set.sufficiency.verdict != "sufficient"
+            ):
+                return {
+                    "code": "occurrence_sufficiency_forbids_selection",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                    "occurrence_id": occurrence_id,
+                }
+            if self.sufficiency_enabled and (
+                occurrence_set.sufficiency is not None
+                and occurrence_id
+                not in occurrence_set.sufficiency.sufficient_occurrence_ids
+            ):
+                return {
+                    "code": "occurrence_sufficiency_candidate_not_supported",
+                    "occurrence_op_index": index,
+                    "set_id": set_id,
+                    "occurrence_id": occurrence_id,
+                }
             if occurrence_set.resolution == "no_match":
                 return {
                     "code": "no_match_set_requires_reopen",
@@ -613,6 +733,7 @@ class OccurrenceResolutionStateV2:
             occurrence_set.selected_occurrence_ids = tuple(selected)
             occurrence_set.resolution = "selected"
         elif op == "eliminate":
+            occurrence_set.sufficiency = None
             occurrence_set.states[occurrence_id] = "eliminated"
             occurrence_set.selected_occurrence_ids = tuple(
                 value for value in selected if value != occurrence_id
@@ -620,12 +741,15 @@ class OccurrenceResolutionStateV2:
             if not occurrence_set.selected_occurrence_ids:
                 occurrence_set.resolution = "unresolved"
         elif op == "reopen":
+            occurrence_set.sufficiency = None
             occurrence_set.states[occurrence_id] = "active"
             occurrence_set.selected_occurrence_ids = tuple(
                 value for value in selected if value != occurrence_id
             )
             occurrence_set.resolution = "unresolved"
         else:
+            if op == "keep":
+                occurrence_set.sufficiency = None
             if current != "selected":
                 occurrence_set.states[occurrence_id] = "active"
             if occurrence_set.resolution in {"deferred", "no_match"}:
@@ -880,7 +1004,7 @@ class OccurrencePacketTransform:
                     "grouped and flat occurrence text budgets differ"
                 )
             occurrence_set["method_arm"] = (
-                "scoped" if self.arm in {"a2-clean", "a3"} else self.arm
+                "scoped" if self.arm in {"a2-clean", "a3", "a4"} else self.arm
             )
             if self.arm == "a1-flat":
                 representation = "flat"
