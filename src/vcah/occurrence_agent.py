@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 
 from vcah.caption_schema import stable_digest
 from vcah.occurrence_sufficiency import (
+    DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT,
     OccurrenceSufficiencyDecision,
     SUFFICIENCY_OPERATION,
     validate_sufficiency_operation,
@@ -374,6 +375,20 @@ class OccurrenceResolutionStateV2:
             and active.sufficiency is None
         )
 
+    @property
+    def sufficiency_scope_occurrence_ids(self) -> tuple[str, ...]:
+        active = self.active_set
+        if not self.sufficiency_enabled or active is None:
+            return ()
+        return active.viable_occurrence_ids[:DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT]
+
+    @property
+    def sufficiency_out_of_scope_occurrence_ids(self) -> tuple[str, ...]:
+        active = self.active_set
+        if not self.sufficiency_enabled or active is None:
+            return ()
+        return active.viable_occurrence_ids[DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT:]
+
     def sync_sets(self, occurrence_sets: Sequence[Mapping[str, Any]]) -> bool:
         # A selected/no-match result is the scoped decision endpoint. Later
         # retrieval packets cannot silently replace it; search-more remains
@@ -526,6 +541,17 @@ class OccurrenceResolutionStateV2:
             "selected_occurrence_ids": list(self.selected_occurrence_ids),
             "sufficiency_enabled": self.sufficiency_enabled,
             "sufficiency_required": self.sufficiency_required,
+            "sufficiency_candidate_limit": (
+                DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT
+                if self.sufficiency_enabled
+                else None
+            ),
+            "sufficiency_scope_occurrence_ids": list(
+                self.sufficiency_scope_occurrence_ids
+            ),
+            "sufficiency_out_of_scope_occurrence_ids": list(
+                self.sufficiency_out_of_scope_occurrence_ids
+            ),
             "active_sufficiency": (
                 active.sufficiency.to_dict()
                 if active is not None and active.sufficiency is not None
@@ -646,7 +672,10 @@ class OccurrenceResolutionStateV2:
                 operation,
                 set_id=set_id,
                 candidates=occurrence_set.candidates,
-                viable_occurrence_ids=occurrence_set.viable_occurrence_ids,
+                viable_occurrence_ids=self.sufficiency_scope_occurrence_ids,
+                out_of_scope_occurrence_ids=(
+                    self.sufficiency_out_of_scope_occurrence_ids
+                ),
                 operation_index=index,
             )
             if errors:

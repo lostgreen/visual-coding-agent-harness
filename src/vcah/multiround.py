@@ -69,6 +69,7 @@ _MUST_NOT_ANSWER_OCCURRENCE_CODES = frozenset(
         "occurrence_sufficiency_requires_insufficient",
         "occurrence_sufficiency_forbids_selection",
         "occurrence_sufficiency_candidate_not_supported",
+        "occurrence_sufficiency_support_incomplete",
         "occurrence_locator_inspection_required",
         "occurrence_locator_binding_required",
         "occurrence_locator_unbound_window_forbidden",
@@ -1317,6 +1318,15 @@ class VirtualVideoMultiRoundDriver:
                             "implicit_unknown_support_count": int(
                                 operation.get("implicit_unknown_support_count", 0)
                                 or 0
+                            ),
+                            "support_complete": bool(
+                                operation.get("support_complete")
+                            ),
+                            "scope_occurrence_ids": list(
+                                operation.get("scope_occurrence_ids", ()) or ()
+                            ),
+                            "out_of_scope_occurrence_ids": list(
+                                operation.get("out_of_scope_occurrence_ids", ()) or ()
                             ),
                             "constraints_checked": [
                                 str(row.get("constraint_id", "") or "")
@@ -3056,6 +3066,29 @@ def _control_retry_feedback(
         if active_sufficiency is not None:
             error_verdict = active_sufficiency.verdict
             sufficient_ids = active_sufficiency.sufficient_occurrence_ids
+        incomplete_support = [
+            dict(row)
+            for error in sufficiency_errors
+            if error.get("code") == "occurrence_sufficiency_support_incomplete"
+            for row in (
+                tuple(error.get("missing_by_constraint", ()) or ())
+                or (
+                    {
+                        "constraint_id": str(error.get("constraint_id", "") or ""),
+                        "missing_occurrence_ids": list(
+                            error.get("missing_occurrence_ids", ()) or ()
+                        ),
+                    },
+                )
+            )
+            if isinstance(row, Mapping)
+        ]
+        if incomplete_support:
+            repair_rules.append(
+                "The sufficiency matrix was not accepted because required rows were omitted as incomplete serialization. Resubmit one assessment and include exactly one support row for every listed in-scope occurrence_id under every constraint. Use explicit status=unknown when the visible evidence cannot decide; omission is a serialization error. Missing rows: "
+                + json.dumps(incomplete_support, sort_keys=True)
+                + "."
+            )
         if error_verdict == "sufficient" and sufficient_ids:
             repair_rules.append(
                 "Do not answer or reassess sufficiency. The active assessment is sufficient; return action=update_workspace and select only one occurrence_id from its sufficient_occurrence_ids."
@@ -3072,7 +3105,7 @@ def _control_retry_feedback(
                 else "End the same transaction with a compatible select, defer, or no_match operation."
             )
             repair_rules.append(
-                "Do not answer. Submit one assess_sufficiency operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. Bind supported rows to visible evidence_passage_ids; omitted candidates are mechanically recorded as unknown and Runtime derives the verdict from the matrix. "
+                "Do not answer. Submit one assess_sufficiency operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. Include every in-scope occurrence_id under every constraint, bind supported rows to visible evidence_passage_ids, and use explicit status=unknown when evidence cannot decide. Missing rows are rejected; Runtime derives the verdict from the complete matrix. "
                 + terminal_rule
             )
     if "occurrence_search_required" in codes:

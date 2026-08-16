@@ -514,6 +514,28 @@ def test_a4_finalization_retry_forbids_defer() -> None:
     assert "Do not use defer during finalization" in feedback["instruction"]
 
 
+def test_a4_incomplete_support_retry_requests_exact_missing_rows() -> None:
+    feedback = _control_retry_feedback(
+        (
+            {
+                "code": "occurrence_sufficiency_support_incomplete",
+                "constraint_id": "target_identity",
+                "missing_occurrence_ids": ["occ_2", "occ_3"],
+            },
+        ),
+        revision=2,
+        previous_feedback={},
+        force_finalize=True,
+    )
+
+    instruction = feedback["instruction"]
+    assert "incomplete serialization" in instruction
+    assert "explicit status=unknown" in instruction
+    assert "occ_2" in instruction
+    assert "occ_3" in instruction
+    assert "select or no_match" in instruction
+
+
 def test_occurrence_locator_terminal_outcomes_are_explicit_and_exclusive() -> None:
     trace: list[dict[str, Any]] = []
     outcomes: dict[tuple[str, str], str] = {}

@@ -519,6 +519,19 @@ def build_report(
                 for row in by_arm["a4"].values()
             )
         ),
+        "a4_support_surface_complete": (
+            "a4" not in by_arm
+            or not any(
+                row.get("sufficiency_support_complete") is not None
+                for row in by_arm["a4"].values()
+            )
+            or all(
+                row.get("sufficiency_support_complete") is True
+                and int(row.get("sufficiency_implicit_unknown_support_count", 0) or 0) == 0
+                and 1 <= int(row.get("sufficiency_scope_candidate_count", 0) or 0) <= 5
+                for row in by_arm["a4"].values()
+            )
+        ),
         "post_selection_only_divergence": (
             post_selection_balance["passed"]
             if post_selection_balance["applicable"]
@@ -580,6 +593,7 @@ def build_report(
             "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
             "matched_pre_treatment_responses": "WP6 replays A2-clean into A3 until scoped resolution is persisted; WP8 replays A3 into A4 until the first scoped set is exposed; all later calls remain live",
             "sufficiency_transaction": "A4 records an explicit assessment before select/defer/no_match; structural validity checks ordering, visible bindings, and verdict-transition consistency but does not constrain endpoint values",
+            "sufficiency_support_surface": "A4.1 requires complete explicit support rows for the top-five in-scope candidates; out-of-scope candidates neither block nor become sufficient",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
             "budget_symmetry_passed": "configured semantic-round budgets are present, internally consistent, and equal across arms; realized semantic rounds remain a treatment cost endpoint",
         },
@@ -604,6 +618,10 @@ def build_report(
                 for row in by_arm.get(arm, {}).values()
             ),
             "a4_sufficiency_transactions_valid": "a4" in by_arm,
+            "a4_support_surface_complete": any(
+                row.get("sufficiency_support_complete") is not None
+                for row in by_arm.get("a4", {}).values()
+            ),
         },
         "structural_checks": structural_checks,
         "structural_gate_passed": all(
@@ -1137,6 +1155,25 @@ def _aggregate_arm_result(
         ),
         "sufficiency_mean_sufficient_candidate_count": _optional_mean(
             row.get("sufficiency_sufficient_candidate_count") for row in rows
+        ),
+        "sufficiency_mean_scope_candidate_count": _optional_mean(
+            row.get("sufficiency_scope_candidate_count") for row in rows
+        ),
+        "sufficiency_mean_out_of_scope_candidate_count": _optional_mean(
+            row.get("sufficiency_out_of_scope_candidate_count") for row in rows
+        ),
+        "sufficiency_support_complete_rate": _mean_bool(
+            row.get("sufficiency_support_complete")
+            for row in rows
+            if row.get("sufficiency_support_complete") is not None
+        ),
+        "sufficiency_incomplete_support_retry_count": sum(
+            int(row.get("sufficiency_incomplete_support_retry_count", 0) or 0)
+            for row in rows
+        ),
+        "sufficiency_implicit_unknown_support_count": sum(
+            int(row.get("sufficiency_implicit_unknown_support_count", 0) or 0)
+            for row in rows
         ),
         "sufficiency_transaction_valid_rate": _mean_bool(
             row.get("sufficiency_transaction_valid")
@@ -1914,6 +1951,11 @@ def _sufficiency_transaction_metrics(
         else None
     )
     final_event = events[-1] if events else {}
+    support_complete_values = [
+        bool(event.get("support_complete"))
+        for event in events
+        if "support_complete" in event
+    ]
     return {
         "sufficiency_activation_event_count": activations,
         "sufficiency_decision_event_count": len(events),
@@ -1930,6 +1972,19 @@ def _sufficiency_transaction_metrics(
             int(event.get("implicit_unknown_support_count", 0) or 0)
             for event in events
         ),
+        "sufficiency_incomplete_support_retry_count": sum(
+            any(
+                str(error.get("code", "") or "")
+                == "occurrence_sufficiency_support_incomplete"
+                for error in tuple(row.get("errors", ()) or ())
+                if isinstance(error, Mapping)
+            )
+            for row in trace
+            if row.get("type") == "decision_schema_error"
+        ),
+        "sufficiency_support_complete": (
+            all(support_complete_values) if support_complete_values else None
+        ),
         "sufficiency_final_verdict": final_event.get("verdict"),
         "sufficiency_constraint_count": (
             len(tuple(final_event.get("constraints_checked", ()) or ()))
@@ -1939,6 +1994,16 @@ def _sufficiency_transaction_metrics(
         "sufficiency_sufficient_candidate_count": (
             len(tuple(final_event.get("sufficient_occurrence_ids", ()) or ()))
             if final_event
+            else None
+        ),
+        "sufficiency_scope_candidate_count": (
+            len(tuple(final_event.get("scope_occurrence_ids", ()) or ()))
+            if final_event and "scope_occurrence_ids" in final_event
+            else None
+        ),
+        "sufficiency_out_of_scope_candidate_count": (
+            len(tuple(final_event.get("out_of_scope_occurrence_ids", ()) or ()))
+            if final_event and "out_of_scope_occurrence_ids" in final_event
             else None
         ),
     }

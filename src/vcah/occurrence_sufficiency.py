@@ -27,6 +27,7 @@ QUESTION_CRITICAL_CONSTRAINT_TYPES = frozenset(
 MAX_CONSTRAINTS = 6
 MAX_CONSTRAINT_DESCRIPTION_CHARS = 240
 MAX_EVIDENCE_PASSAGES = 3
+DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT = 5
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,8 @@ class OccurrenceSufficiencyDecision:
     declared_verdict: str
     verdict_normalized: bool
     implicit_unknown_support_count: int
+    scope_occurrence_ids: tuple[str, ...]
+    out_of_scope_occurrence_ids: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +60,9 @@ class OccurrenceSufficiencyDecision:
             "declared_verdict": self.declared_verdict,
             "verdict_normalized": self.verdict_normalized,
             "implicit_unknown_support_count": self.implicit_unknown_support_count,
+            "scope_occurrence_ids": list(self.scope_occurrence_ids),
+            "out_of_scope_occurrence_ids": list(self.out_of_scope_occurrence_ids),
+            "support_complete": True,
         }
 
     def to_operation(self) -> dict[str, Any]:
@@ -69,6 +75,7 @@ def validate_sufficiency_operation(
     set_id: str,
     candidates: Mapping[str, Mapping[str, Any]],
     viable_occurrence_ids: Sequence[str],
+    out_of_scope_occurrence_ids: Sequence[str] = (),
     operation_index: int,
 ) -> tuple[OccurrenceSufficiencyDecision | None, list[dict[str, Any]]]:
     verdict = str(operation.get("verdict", "") or "").strip().casefold()
@@ -106,6 +113,7 @@ def validate_sufficiency_operation(
     }
     seen_constraint_ids: set[str] = set()
     errors: list[dict[str, Any]] = []
+    incomplete_support: list[dict[str, Any]] = []
     for constraint_index, raw_constraint in enumerate(raw_constraints):
         if not isinstance(raw_constraint, Mapping):
             errors.append(
@@ -245,13 +253,12 @@ def validate_sufficiency_operation(
             for occurrence_id in viable_ids
             if occurrence_id not in seen_support_ids
         ]
-        for occurrence_id in missing_ids:
-            support_by_candidate[occurrence_id].append("unknown")
-            support_rows.append(
+        if missing_ids:
+            incomplete_support.append(
                 {
-                    "occurrence_id": occurrence_id,
-                    "status": "unknown",
-                    "evidence_passage_ids": [],
+                    "constraint_index": constraint_index,
+                    "constraint_id": constraint_id,
+                    "missing_occurrence_ids": missing_ids,
                 }
             )
         normalized_constraints.append(
@@ -260,10 +267,27 @@ def validate_sufficiency_operation(
                 "constraint_type": constraint_type,
                 "description": description,
                 "support": support_rows,
-                "implicit_unknown_occurrence_ids": missing_ids,
+                "implicit_unknown_occurrence_ids": [],
             }
         )
 
+    if incomplete_support:
+        errors.append(
+            _error(
+                "occurrence_sufficiency_support_incomplete",
+                operation_index,
+                set_id=set_id,
+                missing_by_constraint=incomplete_support,
+                missing_occurrence_ids=list(
+                    dict.fromkeys(
+                        occurrence_id
+                        for row in incomplete_support
+                        for occurrence_id in row["missing_occurrence_ids"]
+                    )
+                ),
+                required_occurrence_ids=list(viable_ids),
+            )
+        )
     if errors:
         return None, errors
     sufficient_ids = tuple(
@@ -283,9 +307,14 @@ def validate_sufficiency_operation(
             sufficient_occurrence_ids=sufficient_ids,
             declared_verdict=verdict,
             verdict_normalized=verdict != expected_verdict,
-            implicit_unknown_support_count=sum(
-                len(tuple(row.get("implicit_unknown_occurrence_ids", ()) or ()))
-                for row in normalized_constraints
+            implicit_unknown_support_count=0,
+            scope_occurrence_ids=viable_ids,
+            out_of_scope_occurrence_ids=tuple(
+                dict.fromkeys(
+                    str(value)
+                    for value in out_of_scope_occurrence_ids
+                    if str(value)
+                )
             ),
         ),
         [],

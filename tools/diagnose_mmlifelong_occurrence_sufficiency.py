@@ -621,12 +621,22 @@ def _expanded_sufficiency_events(
                     for occurrence_id, status in set_states.items()
                     if status != "eliminated"
                 )
+                recorded_scope = tuple(
+                    str(value)
+                    for value in tuple(compact.get("scope_occurrence_ids", ()) or ())
+                    if str(value)
+                )
+                scope_ids = recorded_scope or viable_ids
+                if any(occurrence_id not in viable_ids for occurrence_id in scope_ids):
+                    raise ValueError(
+                        f"sufficiency scope contains non-viable ID for set {set_id}"
+                    )
                 normalized_constraints = _normalize_raw_constraints(
-                    operation.get("constraints_checked", ()), viable_ids=viable_ids
+                    operation.get("constraints_checked", ()), viable_ids=scope_ids
                 )
                 sufficient_ids = tuple(
                     occurrence_id
-                    for occurrence_id in viable_ids
+                    for occurrence_id in scope_ids
                     if normalized_constraints
                     and all(
                         next(
@@ -651,6 +661,12 @@ def _expanded_sufficiency_events(
                     normalized_constraints=normalized_constraints,
                     sufficient_ids=sufficient_ids,
                     implicit_count=implicit_count,
+                    scope_ids=scope_ids,
+                    out_of_scope_ids=tuple(
+                        occurrence_id
+                        for occurrence_id in viable_ids
+                        if occurrence_id not in scope_ids
+                    ),
                 )
                 expanded.append(
                     {
@@ -720,6 +736,8 @@ def _validate_reconstructed_event(
     normalized_constraints: Sequence[Mapping[str, Any]],
     sufficient_ids: Sequence[str],
     implicit_count: int,
+    scope_ids: Sequence[str],
+    out_of_scope_ids: Sequence[str],
 ) -> None:
     expected_constraint_ids = [
         str(row.get("constraint_id", "") or "") for row in normalized_constraints
@@ -745,6 +763,19 @@ def _validate_reconstructed_event(
             implicit_count,
         ),
     }
+    if "scope_occurrence_ids" in compact:
+        checks["scope_occurrence_ids"] = (
+            list(compact.get("scope_occurrence_ids", ()) or ()),
+            list(scope_ids),
+        )
+        checks["out_of_scope_occurrence_ids"] = (
+            list(compact.get("out_of_scope_occurrence_ids", ()) or ()),
+            list(out_of_scope_ids),
+        )
+        checks["support_complete"] = (
+            bool(compact.get("support_complete")),
+            True,
+        )
     mismatches = [
         name for name, (actual, expected) in checks.items() if actual != expected
     ]

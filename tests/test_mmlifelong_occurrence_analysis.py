@@ -1014,6 +1014,10 @@ def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
             "candidate_count": 2,
             "verdict": "sufficient",
             "constraints_checked": ["identity"],
+            "support_complete": True,
+            "scope_occurrence_ids": ["occ_1", "occ_2"],
+            "out_of_scope_occurrence_ids": [],
+            "implicit_unknown_support_count": 0,
         },
     )
 
@@ -1021,6 +1025,15 @@ def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
     assert valid["ordering_failure_count"] == 0
     assert valid["verdict_transition_failure_count"] == 0
     assert valid["event_count_mismatch"] is False
+    assert valid["support_surface_applicable"] is True
+    assert valid["support_surface_failure_count"] == 0
+
+    analyzer_metrics = ANALYSIS._sufficiency_transaction_metrics(
+        (*valid_trace, *valid_decisions)
+    )
+    assert analyzer_metrics["sufficiency_support_complete"] is True
+    assert analyzer_metrics["sufficiency_scope_candidate_count"] == 2
+    assert analyzer_metrics["sufficiency_out_of_scope_candidate_count"] == 0
 
     invalid = AUDIT._sufficiency_transaction_audit(
         (

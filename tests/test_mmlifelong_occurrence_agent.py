@@ -765,7 +765,7 @@ def test_a4_supported_constraint_must_bind_visible_candidate_passage() -> None:
     )
 
 
-def test_a4_normalizes_omitted_support_and_derives_verdict() -> None:
+def test_a4_rejects_omitted_support_then_accepts_explicit_unknown() -> None:
     state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
     state.sync_sets(
         (
@@ -783,8 +783,16 @@ def test_a4_normalizes_omitted_support_and_derives_verdict() -> None:
     assessment["constraints_checked"][0]["support"] = [
         assessment["constraints_checked"][0]["support"][0]
     ]
+    assessment["constraints_checked"].append(
+        {
+            "constraint_id": "target_action",
+            "constraint_type": "action",
+            "description": "the occurrence depicts the target action",
+            "support": [dict(assessment["constraints_checked"][0]["support"][0])],
+        }
+    )
 
-    result = state.apply_ops(
+    incomplete = state.apply_ops(
         (
             assessment,
             {
@@ -795,17 +803,139 @@ def test_a4_normalizes_omitted_support_and_derives_verdict() -> None:
         )
     )
 
-    assert result["accepted"] is True
-    normalized = result["applied"][0]
+    assert incomplete["accepted"] is False
+    assert incomplete["errors"][0]["code"] == (
+        "occurrence_sufficiency_support_incomplete"
+    )
+    assert incomplete["errors"][0]["missing_occurrence_ids"] == ["occ_2"]
+    assert [
+        row["constraint_id"]
+        for row in incomplete["errors"][0]["missing_by_constraint"]
+    ] == ["target_identity", "target_action"]
+
+    assessment["constraints_checked"][0]["support"].append(
+        {
+            "occurrence_id": "occ_2",
+            "status": "unknown",
+            "evidence_passage_ids": [],
+        }
+    )
+    assessment["constraints_checked"][1]["support"].append(
+        {
+            "occurrence_id": "occ_2",
+            "status": "unknown",
+            "evidence_passage_ids": [],
+        }
+    )
+    accepted = state.apply_ops(
+        (
+            assessment,
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+
+    assert accepted["accepted"] is True
+    normalized = accepted["applied"][0]
     assert normalized["declared_verdict"] == "insufficient"
     assert normalized["verdict"] == "sufficient"
     assert normalized["verdict_normalized"] is True
-    assert normalized["implicit_unknown_support_count"] == 1
+    assert normalized["implicit_unknown_support_count"] == 0
+    assert normalized["support_complete"] is True
+    assert normalized["scope_occurrence_ids"] == ["occ_1", "occ_2"]
+    assert normalized["out_of_scope_occurrence_ids"] == []
     assert normalized["constraints_checked"][0]["support"][1] == {
         "occurrence_id": "occ_2",
         "status": "unknown",
         "evidence_passage_ids": [],
     }
+
+
+def test_a4_sufficiency_scope_is_top_five_and_out_of_scope_is_not_selectable() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {
+                        "occurrence_id": f"occ_{index}",
+                        "passage_ids": [f"p{index}"],
+                    }
+                    for index in range(1, 8)
+                ],
+            },
+        )
+    )
+
+    serialized = state.to_dict()
+    assert serialized["sufficiency_candidate_limit"] == 5
+    assert serialized["sufficiency_scope_occurrence_ids"] == [
+        "occ_1",
+        "occ_2",
+        "occ_3",
+        "occ_4",
+        "occ_5",
+    ]
+    assert serialized["sufficiency_out_of_scope_occurrence_ids"] == [
+        "occ_6",
+        "occ_7",
+    ]
+
+    support = [
+        {
+            "occurrence_id": f"occ_{index}",
+            "status": "supported" if index == 1 else "unknown",
+            "evidence_passage_ids": ["p1"] if index == 1 else [],
+        }
+        for index in range(1, 6)
+    ]
+    assessment = {
+        "op": "assess_sufficiency",
+        "set_id": "attempt_sufficiency",
+        "verdict": "sufficient",
+        "constraints_checked": [
+            {
+                "constraint_id": "identity",
+                "constraint_type": "identity",
+                "description": "question target",
+                "support": support,
+            }
+        ],
+    }
+    rejected = state.apply_ops(
+        (
+            assessment,
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_6",
+            },
+        )
+    )
+    assert rejected["accepted"] is False
+    assert rejected["errors"][0]["code"] == (
+        "occurrence_sufficiency_candidate_not_supported"
+    )
+
+    accepted = state.apply_ops(
+        (
+            assessment,
+            {
+                "op": "select",
+                "set_id": "attempt_sufficiency",
+                "occurrence_id": "occ_1",
+            },
+        )
+    )
+    assert accepted["accepted"] is True
+    assert accepted["applied"][0]["out_of_scope_occurrence_ids"] == [
+        "occ_6",
+        "occ_7",
+    ]
 
 
 def test_a3_requires_selected_locator_binding_before_answer() -> None:
@@ -957,6 +1087,9 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
                     **scoped_state,
                     "sufficiency_enabled": True,
                     "sufficiency_required": True,
+                    "sufficiency_candidate_limit": 5,
+                    "sufficiency_scope_occurrence_ids": ["occ_1", "occ_2"],
+                    "sufficiency_out_of_scope_occurrence_ids": [],
                     "active_sufficiency": None,
                 }
             },
@@ -969,6 +1102,9 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
     assert "question-critical constraints" in sufficiency_prompt
     assert "assess_sufficiency" in sufficiency_prompt
     assert "evidence_passage_ids" in sufficiency_prompt
+    assert "sufficiency_scope_occurrence_ids" in sufficiency_prompt
+    assert "incomplete serialization" in sufficiency_prompt
+    assert "semantic unknown must be explicit" in sufficiency_prompt
 
     actionable_prompt = _frozen_reasoner_prompt(
         {

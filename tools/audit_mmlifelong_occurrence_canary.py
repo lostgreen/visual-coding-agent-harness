@@ -512,6 +512,18 @@ def audit_roots(
             "sufficiency_decision_event_count": sum(
                 row["sufficiency_audit"]["decision_event_count"] for row in cases
             ),
+            "sufficiency_support_surface_applicable_case_count": sum(
+                row["sufficiency_audit"]["support_surface_applicable"]
+                for row in cases
+            ),
+            "sufficiency_support_surface_failure_case_count": sum(
+                row["sufficiency_audit"]["support_surface_failure_count"] > 0
+                for row in cases
+            ),
+            "sufficiency_incomplete_support_retry_count": sum(
+                row["sufficiency_audit"]["incomplete_support_retry_count"]
+                for row in cases
+            ),
             "sufficiency_transaction_failure_case_count": sum(
                 row["sufficiency_audit"]["event_shape_failure_count"] > 0
                 or row["sufficiency_audit"]["event_count_mismatch"]
@@ -826,6 +838,15 @@ def audit_roots(
                 == 0
             )
         ),
+        "a4_support_surface_complete": (
+            "a4" not in per_arm
+            or per_arm["a4"]["sufficiency_support_surface_applicable_case_count"] == 0
+            or (
+                per_arm["a4"]["sufficiency_support_surface_applicable_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"]["sufficiency_support_surface_failure_case_count"] == 0
+            )
+        ),
         "post_selection_only_divergence": (
             post_selection_balance["passed"]
             if post_selection_balance["applicable"]
@@ -1000,6 +1021,19 @@ def _sufficiency_transaction_audit(
         or not tuple(row.get("constraints_checked", ()) or ())
         for row in events
     )
+    support_surface_events = tuple(
+        row for row in events if "support_complete" in row
+    )
+    support_surface_failure_count = sum(
+        not bool(row.get("support_complete"))
+        or not 1 <= len(tuple(row.get("scope_occurrence_ids", ()) or ())) <= 5
+        or bool(
+            set(tuple(row.get("scope_occurrence_ids", ()) or ()))
+            & set(tuple(row.get("out_of_scope_occurrence_ids", ()) or ()))
+        )
+        or int(row.get("implicit_unknown_support_count", 0) or 0) != 0
+        for row in support_surface_events
+    )
     return {
         "activation_event_count": sum(
             row.get("type") == "occurrence_sufficiency_activated" for row in trace
@@ -1017,6 +1051,18 @@ def _sufficiency_transaction_audit(
         "implicit_unknown_support_count": sum(
             int(row.get("implicit_unknown_support_count", 0) or 0)
             for row in events
+        ),
+        "support_surface_applicable": bool(support_surface_events),
+        "support_surface_failure_count": support_surface_failure_count,
+        "incomplete_support_retry_count": sum(
+            any(
+                str(error.get("code", "") or "")
+                == "occurrence_sufficiency_support_incomplete"
+                for error in tuple(row.get("errors", ()) or ())
+                if isinstance(error, Mapping)
+            )
+            for row in trace
+            if row.get("type") == "decision_schema_error"
         ),
     }
 
