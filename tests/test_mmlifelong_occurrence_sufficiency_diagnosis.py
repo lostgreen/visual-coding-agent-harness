@@ -1,0 +1,311 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+
+MODULE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "diagnose_mmlifelong_occurrence_sufficiency.py"
+)
+SPEC = importlib.util.spec_from_file_location("sufficiency_diagnosis", MODULE_PATH)
+assert SPEC and SPEC.loader
+DIAGNOSIS = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(DIAGNOSIS)
+
+
+def _constraint(
+    constraint_type: str,
+    statuses: dict[str, str],
+    *,
+    implicit: tuple[str, ...] = (),
+) -> dict:
+    return {
+        "constraint_id": f"{constraint_type}-1",
+        "constraint_type": constraint_type,
+        "support": [
+            {"occurrence_id": occurrence_id, "status": status}
+            for occurrence_id, status in statuses.items()
+        ],
+        "implicit_unknown_occurrence_ids": list(implicit),
+    }
+
+
+def _event(
+    set_id: str,
+    constraints: list[dict],
+    *,
+    verdict: str = "insufficient",
+) -> dict:
+    return {
+        "type": "occurrence_sufficiency_decision",
+        "round": 3,
+        "set_id": set_id,
+        "verdict": verdict,
+        "constraints_checked": constraints,
+    }
+
+
+def _case(
+    case_id: str,
+    set_id: str,
+    event: dict,
+    *,
+    gold_first: bool = True,
+) -> dict:
+    candidates = [
+        {
+            "occurrence_id": f"{case_id}-gold",
+            "time_range": [10, 20],
+            "rank": 1 if gold_first else 2,
+        },
+        {
+            "occurrence_id": f"{case_id}-other",
+            "time_range": [40, 50],
+            "rank": 2 if gold_first else 1,
+        },
+    ]
+    return {
+        "case_id": case_id,
+        "events": (event,),
+        "candidate_sets": {set_id: tuple(candidates)},
+        "clues": ((12.0, 18.0),),
+    }
+
+
+def test_blocker_decomposition_distinguishes_implicit_and_mixed() -> None:
+    event = _event(
+        "set-1",
+        [
+            _constraint(
+                "identity",
+                {"gold": "unknown", "other": "contradicted"},
+                implicit=("gold",),
+            ),
+            _constraint(
+                "action",
+                {"gold": "supported", "other": "partial"},
+            ),
+        ],
+    )
+
+    classified = DIAGNOSIS.classify_candidate_blockers(event)
+    assert classified == {"gold": "implicit_unknown", "other": "mixed"}
+
+    diagnosis = DIAGNOSIS.build_blocker_diagnosis(
+        ({"case_id": "c1", "events": (event,)},)
+    )
+    assert diagnosis["candidate_class_counts"]["implicit_unknown"] == 1
+    assert diagnosis["candidate_class_counts"]["mixed"] == 1
+    assert diagnosis["decision_class_counts"]["mixed"] == 1
+    assert diagnosis["candidate_implicit_unknown_primary_rate"] == 0.5
+
+
+def test_expanded_events_reconstruct_and_validate_implicit_rows() -> None:
+    compact = {
+        "type": "occurrence_sufficiency_decision",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set-1",
+        "verdict": "sufficient",
+        "constraints_checked": ["identity-1"],
+        "constraint_types": ["identity"],
+        "sufficient_occurrence_ids": ["gold"],
+        "implicit_unknown_support_count": 1,
+    }
+    trace = (
+        compact,
+        {
+            "type": "reasoner_decision",
+            "round": 2,
+            "occurrence_ops_accepted": True,
+            "occurrence_ops": [
+                {
+                    "op": "assess_sufficiency",
+                    "set_id": "set-1",
+                    "constraints_checked": [
+                        _constraint("identity", {"gold": "supported"})
+                    ],
+                }
+            ],
+        },
+    )
+    candidate_sets = {
+        "set-1": (
+            {"occurrence_id": "gold", "time_range": [10, 20]},
+            {"occurrence_id": "other", "time_range": [40, 50]},
+        )
+    }
+
+    events = DIAGNOSIS._expanded_sufficiency_events(trace, candidate_sets)
+
+    assert len(events) == 1
+    constraint = events[0]["constraints_checked"][0]
+    assert constraint["implicit_unknown_occurrence_ids"] == ["other"]
+    assert constraint["support"][-1] == {
+        "occurrence_id": "other",
+        "status": "unknown",
+        "evidence_passage_ids": [],
+    }
+
+
+def test_expanded_events_fail_closed_on_reconstruction_mismatch() -> None:
+    trace = (
+        {
+            "type": "occurrence_sufficiency_decision",
+            "round": 2,
+            "occurrence_op_index": 0,
+            "set_id": "set-1",
+            "verdict": "insufficient",
+            "constraints_checked": ["identity-1"],
+            "constraint_types": ["identity"],
+            "sufficient_occurrence_ids": [],
+            "implicit_unknown_support_count": 0,
+        },
+        {
+            "type": "reasoner_decision",
+            "round": 2,
+            "occurrence_ops_accepted": True,
+            "occurrence_ops": [
+                {
+                    "op": "assess_sufficiency",
+                    "set_id": "set-1",
+                    "constraints_checked": [
+                        _constraint("identity", {"gold": "supported"})
+                    ],
+                }
+            ],
+        },
+    )
+    candidate_sets = {
+        "set-1": (
+            {"occurrence_id": "gold", "time_range": [10, 20]},
+            {"occurrence_id": "other", "time_range": [40, 50]},
+        )
+    }
+
+    try:
+        DIAGNOSIS._expanded_sufficiency_events(trace, candidate_sets)
+    except ValueError as error:
+        assert "reconstruction mismatch" in str(error)
+    else:
+        raise AssertionError("expected reconstruction mismatch")
+
+
+def test_support_discrimination_uses_gold_labels_and_case_bootstrap() -> None:
+    c1_gold = "c1-gold"
+    c1_other = "c1-other"
+    c2_gold = "c2-gold"
+    c2_other = "c2-other"
+    c1 = _case(
+        "c1",
+        "set-1",
+        _event(
+            "set-1",
+            [
+                _constraint(
+                    "identity",
+                    {c1_gold: "supported", c1_other: "contradicted"},
+                ),
+                _constraint(
+                    "action",
+                    {c1_gold: "unknown", c1_other: "partial"},
+                    implicit=(c1_gold,),
+                ),
+            ],
+        ),
+    )
+    c2 = _case(
+        "c2",
+        "set-2",
+        _event(
+            "set-2",
+            [
+                _constraint(
+                    "identity",
+                    {c2_gold: "supported", c2_other: "unknown"},
+                ),
+                _constraint(
+                    "action",
+                    {c2_gold: "supported", c2_other: "unknown"},
+                    implicit=(c2_other,),
+                ),
+            ],
+            verdict="sufficient",
+        ),
+    )
+
+    result = DIAGNOSIS.build_support_discrimination(
+        (c1, c2), bootstrap_samples=200, seed=7
+    )
+
+    assert result["candidate_present_event_count"] == 2
+    assert result["overall"]["gold"]["supported_rate"] == 0.75
+    assert result["overall"]["non_gold"]["supported_rate"] == 0.0
+    assert result["overall"]["support_gap"] == 0.75
+    assert (
+        result["by_constraint_type"]["action"]["gold"]["counts"]["implicit_unknown"]
+        == 1
+    )
+    assert (
+        result["by_constraint_type"]["identity"]["non_gold"]["counts"][
+            "declared_unknown"
+        ]
+        == 1
+    )
+    assert result["case_cluster_bootstrap"]["positive_probability"] == 1.0
+    assert result["strong_gold_non_gold_discrimination"] is True
+
+
+def test_gold_at_k_reports_conditional_retention_and_candidate_counts() -> None:
+    event1 = _event("set-1", [_constraint("identity", {"c1-gold": "supported"})])
+    event2 = _event("set-2", [_constraint("identity", {"c2-gold": "supported"})])
+    c1 = _case("c1", "set-1", event1, gold_first=True)
+    c2 = _case("c2", "set-2", event2, gold_first=False)
+
+    result = DIAGNOSIS.build_gold_at_k((c1, c2))
+
+    assert result["analyzed_set_count"] == 2
+    assert result["gold_at_k"]["1"]["unconditional_rate"] == 0.5
+    assert result["gold_at_k"]["3"]["conditional_retention_rate"] == 1.0
+    assert result["candidate_count_distribution"]["median"] == 2.0
+    assert result["recommended_top_k"] == 3
+
+
+def test_selection_metrics_compare_observed_with_always_abstain() -> None:
+    rows = (
+        {
+            "arm": "a3",
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "selected",
+            "osa_strict": True,
+        },
+        {
+            "arm": "a3",
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "selected",
+            "osa_strict": None,
+        },
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "no_match",
+            "osa_strict": None,
+        },
+    )
+
+    result = DIAGNOSIS.build_selection_diagnostics(rows)
+
+    assert result["a3"]["observed"]["precision"] == 0.5
+    assert result["a3"]["observed"]["recall"] == 1.0
+    assert result["a3"]["observed"]["false_commit_rate"] == 1.0
+    assert result["a4"]["observed"]["balanced_accuracy"] == 0.5
+    assert result["a4"]["always_abstain"]["f1"] == 0.0
+    assert result["a4"]["always_abstain"]["no_match_accuracy"] == 1.0
