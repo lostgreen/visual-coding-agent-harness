@@ -11,6 +11,12 @@ from typing import Any, Mapping, Sequence
 
 
 METRICS = (
+    "commit_precision",
+    "commit_recall",
+    "commit_f1",
+    "commit_specificity",
+    "commit_balanced_accuracy",
+    "osa_given_commit",
     "exact_correct_rate",
     "verified_correct_rate",
     "grounded_correct_ref300_rate",
@@ -172,18 +178,21 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"cases: {report['common_complete_case_count']}."
         ),
         "",
-        "| Run | Source N | Complete N | Common exact | OSA strict | False commit | Locator use | Bound visual recall | Frames | VLM calls | Rounds |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Run | Source N | Complete N | Commit P | Commit R | Commit F1 | OSA given commit | False commit | Locator use | Bound visual recall | Common exact | Frames | VLM calls | Rounds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for label, metrics in report["metrics_by_run"].items():
         lines.append(
             f"| {label} | {report['source_case_counts'][label]} | "
             f"{report['source_complete_counts'][label]} | "
-            f"{_fmt(metrics['exact_correct_rate'])} | "
-            f"{_fmt(metrics['osa_strict'])} | "
+            f"{_fmt(metrics['commit_precision'])} | "
+            f"{_fmt(metrics['commit_recall'])} | "
+            f"{_fmt(metrics['commit_f1'])} | "
+            f"{_fmt(metrics['osa_given_commit'])} | "
             f"{_fmt(metrics['false_commit_rate'])} | "
             f"{_fmt(metrics['selected_locator_usage_rate'])} | "
             f"{_fmt(metrics['bound_visual_clue_recall'])} | "
+            f"{_fmt(metrics['exact_correct_rate'])} | "
             f"{_fmt(metrics['mean_visual_frames'])} | "
             f"{_fmt(metrics['mean_vlm_calls'])} | "
             f"{_fmt(metrics['mean_semantic_rounds_used'])} |"

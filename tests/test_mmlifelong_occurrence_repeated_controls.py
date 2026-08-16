@@ -64,6 +64,9 @@ def test_repeated_controls_use_common_complete_intersection() -> None:
     assert report["excluded_from_common_complete"]["wp6_a3"] == ["c2"]
     assert report["metrics_by_run"]["wp6_a3"]["exact_correct_rate"] == 1.0
     assert report["metrics_by_run"]["wp8_a3"]["exact_correct_rate"] == 0.0
+    assert report["metrics_by_run"]["wp6_a3"]["commit_recall"] == 1.0
+    assert report["metrics_by_run"]["wp6_a3"]["osa_given_commit"] == 1.0
+    assert report["metrics_by_run"]["wp8_a3"]["osa_given_commit"] == 0.0
     exact = report["effect_to_variation"]["exact_correct_rate"]
     assert exact["delta"] == 1.0
     assert exact["repeat_range"] == 1.0
