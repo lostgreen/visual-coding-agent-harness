@@ -605,6 +605,9 @@ def build_report(
             "pre_treatment_divergence": "A0 and treatment action/task-query signatures differ before each run first exposes an occurrence candidate set",
             "osa_any": "at least one selected occurrence overlaps a clue paired to the resolved set, conditioned on resolved-set recall",
             "osa_strict": "exactly one occurrence is selected and it overlaps a clue paired to the resolved set",
+            "commit_recall": "final resolution is selected, conditioned on gold being present in the resolved set",
+            "commit_precision": "gold is present in the resolved set, conditioned on final resolution being selected",
+            "osa_given_commit": "strict-correct occurrence selection, conditioned on a selected final resolution and gold being present in the resolved set",
             "false_commit_rate": "final resolution is selected, conditioned on gold absent from the resolved set",
             "no_match_accuracy": "final resolution is no_match, conditioned on gold absent from the resolved set",
             "occurrence_handle_usage_rate": "post-eligibility visual-window tasks with occurrence_id divided by all post-eligibility visual-window tasks",
@@ -1108,6 +1111,31 @@ def _aggregate_arm_result(
     selected_rows: Sequence[Mapping[str, Any]],
     final_resolution_counts: Mapping[str, int],
 ) -> dict[str, Any]:
+    candidate_present_commits = tuple(
+        row
+        for row in candidate_present
+        if str(row.get("final_resolution", "") or "") == "selected"
+    )
+    candidate_absent_commits = tuple(
+        row
+        for row in candidate_absent
+        if str(row.get("final_resolution", "") or "") == "selected"
+    )
+    candidate_absent_no_matches = tuple(
+        row
+        for row in candidate_absent
+        if str(row.get("final_resolution", "") or "") == "no_match"
+    )
+    gate_tp = len(candidate_present_commits)
+    gate_fp = len(candidate_absent_commits)
+    gate_fn = len(candidate_present) - gate_tp
+    gate_tn = len(candidate_absent_no_matches)
+    commit_precision = _ratio_optional(gate_tp, gate_tp + gate_fp)
+    commit_recall = _ratio_optional(gate_tp, len(candidate_present))
+    commit_specificity = _ratio_optional(gate_tn, len(candidate_absent))
+    strict_correct_commits = sum(
+        row.get("osa_strict") is True for row in candidate_present_commits
+    )
     return {
         "n": len(rows),
         "scored_n": len(scored),
@@ -1155,6 +1183,9 @@ def _aggregate_arm_result(
         ),
         "osa_any": _mean_bool(row.get("osa_any") for row in osa),
         "osa_strict": _mean_bool(row.get("osa_strict") for row in osa),
+        "osa_given_commit": _ratio_optional(strict_correct_commits, gate_tp),
+        "strict_correct_commit_count": strict_correct_commits,
+        "wrong_occurrence_commit_count": gate_tp - strict_correct_commits,
         "osa_precision": _optional_mean(row.get("osa_precision") for row in osa),
         "legacy_osa": _mean_bool(
             row.get("legacy_osa_correct")
@@ -1165,6 +1196,18 @@ def _aggregate_arm_result(
         "candidate_present_resolved_count": len(candidate_present),
         "candidate_absent_resolved_count": len(candidate_absent),
         "selected_case_count": len(selected_rows),
+        "commit_case_count": gate_tp + gate_fp,
+        "candidate_present_commit_count": gate_tp,
+        "candidate_absent_commit_count": gate_fp,
+        "candidate_present_noncommit_count": gate_fn,
+        "candidate_absent_no_match_count": gate_tn,
+        "commit_precision": commit_precision,
+        "commit_recall": commit_recall,
+        "commit_f1": _f1_optional(commit_precision, commit_recall),
+        "commit_specificity": commit_specificity,
+        "commit_balanced_accuracy": _optional_mean(
+            (commit_recall, commit_specificity)
+        ),
         "final_resolution_counts": final_resolution_counts,
         "selected_clue_recall": _optional_mean(
             row.get("selected_clue_recall") for row in osa
@@ -2818,6 +2861,18 @@ def _optional_mean(values: Iterable[Any]) -> float | None:
     return mean(normalized) if normalized else None
 
 
+def _ratio_optional(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _f1_optional(
+    precision: float | None, recall: float | None
+) -> float | None:
+    if precision is None or recall is None:
+        return None
+    return 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+
+
 def _mean_bool(values: Iterable[Any]) -> float | None:
     normalized = [float(bool(value)) for value in values if value is not None]
     return mean(normalized) if normalized else None
@@ -2860,8 +2915,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"Primary analysis: {report['primary_analysis_set']} (n={report['case_count']}); frozen_complete n={report['frozen_complete']['n']}; all_cases sensitivity n={report['all_cases']['n']}.",
         f"Trajectory provenance: `{report['trajectory_provenance']}`.",
         "",
-        "| Arm | N | Mean | Raw exact | Verified | Grounded ref300 | Grounded visual | Recall trajectory | Recall resolved | OSA any | OSA strict | No-match | False commit | Locator use | Released | Bound visual recall | Rounds |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Arm | N | Commit P | Commit R | Commit F1 | Specificity | OSA given commit | No-match | False commit | Locator use | Bound visual recall | Verified | Grounded ref300 | Grounded visual | Raw exact | Mean | Frames | VLM calls | Rounds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm, metrics in report["arms"].items():
         lines.append(
@@ -2870,20 +2925,22 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 [
                     arm,
                     str(metrics["n"]),
-                    _fmt(metrics["mean_score"]),
-                    _fmt(metrics["exact_correct_rate"]),
-                    _fmt(metrics["verified_correct_rate"]),
-                    _fmt(metrics["grounded_correct_ref300_rate"]),
-                    _fmt(metrics["grounded_correct_bound_visual_rate"]),
-                    _fmt(metrics["candidate_recall_trajectory"]),
-                    _fmt(metrics["candidate_recall_resolved_set"]),
-                    _fmt(metrics["osa_any"]),
-                    _fmt(metrics["osa_strict"]),
+                    _fmt(metrics["commit_precision"]),
+                    _fmt(metrics["commit_recall"]),
+                    _fmt(metrics["commit_f1"]),
+                    _fmt(metrics["commit_specificity"]),
+                    _fmt(metrics["osa_given_commit"]),
                     _fmt(metrics["no_match_accuracy"]),
                     _fmt(metrics["false_commit_rate"]),
                     _fmt(metrics["selected_locator_usage_rate"]),
-                    _fmt(metrics["released_unexecuted_rate"]),
                     _fmt(metrics["bound_visual_clue_recall"]),
+                    _fmt(metrics["verified_correct_rate"]),
+                    _fmt(metrics["grounded_correct_ref300_rate"]),
+                    _fmt(metrics["grounded_correct_bound_visual_rate"]),
+                    _fmt(metrics["exact_correct_rate"]),
+                    _fmt(metrics["mean_score"]),
+                    _fmt(metrics["mean_visual_frames"]),
+                    _fmt(metrics["mean_vlm_calls"]),
                     _fmt(metrics["mean_semantic_rounds_used"]),
                 ]
             )

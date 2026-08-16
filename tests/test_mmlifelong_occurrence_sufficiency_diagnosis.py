@@ -193,6 +193,50 @@ def test_expanded_events_fail_closed_on_reconstruction_mismatch() -> None:
         raise AssertionError("expected reconstruction mismatch")
 
 
+def test_expanded_events_follow_recorded_comparative_aggregation_rule() -> None:
+    compact = {
+        "type": "occurrence_sufficiency_decision",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set-1",
+        "verdict": "sufficient",
+        "constraints_checked": ["identity-1", "action-1"],
+        "constraint_types": ["identity", "action"],
+        "sufficient_occurrence_ids": ["gold"],
+        "implicit_unknown_support_count": 3,
+        "aggregation_rule": "unique_supported_count_margin",
+        "minimum_support_margin": 1,
+    }
+    trace = (
+        compact,
+        {
+            "type": "reasoner_decision",
+            "round": 2,
+            "occurrence_ops_accepted": True,
+            "occurrence_ops": [
+                {
+                    "op": "assess_sufficiency",
+                    "set_id": "set-1",
+                    "constraints_checked": [
+                        _constraint("identity", {"gold": "supported"}),
+                        _constraint("action", {}),
+                    ],
+                }
+            ],
+        },
+    )
+    candidate_sets = {
+        "set-1": (
+            {"occurrence_id": "gold", "time_range": [10, 20]},
+            {"occurrence_id": "other", "time_range": [40, 50]},
+        )
+    }
+
+    events = DIAGNOSIS._expanded_sufficiency_events(trace, candidate_sets)
+
+    assert events[0]["sufficient_occurrence_ids"] == ["gold"]
+
+
 def test_support_discrimination_uses_gold_labels_and_case_bootstrap() -> None:
     c1_gold = "c1-gold"
     c1_other = "c1-other"
@@ -261,6 +305,16 @@ def test_support_discrimination_uses_gold_labels_and_case_bootstrap() -> None:
     assert result["case_cluster_bootstrap"]["positive_probability"] == 1.0
     assert result["strong_gold_non_gold_discrimination"] is True
 
+    signed = DIAGNOSIS.build_signed_evidence_diagnostic(
+        (c1, c2), bootstrap_samples=200, seed=7
+    )
+    assert signed["overall"]["gold"]["contradicted_rate"] == 0.0
+    assert signed["overall"]["non_gold"]["contradicted_rate"] == 0.25
+    assert signed["overall"]["non_gold_minus_gold_gap"] == 0.25
+    assert signed["case_cluster_bootstrap"]["positive_probability"] > 0.7
+    assert signed["diagnostic_only"] is True
+    assert signed["runtime_scoring_changed"] is False
+
 
 def test_gold_at_k_reports_conditional_retention_and_candidate_counts() -> None:
     event1 = _event("set-1", [_constraint("identity", {"c1-gold": "supported"})])
@@ -313,6 +367,140 @@ def test_selection_metrics_compare_observed_with_always_abstain() -> None:
     assert result["a4"]["observed"]["balanced_accuracy"] == 0.5
     assert result["a4"]["always_abstain"]["f1"] == 0.0
     assert result["a4"]["always_abstain"]["no_match_accuracy"] == 1.0
+
+
+def test_selection_metrics_separate_gate_recall_from_resolver_accuracy() -> None:
+    rows = (
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "selected",
+            "osa_strict": False,
+        },
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "selected",
+            "osa_strict": False,
+        },
+        {
+            "arm": "a4",
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+    )
+
+    metrics = DIAGNOSIS.build_selection_diagnostics(rows)["a4"]["observed"]
+
+    assert metrics["recall"] == 0.5
+    assert metrics["osa_given_commit"] == 0.0
+    assert metrics["wrong_occurrence_commit_count"] == 1
+
+
+def test_r5_error_geometry_separates_weak_tie_and_zero_cases() -> None:
+    weak = _case(
+        "weak",
+        "set-weak",
+        _event(
+            "set-weak",
+            [
+                _constraint(
+                    "identity",
+                    {"weak-gold": "supported", "weak-other": "unknown"},
+                )
+            ],
+        ),
+    )
+    weak["clues"] = ((80.0, 90.0),)
+    tied = _case(
+        "tied",
+        "set-tied",
+        _event(
+            "set-tied",
+            [
+                _constraint(
+                    "identity",
+                    {"tied-gold": "supported", "tied-other": "supported"},
+                )
+            ],
+        ),
+    )
+    zero = _case(
+        "zero",
+        "set-zero",
+        _event(
+            "set-zero",
+            [
+                _constraint(
+                    "identity",
+                    {"zero-gold": "unknown", "zero-other": "unknown"},
+                )
+            ],
+        ),
+    )
+    correct = _case(
+        "correct",
+        "set-correct",
+        _event(
+            "set-correct",
+            [
+                _constraint(
+                    "identity",
+                    {"correct-gold": "supported", "correct-other": "unknown"},
+                )
+            ],
+        ),
+    )
+    selection_rows = (
+        {
+            "arm": "a4",
+            "case_id": "weak",
+            "final_resolution": "selected",
+            "selected_occurrence_ids": ["weak-gold"],
+        },
+        {
+            "arm": "a4",
+            "case_id": "tied",
+            "final_resolution": "no_match",
+            "selected_occurrence_ids": [],
+        },
+        {
+            "arm": "a4",
+            "case_id": "zero",
+            "final_resolution": "no_match",
+            "selected_occurrence_ids": [],
+        },
+        {
+            "arm": "a4",
+            "case_id": "correct",
+            "final_resolution": "selected",
+            "selected_occurrence_ids": ["correct-gold"],
+        },
+    )
+
+    result = DIAGNOSIS.build_r5_error_geometry(
+        (weak, tied, zero, correct), selection_rows=selection_rows
+    )
+
+    assert result["outcome_counts"] == {
+        "correct_commit": 1,
+        "false_abstention": 2,
+        "false_commit": 1,
+    }
+    assert result["geometry_by_outcome"]["false_commit"] == {
+        "weak_unique_leader": 1
+    }
+    assert result["geometry_by_outcome"]["false_abstention"] == {
+        "all_zero": 1,
+        "positive_tie": 1,
+    }
 
 
 def test_aggregation_rule_sweep_replays_r0_and_finds_referent_working_point() -> None:

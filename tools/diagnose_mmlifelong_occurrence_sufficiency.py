@@ -215,57 +215,18 @@ def build_support_discrimination(
             "non_gold_total": 0,
         }
     )
-    candidate_present_event_count = 0
-    missing_set_metadata_count = 0
-
-    for case in cases:
-        case_id = str(case.get("case_id", "") or "")
-        candidate_sets = dict(case.get("candidate_sets", {}) or {})
-        clues = tuple(case.get("clues", ()) or ())
-        for event in tuple(case.get("events", ()) or ()):
-            set_id = str(event.get("set_id", "") or "")
-            candidates = tuple(candidate_sets.get(set_id, ()) or ())
-            gold_ids = {
-                str(candidate.get("occurrence_id", "") or "")
-                for candidate in candidates
-                if _candidate_is_gold(candidate, clues)
-            }
-            if not candidates:
-                missing_set_metadata_count += 1
-                continue
-            if not gold_ids:
-                continue
-            candidate_present_event_count += 1
-            for constraint in tuple(event.get("constraints_checked", ()) or ()):
-                if not isinstance(constraint, Mapping):
-                    continue
-                constraint_type = str(
-                    constraint.get("constraint_type", "unknown") or "unknown"
-                ).casefold()
-                implicit_ids = {
-                    str(value)
-                    for value in tuple(
-                        constraint.get("implicit_unknown_occurrence_ids", ()) or ()
-                    )
-                    if str(value)
-                }
-                for row in tuple(constraint.get("support", ()) or ()):
-                    if not isinstance(row, Mapping):
-                        continue
-                    occurrence_id = str(row.get("occurrence_id", "") or "")
-                    if not occurrence_id:
-                        continue
-                    group = "gold" if occurrence_id in gold_ids else "non_gold"
-                    category = _support_category(
-                        str(row.get("status", "") or ""),
-                        implicit=occurrence_id in implicit_ids,
-                    )
-                    by_type[constraint_type][group][category] += 1
-                    overall[group][category] += 1
-                    prefix = "gold" if group == "gold" else "non_gold"
-                    case_counts[case_id][f"{prefix}_total"] += 1
-                    if category == "supported":
-                        case_counts[case_id][f"{prefix}_supported"] += 1
+    labeled_rows, labeling = _labeled_support_rows(cases)
+    for row in labeled_rows:
+        case_id = str(row["case_id"])
+        constraint_type = str(row["constraint_type"])
+        group = str(row["group"])
+        category = str(row["category"])
+        by_type[constraint_type][group][category] += 1
+        overall[group][category] += 1
+        prefix = "gold" if group == "gold" else "non_gold"
+        case_counts[case_id][f"{prefix}_total"] += 1
+        if category == "supported":
+            case_counts[case_id][f"{prefix}_supported"] += 1
 
     type_rows: dict[str, Any] = {}
     eligible_gaps: list[float] = []
@@ -304,8 +265,10 @@ def build_support_discrimination(
         and bootstrap["positive_probability"] >= STRONG_BOOTSTRAP_POSITIVE_PROBABILITY
     )
     return {
-        "candidate_present_event_count": candidate_present_event_count,
-        "missing_set_metadata_event_count": missing_set_metadata_count,
+        "candidate_present_event_count": labeling["candidate_present_event_count"],
+        "missing_set_metadata_event_count": labeling[
+            "missing_set_metadata_event_count"
+        ],
         "overall": {
             "gold": overall_gold,
             "non_gold": overall_non_gold,
@@ -324,6 +287,151 @@ def build_support_discrimination(
             ),
         },
         "strong_gold_non_gold_discrimination": strong,
+    }
+
+
+def build_signed_evidence_diagnostic(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    bootstrap_samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Measure whether explicit contradiction discriminates non-gold candidates."""
+    labeled_rows, labeling = _labeled_support_rows(cases)
+    overall = {"gold": Counter(), "non_gold": Counter()}
+    by_type: dict[str, dict[str, Counter[str]]] = defaultdict(
+        lambda: {"gold": Counter(), "non_gold": Counter()}
+    )
+    case_counts: dict[str, dict[str, int]] = defaultdict(
+        lambda: {
+            "gold_contradicted": 0,
+            "gold_total": 0,
+            "non_gold_contradicted": 0,
+            "non_gold_total": 0,
+        }
+    )
+    for row in labeled_rows:
+        case_id = str(row["case_id"])
+        constraint_type = str(row["constraint_type"])
+        group = str(row["group"])
+        category = str(row["category"])
+        overall[group][category] += 1
+        by_type[constraint_type][group][category] += 1
+        prefix = "gold" if group == "gold" else "non_gold"
+        case_counts[case_id][f"{prefix}_total"] += 1
+        if category == "contradicted":
+            case_counts[case_id][f"{prefix}_contradicted"] += 1
+
+    overall_gold = _contradiction_summary(overall["gold"])
+    overall_non_gold = _contradiction_summary(overall["non_gold"])
+    type_rows: dict[str, Any] = {}
+    for constraint_type in sorted(by_type):
+        gold = _contradiction_summary(by_type[constraint_type]["gold"])
+        non_gold = _contradiction_summary(by_type[constraint_type]["non_gold"])
+        type_rows[constraint_type] = {
+            "semantic_group": _constraint_semantic_group(constraint_type),
+            "gold": gold,
+            "non_gold": non_gold,
+            "non_gold_minus_gold_gap": _difference(
+                non_gold["contradicted_rate"], gold["contradicted_rate"]
+            ),
+        }
+    bootstrap = _case_cluster_bootstrap_rate_gap(
+        case_counts,
+        samples=bootstrap_samples,
+        seed=seed,
+        left_success="non_gold_contradicted",
+        left_total="non_gold_total",
+        right_success="gold_contradicted",
+        right_total="gold_total",
+    )
+    return {
+        "unit": "candidate_constraint_support_row",
+        "candidate_present_event_count": labeling["candidate_present_event_count"],
+        "missing_set_metadata_event_count": labeling[
+            "missing_set_metadata_event_count"
+        ],
+        "overall": {
+            "gold": overall_gold,
+            "non_gold": overall_non_gold,
+            "non_gold_minus_gold_gap": _difference(
+                overall_non_gold["contradicted_rate"],
+                overall_gold["contradicted_rate"],
+            ),
+            "non_gold_to_gold_rate_ratio": (
+                overall_non_gold["contradicted_rate"]
+                / overall_gold["contradicted_rate"]
+                if overall_gold["contradicted_rate"]
+                and overall_non_gold["contradicted_rate"] is not None
+                else None
+            ),
+        },
+        "by_constraint_type": type_rows,
+        "case_cluster_bootstrap": bootstrap,
+        "diagnostic_only": True,
+        "runtime_scoring_changed": False,
+    }
+
+
+def _labeled_support_rows(
+    cases: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[dict[str, str], ...], dict[str, int]]:
+    rows: list[dict[str, str]] = []
+    candidate_present_event_count = 0
+    missing_set_metadata_count = 0
+    for case in cases:
+        case_id = str(case.get("case_id", "") or "")
+        candidate_sets = dict(case.get("candidate_sets", {}) or {})
+        clues = tuple(case.get("clues", ()) or ())
+        for event in tuple(case.get("events", ()) or ()):
+            set_id = str(event.get("set_id", "") or "")
+            candidates = tuple(candidate_sets.get(set_id, ()) or ())
+            gold_ids = {
+                str(candidate.get("occurrence_id", "") or "")
+                for candidate in candidates
+                if _candidate_is_gold(candidate, clues)
+            }
+            if not candidates:
+                missing_set_metadata_count += 1
+                continue
+            if not gold_ids:
+                continue
+            candidate_present_event_count += 1
+            for constraint in tuple(event.get("constraints_checked", ()) or ()):
+                if not isinstance(constraint, Mapping):
+                    continue
+                constraint_type = str(
+                    constraint.get("constraint_type", "unknown") or "unknown"
+                ).casefold()
+                implicit_ids = {
+                    str(value)
+                    for value in tuple(
+                        constraint.get("implicit_unknown_occurrence_ids", ()) or ()
+                    )
+                    if str(value)
+                }
+                for support in tuple(constraint.get("support", ()) or ()):
+                    if not isinstance(support, Mapping):
+                        continue
+                    occurrence_id = str(support.get("occurrence_id", "") or "")
+                    if not occurrence_id:
+                        continue
+                    rows.append(
+                        {
+                            "case_id": case_id,
+                            "constraint_type": constraint_type,
+                            "group": (
+                                "gold" if occurrence_id in gold_ids else "non_gold"
+                            ),
+                            "category": _support_category(
+                                str(support.get("status", "") or ""),
+                                implicit=occurrence_id in implicit_ids,
+                            ),
+                        }
+                    )
+    return tuple(rows), {
+        "candidate_present_event_count": candidate_present_event_count,
+        "missing_set_metadata_event_count": missing_set_metadata_count,
     }
 
 
@@ -545,6 +653,141 @@ def build_aggregation_rule_sweep(
         "best_f1": _best_rule(variants, "f1"),
         "best_balanced_accuracy": _best_rule(variants, "balanced_accuracy"),
         "best_youden_j": _best_rule(variants, "youden_j"),
+    }
+
+
+def build_r5_error_geometry(
+    cases: Sequence[Mapping[str, Any]],
+    *,
+    selection_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Describe live R5 decisions without changing evidence or replaying a model."""
+    snapshots = {
+        str(snapshot["case_id"]): snapshot
+        for snapshot in (_final_sufficiency_snapshot(case) for case in cases)
+    }
+    a4_rows = {
+        str(row.get("case_id", "") or ""): row
+        for row in selection_rows
+        if str(row.get("arm", "") or "") == "a4"
+    }
+    missing = sorted(set(snapshots) - set(a4_rows))
+    if missing:
+        raise ValueError("missing A4 selection rows: " + ",".join(missing))
+
+    rows: list[dict[str, Any]] = []
+    for case_id in sorted(snapshots):
+        snapshot = snapshots[case_id]
+        selection = a4_rows[case_id]
+        candidates = sorted(
+            tuple(snapshot.get("candidates", ()) or ()),
+            key=lambda row: (
+                -int(row.get("supported_count", 0) or 0),
+                int(row.get("rank", 0) or 0),
+            ),
+        )
+        best_count = (
+            int(candidates[0].get("supported_count", 0) or 0)
+            if candidates
+            else 0
+        )
+        runner_up_count = (
+            int(candidates[1].get("supported_count", 0) or 0)
+            if len(candidates) > 1
+            else 0
+        )
+        margin = best_count - runner_up_count
+        selected_ids = tuple(
+            str(value)
+            for value in tuple(selection.get("selected_occurrence_ids", ()) or ())
+            if str(value)
+        )
+        selected_id = selected_ids[0] if len(selected_ids) == 1 else None
+        by_id = {
+            str(candidate.get("occurrence_id", "") or ""): candidate
+            for candidate in candidates
+        }
+        gold_ids = set(snapshot.get("gold_occurrence_ids", ()) or ())
+        candidate_present = bool(gold_ids)
+        final_resolution = str(selection.get("final_resolution", "") or "")
+        selected_candidate_gold = (
+            selected_id in gold_ids if selected_id is not None else None
+        )
+        if not candidate_present and final_resolution == "selected":
+            outcome = "false_commit"
+        elif candidate_present and final_resolution != "selected":
+            outcome = "false_abstention"
+        elif candidate_present and selected_candidate_gold is True:
+            outcome = "correct_commit"
+        elif candidate_present and final_resolution == "selected":
+            outcome = "resolver_error"
+        elif not candidate_present and final_resolution == "no_match":
+            outcome = "correct_no_match"
+        else:
+            outcome = "other"
+        if best_count == 0:
+            geometry = "all_zero"
+        elif margin == 0:
+            geometry = "positive_tie"
+        elif best_count == 1 and margin >= 1:
+            geometry = "weak_unique_leader"
+        elif margin >= 1:
+            geometry = "strong_unique_leader"
+        else:
+            geometry = "positive_ambiguous"
+        gold_counts = [
+            int(by_id[occurrence_id].get("supported_count", 0) or 0)
+            for occurrence_id in gold_ids
+            if occurrence_id in by_id
+        ]
+        rows.append(
+            {
+                "case_id": case_id,
+                "outcome": outcome,
+                "geometry": geometry,
+                "candidate_present": candidate_present,
+                "final_resolution": final_resolution,
+                "best_support_count": best_count,
+                "runner_up_support_count": runner_up_count,
+                "margin": margin,
+                "constraint_count": max(
+                    (
+                        int(candidate.get("constraint_count", 0) or 0)
+                        for candidate in candidates
+                    ),
+                    default=0,
+                ),
+                "candidate_count": len(candidates),
+                "selected_candidate_gold": selected_candidate_gold,
+                "gold_supported_count_max": max(gold_counts) if gold_counts else None,
+                "selected_supported_count": (
+                    int(by_id[selected_id].get("supported_count", 0) or 0)
+                    if selected_id in by_id
+                    else None
+                ),
+            }
+        )
+
+    outcome_counts = Counter(str(row["outcome"]) for row in rows)
+    geometry_by_outcome: dict[str, dict[str, int]] = {}
+    for outcome in sorted(outcome_counts):
+        counts = Counter(
+            str(row["geometry"]) for row in rows if row["outcome"] == outcome
+        )
+        geometry_by_outcome[outcome] = dict(sorted(counts.items()))
+    error_outcomes = {"false_commit", "false_abstention", "resolver_error"}
+    return {
+        "applicable": True,
+        "unit": "final_live_r5_decision_per_case",
+        "case_count": len(rows),
+        "outcome_counts": dict(sorted(outcome_counts.items())),
+        "geometry_by_outcome": geometry_by_outcome,
+        "error_case_count": sum(row["outcome"] in error_outcomes for row in rows),
+        "error_rows": [row for row in rows if row["outcome"] in error_outcomes],
+        "correct_commit_case_count": outcome_counts.get("correct_commit", 0),
+        "correct_commit_rows": [
+            row for row in rows if row["outcome"] == "correct_commit"
+        ],
     }
 
 
@@ -784,6 +1027,28 @@ def build_diagnosis(
         cases,
         observed_selection_rows=selection_rows,
     )
+    a4_selection_rows = tuple(
+        row
+        for row in selection_rows
+        if str(row.get("arm", "") or "") == "a4"
+    )
+    error_geometry = (
+        build_r5_error_geometry(cases, selection_rows=a4_selection_rows)
+        if a4_selection_rows
+        else {
+            "applicable": False,
+            "reason": "no A4 selection rows were supplied",
+            "error_case_count": 0,
+            "error_rows": [],
+            "correct_commit_case_count": 0,
+            "correct_commit_rows": [],
+        }
+    )
+    signed_evidence = build_signed_evidence_diagnostic(
+        cases,
+        bootstrap_samples=bootstrap_samples,
+        seed=seed,
+    )
     target_achievable = bool(aggregation_sweep["target_achievable"])
     recommendation = (
         "PROCEED_WITH_OFFLINE_SELECTED_AGGREGATION_RULE"
@@ -791,7 +1056,7 @@ def build_diagnosis(
         else "REPRESENTATION_INSUFFICIENT_FOR_TARGET_WORKING_POINT"
     )
     return {
-        "schema_version": "OccurrenceSufficiencyOfflineDiagnosisV2",
+        "schema_version": "OccurrenceSufficiencyOfflineDiagnosisV3",
         "case_count": len(cases),
         "bootstrap_samples": bootstrap_samples,
         "seed": seed,
@@ -799,6 +1064,8 @@ def build_diagnosis(
         "d2_support_discrimination": discrimination,
         "d3_gold_at_k": gold_at_k,
         "d4_aggregation_rule_sweep": aggregation_sweep,
+        "d5_r5_error_geometry": error_geometry,
+        "d6_signed_evidence_diagnostic": signed_evidence,
         "selection_diagnostics": selection_diagnostics,
         "recommendation": {
             "decision": recommendation,
@@ -818,6 +1085,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     d2 = report["d2_support_discrimination"]
     d3 = report["d3_gold_at_k"]
     d4 = report["d4_aggregation_rule_sweep"]
+    d5 = report["d5_r5_error_geometry"]
+    d6 = report["d6_signed_evidence_diagnostic"]
     recommendation = report["recommendation"]
     lines = [
         "# WP8 Sufficiency Offline Diagnosis",
@@ -936,6 +1205,67 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## D5: Live R5 error geometry",
+            "",
+        ]
+    )
+    if not d5["applicable"]:
+        lines.append(f"Not applicable: {d5['reason']}.")
+    else:
+        lines.extend(
+            [
+                (
+                    f"Errors: {d5['error_case_count']}; correct commits: "
+                    f"{d5['correct_commit_case_count']}."
+                ),
+                "",
+                "| Case | Outcome | Geometry | Best | Runner-up | Margin | Constraints | Candidates | Gold support | Selected support | Selected gold |",
+                "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+            ]
+        )
+        for row in (*d5["error_rows"], *d5["correct_commit_rows"]):
+            lines.append(
+                f"| {row['case_id']} | {row['outcome']} | {row['geometry']} | "
+                f"{row['best_support_count']} | {row['runner_up_support_count']} | "
+                f"{row['margin']} | {row['constraint_count']} | "
+                f"{row['candidate_count']} | "
+                f"{_fmt(row['gold_supported_count_max'])} | "
+                f"{_fmt(row['selected_supported_count'])} | "
+                f"{row['selected_candidate_gold']} |"
+            )
+    signed = d6["overall"]
+    lines.extend(
+        [
+            "",
+            "## D6: Dense signed-evidence diagnostic",
+            "",
+            (
+                "Explicit contradiction rate: gold "
+                f"{_fmt(signed['gold']['contradicted_rate'])}, non-gold "
+                f"{_fmt(signed['non_gold']['contradicted_rate'])}; non-gold minus "
+                f"gold gap {_fmt(signed['non_gold_minus_gold_gap'])}."
+            ),
+            (
+                "Case-cluster bootstrap 95% CI "
+                f"[{_fmt(d6['case_cluster_bootstrap']['ci95'][0])}, "
+                f"{_fmt(d6['case_cluster_bootstrap']['ci95'][1])}]; this is a "
+                "diagnostic only and does not change runtime scoring."
+            ),
+            "",
+            "| Constraint | Gold contradicted | Non-gold contradicted | Gap |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for constraint_type, row in d6["by_constraint_type"].items():
+        lines.append(
+            f"| {constraint_type} | "
+            f"{_fmt(row['gold']['contradicted_rate'])} | "
+            f"{_fmt(row['non_gold']['contradicted_rate'])} | "
+            f"{_fmt(row['non_gold_minus_gold_gap'])} |"
+        )
+    lines.extend(
+        [
+            "",
             (
                 "The sweep replays fixed final support matrices only. It does not "
                 "counterfactually alter search, evidence acquisition, or model outputs."
@@ -943,8 +1273,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "",
             "## Selection diagnostics",
             "",
-            "| Arm | Policy | Precision | Recall | F1 | Balanced accuracy | False commit | No-match accuracy |",
-            "|---|---|---:|---:|---:|---:|---:|---:|",
+            "| Arm | Policy | Commit precision | Commit recall | Commit F1 | Specificity | Balanced accuracy | OSA given commit | False commit | No-match accuracy |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for arm, policies in report["selection_diagnostics"].items():
@@ -953,7 +1283,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             lines.append(
                 f"| {arm} | {policy_name} | {_fmt(metrics['precision'])} | "
                 f"{_fmt(metrics['recall'])} | {_fmt(metrics['f1'])} | "
+                f"{_fmt(metrics['specificity'])} | "
                 f"{_fmt(metrics['balanced_accuracy'])} | "
+                f"{_fmt(metrics['osa_given_commit'])} | "
                 f"{_fmt(metrics['false_commit_rate'])} | "
                 f"{_fmt(metrics['no_match_accuracy'])} |"
             )
@@ -1033,11 +1365,8 @@ def _expanded_sufficiency_events(
                 normalized_constraints = _normalize_raw_constraints(
                     operation.get("constraints_checked", ()), viable_ids=scope_ids
                 )
-                sufficient_ids = tuple(
-                    occurrence_id
-                    for occurrence_id in scope_ids
-                    if normalized_constraints
-                    and all(
+                support_counts = {
+                    occurrence_id: sum(
                         next(
                             str(row.get("status", "") or "")
                             for row in tuple(constraint.get("support", ()) or ())
@@ -1046,7 +1375,33 @@ def _expanded_sufficiency_events(
                         == "supported"
                         for constraint in normalized_constraints
                     )
-                )
+                    for occurrence_id in scope_ids
+                }
+                if compact.get("aggregation_rule") == "unique_supported_count_margin":
+                    ranked_counts = sorted(
+                        support_counts.items(),
+                        key=lambda item: (-item[1], scope_ids.index(item[0])),
+                    )
+                    best = ranked_counts[0][1] if ranked_counts else 0
+                    runner_up = ranked_counts[1][1] if len(ranked_counts) > 1 else 0
+                    minimum_margin = int(
+                        compact.get("minimum_support_margin", 1) or 1
+                    )
+                    sufficient_ids = (
+                        (ranked_counts[0][0],)
+                        if ranked_counts
+                        and best > 0
+                        and best - runner_up >= minimum_margin
+                        else ()
+                    )
+                else:
+                    sufficient_ids = tuple(
+                        occurrence_id
+                        for occurrence_id in scope_ids
+                        if normalized_constraints
+                        and support_counts[occurrence_id]
+                        == len(normalized_constraints)
+                    )
                 implicit_count = sum(
                     len(
                         tuple(
@@ -1318,8 +1673,39 @@ def _support_summary(counts: Mapping[str, int]) -> dict[str, Any]:
     }
 
 
+def _contradiction_summary(counts: Mapping[str, int]) -> dict[str, Any]:
+    total = sum(int(counts.get(category, 0)) for category in SUPPORT_CATEGORIES)
+    contradicted = int(counts.get("contradicted", 0))
+    return {
+        "total": total,
+        "contradicted_count": contradicted,
+        "contradicted_rate": _ratio(contradicted, total),
+    }
+
+
 def _case_cluster_bootstrap_gap(
     case_counts: Mapping[str, Mapping[str, int]], *, samples: int, seed: int
+) -> dict[str, Any]:
+    return _case_cluster_bootstrap_rate_gap(
+        case_counts,
+        samples=samples,
+        seed=seed,
+        left_success="gold_supported",
+        left_total="gold_total",
+        right_success="non_gold_supported",
+        right_total="non_gold_total",
+    )
+
+
+def _case_cluster_bootstrap_rate_gap(
+    case_counts: Mapping[str, Mapping[str, int]],
+    *,
+    samples: int,
+    seed: int,
+    left_success: str,
+    left_total: str,
+    right_success: str,
+    right_total: str,
 ) -> dict[str, Any]:
     case_ids = sorted(case_counts)
     if not case_ids or samples <= 0:
@@ -1333,19 +1719,21 @@ def _case_cluster_bootstrap_gap(
     gaps: list[float] = []
     for _ in range(samples):
         sampled = [rng.choice(case_ids) for _ in case_ids]
-        gold_supported = sum(
-            int(case_counts[case_id]["gold_supported"]) for case_id in sampled
+        left_hits = sum(
+            int(case_counts[case_id][left_success]) for case_id in sampled
         )
-        gold_total = sum(int(case_counts[case_id]["gold_total"]) for case_id in sampled)
-        non_supported = sum(
-            int(case_counts[case_id]["non_gold_supported"]) for case_id in sampled
+        left_count = sum(
+            int(case_counts[case_id][left_total]) for case_id in sampled
         )
-        non_total = sum(
-            int(case_counts[case_id]["non_gold_total"]) for case_id in sampled
+        right_hits = sum(
+            int(case_counts[case_id][right_success]) for case_id in sampled
         )
-        if not gold_total or not non_total:
+        right_count = sum(
+            int(case_counts[case_id][right_total]) for case_id in sampled
+        )
+        if not left_count or not right_count:
             continue
-        gaps.append(gold_supported / gold_total - non_supported / non_total)
+        gaps.append(left_hits / left_count - right_hits / right_count)
     gaps.sort()
     return {
         "samples_requested": samples,
@@ -1365,14 +1753,16 @@ def _selection_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         bool(row.get("candidate_recall_resolved_set")) for row in rows
     )
     candidate_absent = len(rows) - candidate_present
-    selected = sum(
-        str(row.get("final_resolution", "") or "") == "selected" for row in rows
-    )
     tp = sum(
-        bool(row.get("candidate_recall_resolved_set")) and row.get("osa_strict") is True
+        bool(row.get("candidate_recall_resolved_set"))
+        and str(row.get("final_resolution", "") or "") == "selected"
         for row in rows
     )
-    fp = selected - tp
+    fp = sum(
+        not bool(row.get("candidate_recall_resolved_set"))
+        and str(row.get("final_resolution", "") or "") == "selected"
+        for row in rows
+    )
     fn = candidate_present - tp
     tn = sum(
         not bool(row.get("candidate_recall_resolved_set"))
@@ -1381,6 +1771,12 @@ def _selection_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     )
     precision = _ratio(tp, tp + fp)
     recall = _ratio(tp, tp + fn)
+    strict_correct_commits = sum(
+        bool(row.get("candidate_recall_resolved_set"))
+        and str(row.get("final_resolution", "") or "") == "selected"
+        and row.get("osa_strict") is True
+        for row in rows
+    )
     specificity = _ratio(tn, candidate_absent)
     youden_j = (
         recall + specificity - 1
@@ -1401,6 +1797,9 @@ def _selection_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "specificity": specificity,
         "youden_j": youden_j,
         "balanced_accuracy": _mean_optional((recall, specificity)),
+        "osa_given_commit": _ratio(strict_correct_commits, tp),
+        "strict_correct_commit_count": strict_correct_commits,
+        "wrong_occurrence_commit_count": tp - strict_correct_commits,
         "false_commit_rate": _ratio(
             sum(
                 not bool(row.get("candidate_recall_resolved_set"))
@@ -1444,6 +1843,9 @@ def _always_abstain_metrics(
             else None
         ),
         "balanced_accuracy": _mean_optional((recall, specificity)),
+        "osa_given_commit": None,
+        "strict_correct_commit_count": 0,
+        "wrong_occurrence_commit_count": 0,
         "false_commit_rate": 0.0 if candidate_absent else None,
         "no_match_accuracy": specificity,
         "false_abstention_rate": 1.0 if candidate_present else None,

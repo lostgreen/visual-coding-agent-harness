@@ -153,6 +153,46 @@ def test_report_separates_pre_treatment_divergence_and_a2_osa() -> None:
     )
 
 
+def test_arm_metrics_separate_commit_gate_from_resolver_accuracy() -> None:
+    rows = (
+        {
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "selected",
+            "osa_strict": True,
+        },
+        {
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "selected",
+            "osa_strict": False,
+        },
+        {
+            "candidate_recall_resolved_set": True,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+        {
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "selected",
+            "osa_strict": False,
+        },
+        {
+            "candidate_recall_resolved_set": False,
+            "final_resolution": "no_match",
+            "osa_strict": False,
+        },
+    )
+
+    metrics = ANALYSIS._aggregate_arm(rows)
+
+    assert metrics["commit_precision"] == 2 / 3
+    assert metrics["commit_recall"] == 2 / 3
+    assert metrics["commit_f1"] == 2 / 3
+    assert metrics["commit_specificity"] == 0.5
+    assert metrics["osa_given_commit"] == 0.5
+    assert metrics["strict_correct_commit_count"] == 1
+    assert metrics["wrong_occurrence_commit_count"] == 1
+
+
 def test_candidate_recall_is_scoped_to_the_resolved_set() -> None:
     observations = (
         {
