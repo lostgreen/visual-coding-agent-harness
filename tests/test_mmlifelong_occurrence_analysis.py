@@ -1212,6 +1212,59 @@ def test_decoupled_evidence_gate_audit_requires_digest_linked_mechanical_resolut
     assert invalid["ordering_failure_count"] == 1
 
 
+def test_evidence_protocol_reliability_tracks_scope_first_pass_and_alias() -> None:
+    trace = (
+        {"type": "occurrence_sufficiency_activated", "round": 1},
+        {
+            "type": "occurrence_evidence_scope_exposed",
+            "round": 1,
+            "model_visible_candidate_ids": ["occ_1", "occ_2"],
+            "validator_legal_candidate_ids": ["occ_1", "occ_2"],
+            "all_model_visible_candidates_validator_legal": True,
+        },
+        {
+            "type": "occurrence_evidence_declaration",
+            "round": 1,
+            "dropped_out_of_scope_support_count": 0,
+        },
+        {
+            "type": "reasoner_decision",
+            "round": 2,
+            "action": "answer",
+            "answer_alias_normalized": True,
+        },
+    )
+
+    report = AUDIT._evidence_protocol_reliability(trace)
+
+    assert report["scope_single_surface_passed"] is True
+    assert report["first_pass_success"] is True
+    assert report["repair_attempt_count"] == 0
+    assert report["answer_alias_normalized_count"] == 1
+
+    repaired = AUDIT._evidence_protocol_reliability(
+        (
+            trace[0],
+            trace[1],
+            {"type": "control_retry", "round": 1, "count": 1},
+            trace[2],
+        )
+    )
+    assert repaired["first_pass_success"] is False
+    assert repaired["repair_attempt_count"] == 1
+
+    lifecycle_repaired = AUDIT._evidence_protocol_reliability(
+        (
+            trace[0],
+            trace[1],
+            {"type": "occurrence_lifecycle_repair_scheduled", "round": 1},
+            trace[2],
+        )
+    )
+    assert lifecycle_repaired["first_pass_success"] is False
+    assert lifecycle_repaired["repair_attempt_count"] == 1
+
+
 def test_locator_outcomes_are_pair_weighted_not_case_macro_averaged() -> None:
     signature = [{"action": "investigate", "tasks": []}]
     inspected = _row("a3", "c1", score=0.0, signature=signature)

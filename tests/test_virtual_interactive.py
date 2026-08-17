@@ -10,7 +10,11 @@ from typing import Any, Mapping, Sequence
 import pytest
 from PIL import Image
 
-from vcah.interactive_agents import VisionInvestigator, WorkspaceReasoner
+from vcah.interactive_agents import (
+    VisionInvestigator,
+    WorkspaceReasoner,
+    _normalize_decision,
+)
 from vcah.investigator import ObservationAttempt
 from vcah.model_client import ImageAttachmentError, OpenAICompatibleClient
 from vcah.multiround import InvestigationTask
@@ -31,6 +35,67 @@ def _load_runner() -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_answer", "expected_error", "expected_normalized"),
+    (
+        ({"action": "answer", "answer": "A"}, "A", None, False),
+        (
+            {"action": "answer", "action_input": {"answer": "B"}},
+            "B",
+            None,
+            True,
+        ),
+        (
+            {
+                "action": "answer",
+                "answer": "C",
+                "action_input": {"answer": "C"},
+            },
+            "C",
+            None,
+            False,
+        ),
+        (
+            {
+                "action": "answer",
+                "answer": "C",
+                "action_input": {"answer": "D"},
+            },
+            "C",
+            "answer_alias_conflict",
+            False,
+        ),
+        (
+            {"action": "answer", "answer": "", "action_input": {"answer": ""}},
+            "",
+            None,
+            False,
+        ),
+    ),
+)
+def test_answer_alias_canonicalization_is_explicit(
+    payload: Mapping[str, Any],
+    expected_answer: str,
+    expected_error: str | None,
+    expected_normalized: bool,
+) -> None:
+    errors: list[dict[str, Any]] = []
+    normalizations: list[dict[str, Any]] = []
+
+    normalized = _normalize_decision(
+        payload,
+        round_id=1,
+        decision_errors=errors,
+        normalizations=normalizations,
+    )
+
+    assert normalized["answer"] == expected_answer
+    assert [row["code"] for row in errors] == (
+        [expected_error] if expected_error else []
+    )
+    assert bool(normalizations) is expected_normalized
 
 
 RUNNER = _load_runner()

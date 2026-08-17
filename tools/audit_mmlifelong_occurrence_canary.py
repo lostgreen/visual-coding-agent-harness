@@ -78,6 +78,7 @@ def audit_roots(
         cases = []
         for prediction_path in sorted(Path(root).glob("cases/*/prediction.json")):
             run_dir = prediction_path.parent
+            prediction = _read_json(prediction_path)
             config = _read_json(run_dir / "run_config.json")
             runtime = _read_json(run_dir / "runtime_summary.json")
             raw_no_oracle_audit = runtime.get("no_oracle_runtime_gate", {})
@@ -163,6 +164,7 @@ def audit_roots(
                 if isinstance(operation, Mapping)
             )
             sufficiency_audit = _sufficiency_transaction_audit(decisions, trace)
+            evidence_protocol = _evidence_protocol_reliability(trace)
             prior_selection_indices = tuple(
                 index
                 for index, row in enumerate(decisions)
@@ -283,7 +285,15 @@ def audit_roots(
             rejected_occurrence_op_attempts = sum(
                 row.get("occurrence_ops_accepted") is False for row in decisions
             )
-            case_id = str(_read_json(prediction_path).get("case_id", run_dir.name))
+            case_id = str(prediction.get("case_id", run_dir.name))
+            if "answer_present" in prediction:
+                answer_present = bool(prediction.get("answer_present"))
+            elif "answer_present" in runtime:
+                answer_present = bool(runtime.get("answer_present"))
+            else:
+                answer_present = any(
+                    row.get("action") == "answer" for row in decisions
+                )
             cases.append(
                 {
                     "case_id": case_id,
@@ -386,6 +396,8 @@ def audit_roots(
                         for _, operation in accepted_ops
                     ),
                     "sufficiency_audit": sufficiency_audit,
+                    "evidence_protocol": evidence_protocol,
+                    "answer_present": answer_present,
                     "multi_selection_sets": sum(
                         len(value["selected_occurrence_ids"]) > 1
                         for value in scoped_sets.values()
@@ -574,6 +586,41 @@ def audit_roots(
                 ]
                 > 0
                 for row in cases
+            ),
+            "evidence_scope_exposure_case_count": sum(
+                row["evidence_protocol"]["scope_exposure_count"] > 0
+                for row in cases
+            ),
+            "evidence_scope_single_surface_failure_case_count": sum(
+                row["evidence_protocol"]["scope_exposure_count"] == 0
+                or not row["evidence_protocol"]["scope_single_surface_passed"]
+                for row in cases
+                if row["arm"] == "a4"
+            ),
+            "evidence_first_pass_success_case_count": sum(
+                row["evidence_protocol"]["first_pass_success"]
+                for row in cases
+            ),
+            "evidence_first_pass_failure_case_count": sum(
+                not row["evidence_protocol"]["first_pass_success"]
+                for row in cases
+                if row["arm"] == "a4"
+            ),
+            "evidence_repair_attempt_count": sum(
+                row["evidence_protocol"]["repair_attempt_count"]
+                for row in cases
+            ),
+            "evidence_out_of_scope_drop_warning_count": sum(
+                row["evidence_protocol"]["out_of_scope_drop_warning_count"]
+                for row in cases
+            ),
+            "answer_alias_normalized_count": sum(
+                row["evidence_protocol"]["answer_alias_normalized_count"]
+                for row in cases
+            ),
+            "answer_present_count": sum(row["answer_present"] for row in cases),
+            "answer_missing_case_count": sum(
+                not row["answer_present"] for row in cases
             ),
             "activation_threshold_failure_case_count": sum(
                 not row["resolution_activation_threshold_valid"]
@@ -889,6 +936,31 @@ def audit_roots(
                 >= int(expected_cases)
             )
         ),
+        "a4_evidence_scope_single_surface": (
+            "a4" not in per_arm
+            or (
+                per_arm["a4"]["evidence_scope_exposure_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"][
+                    "evidence_scope_single_surface_failure_case_count"
+                ]
+                == 0
+            )
+        ),
+        "a4_evidence_first_pass_reliable": (
+            "a4" not in per_arm
+            or (
+                per_arm["a4"]["evidence_first_pass_success_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"]["evidence_first_pass_failure_case_count"]
+                == 0
+                and per_arm["a4"]["evidence_repair_attempt_count"] == 0
+            )
+        ),
+        "a4_predictions_answer_bearing": (
+            "a4" not in per_arm
+            or per_arm["a4"]["answer_missing_case_count"] == 0
+        ),
         "a4_support_surface_complete": (
             "a4" not in per_arm
             or per_arm["a4"]["sufficiency_support_surface_applicable_case_count"] == 0
@@ -957,6 +1029,9 @@ def audit_roots(
                 and per_arm["a3"]["selected_locator_accounting_applicable"]
             ),
             "a4_sufficiency_transactions_valid": "a4" in per_arm,
+            "a4_evidence_scope_single_surface": "a4" in per_arm,
+            "a4_evidence_first_pass_reliable": "a4" in per_arm,
+            "a4_predictions_answer_bearing": "a4" in per_arm,
             "a4_sparse_support_aggregation_valid": bool(
                 "a4" in per_arm
                 and per_arm["a4"]["sufficiency_aggregation_applicable_case_count"]
@@ -1156,6 +1231,80 @@ def _sufficiency_transaction_audit(
             )
             for row in trace
             if row.get("type") == "decision_schema_error"
+        ),
+    }
+
+
+def _evidence_protocol_reliability(
+    trace: tuple[Mapping[str, Any], ...],
+) -> dict[str, Any]:
+    activation_index = next(
+        (
+            index
+            for index, row in enumerate(trace)
+            if row.get("type") == "occurrence_sufficiency_activated"
+        ),
+        None,
+    )
+    evidence_index = next(
+        (
+            index
+            for index, row in enumerate(trace)
+            if row.get("type") == "occurrence_evidence_declaration"
+        ),
+        None,
+    )
+    repair_rows = tuple(
+        row
+        for index, row in enumerate(trace)
+        if row.get("type")
+        in {"control_retry", "occurrence_lifecycle_repair_scheduled"}
+        and activation_index is not None
+        and index > activation_index
+        and (evidence_index is None or index < evidence_index)
+    )
+    scope_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_evidence_scope_exposed"
+    )
+    evidence_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_evidence_declaration"
+    )
+    return {
+        "scope_exposure_count": len(scope_events),
+        "scope_single_surface_passed": bool(
+            scope_events
+            and all(
+                row.get("all_model_visible_candidates_validator_legal") is True
+                and tuple(row.get("model_visible_candidate_ids", ()) or ())
+                == tuple(row.get("validator_legal_candidate_ids", ()) or ())
+                for row in scope_events
+            )
+        ),
+        "repair_attempt_count": sum(
+            (
+                max(1, int(row.get("count", 1) or 1))
+                if row.get("type") == "control_retry"
+                else 1
+            )
+            for row in repair_rows
+        ),
+        "first_pass_success": bool(
+            activation_index is not None
+            and evidence_index is not None
+            and not repair_rows
+        ),
+        "out_of_scope_drop_warning_count": sum(
+            int(row.get("dropped_out_of_scope_support_count", 0) or 0)
+            for row in evidence_events
+        ),
+        "answer_alias_normalized_count": sum(
+            row.get("type") == "reasoner_decision"
+            and bool(row.get("answer_alias_normalized"))
+            for row in trace
         ),
     }
 

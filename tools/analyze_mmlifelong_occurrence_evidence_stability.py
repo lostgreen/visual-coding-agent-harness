@@ -22,13 +22,46 @@ def collect_run(root: Path) -> dict[str, dict[str, Any]]:
     cases: dict[str, dict[str, Any]] = {}
     for prediction_path in sorted(Path(root).glob("cases/*/prediction.json")):
         case_id = prediction_path.parent.name
+        prediction = _read_json(prediction_path)
         runtime = _read_json(prediction_path.parent / "runtime_summary.json")
         trace = tuple(
             row
             for row in tuple(runtime.get("trace", ()) or ())
             if isinstance(row, Mapping)
         )
-        cases[case_id] = _extract_case(trace)
+        case = _extract_case(trace)
+        if "answer_present" in prediction:
+            case["answer_present"] = bool(prediction.get("answer_present"))
+        elif "answer_present" in runtime:
+            case["answer_present"] = bool(runtime.get("answer_present"))
+        else:
+            case["answer_present"] = any(
+                row.get("type") == "reasoner_decision"
+                and row.get("action") == "answer"
+                for row in trace
+            )
+        case["terminal_occurrence_failure_count"] = sum(
+            row.get("type") == "decision_control_exhausted"
+            and any(
+                isinstance(error, Mapping)
+                and str(error.get("code", "")).startswith("occurrence_")
+                for error in tuple(row.get("errors", ()) or ())
+            )
+            for row in trace
+        )
+        case["contradictory_gate_state_count"] = sum(
+            row.get("type") == "contradictory_gate_state" for row in trace
+        )
+        case["full_structural_valid"] = bool(
+            case["transaction_structural_valid"]
+            and case["contradictory_gate_state_count"] == 0
+        )
+        case["working_method_valid"] = bool(
+            case["full_structural_valid"]
+            and case["answer_present"]
+            and case["terminal_occurrence_failure_count"] == 0
+        )
+        cases[case_id] = case
     return cases
 
 
@@ -60,61 +93,132 @@ def build_stability_report(
     for case_id in aligned_ids:
         first = left[case_id]
         second = right[case_id]
-        support_ids = sorted(
-            set(first["support_counts"]) | set(second["support_counts"])
+        evidence_pair_valid = bool(
+            first.get("evidence_declaration_valid")
+            and first.get("mechanical_gate_valid")
+            and second.get("evidence_declaration_valid")
+            and second.get("mechanical_gate_valid")
         )
-        count_errors = [
-            abs(
-                int(first["support_counts"].get(occurrence_id, 0))
-                - int(second["support_counts"].get(occurrence_id, 0))
-            )
-            for occurrence_id in support_ids
-        ]
-        per_case[case_id] = {
-            "supported_row_jaccard": _jaccard(
-                first["supported_rows"], second["supported_rows"]
+        structural_pair_valid = bool(
+            first.get("full_structural_valid")
+            and second.get("full_structural_valid")
+        )
+        working_method_pair_valid = bool(
+            first.get("working_method_valid")
+            and second.get("working_method_valid")
+        )
+        row: dict[str, Any] = {
+            "evidence_pair_valid": evidence_pair_valid,
+            "structural_pair_valid": structural_pair_valid,
+            "working_method_pair_valid": working_method_pair_valid,
+            "first_evidence_declaration_valid": bool(
+                first.get("evidence_declaration_valid")
             ),
-            "strict_supported_row_jaccard": _jaccard(
-                first["strict_supported_rows"],
-                second["strict_supported_rows"],
+            "second_evidence_declaration_valid": bool(
+                second.get("evidence_declaration_valid")
             ),
-            "candidate_passage_jaccard": _jaccard(
-                first["candidate_passage_rows"],
-                second["candidate_passage_rows"],
+            "first_mechanical_gate_valid": bool(
+                first.get("mechanical_gate_valid")
             ),
-            "support_count_mae": mean(count_errors) if count_errors else 0.0,
-            "winner_agrees": first["winner"] == second["winner"],
-            "gate_agrees": first["gate"] == second["gate"],
+            "second_mechanical_gate_valid": bool(
+                second.get("mechanical_gate_valid")
+            ),
+            "first_answer_present": bool(first.get("answer_present")),
+            "second_answer_present": bool(second.get("answer_present")),
+            "first_terminal_occurrence_failure_count": int(
+                first.get("terminal_occurrence_failure_count", 0) or 0
+            ),
+            "second_terminal_occurrence_failure_count": int(
+                second.get("terminal_occurrence_failure_count", 0) or 0
+            ),
             "first_gate": first["gate"],
             "second_gate": second["gate"],
             "first_winner": first["winner"],
             "second_winner": second["winner"],
         }
+        if evidence_pair_valid:
+            support_ids = sorted(
+                set(first["support_counts"]) | set(second["support_counts"])
+            )
+            count_errors = [
+                abs(
+                    int(first["support_counts"].get(occurrence_id, 0))
+                    - int(second["support_counts"].get(occurrence_id, 0))
+                )
+                for occurrence_id in support_ids
+            ]
+            row.update(
+                {
+                    "supported_row_jaccard": _jaccard(
+                        first["supported_rows"], second["supported_rows"]
+                    ),
+                    "strict_supported_row_jaccard": _jaccard(
+                        first["strict_supported_rows"],
+                        second["strict_supported_rows"],
+                    ),
+                    "candidate_passage_jaccard": _jaccard(
+                        first["candidate_passage_rows"],
+                        second["candidate_passage_rows"],
+                    ),
+                    "support_count_mae": (
+                        mean(count_errors) if count_errors else 0.0
+                    ),
+                    "winner_agrees": first["winner"] == second["winner"],
+                    "gate_agrees": first["gate"] == second["gate"],
+                }
+            )
+        else:
+            row.update(
+                {
+                    "supported_row_jaccard": None,
+                    "strict_supported_row_jaccard": None,
+                    "candidate_passage_jaccard": None,
+                    "support_count_mae": None,
+                    "winner_agrees": None,
+                    "gate_agrees": None,
+                }
+            )
+        per_case[case_id] = row
 
-    supported_row_agreement = mean(
-        row["supported_row_jaccard"] for row in per_case.values()
+    evidence_rows = tuple(
+        row for row in per_case.values() if row["evidence_pair_valid"]
     )
-    winner_agreement = mean(row["winner_agrees"] for row in per_case.values())
-    gate_agreement = mean(row["gate_agrees"] for row in per_case.values())
-    evidence_passed = (
-        baseline_supported_row_agreement is None
-        or supported_row_agreement > baseline_supported_row_agreement
+    supported_row_agreement = _mean_metric(
+        evidence_rows, "supported_row_jaccard"
+    )
+    winner_agreement = _mean_metric(evidence_rows, "winner_agrees")
+    gate_agreement = _mean_metric(evidence_rows, "gate_agrees")
+    evidence_passed = bool(
+        supported_row_agreement is not None
+        and (
+            baseline_supported_row_agreement is None
+            or supported_row_agreement > baseline_supported_row_agreement
+        )
     )
     stability_criteria = {
         "supported_row_agreement_improves_over_baseline": {
             "value": supported_row_agreement,
             "baseline": baseline_supported_row_agreement,
             "passed": evidence_passed,
+            "required_for_working_method": False,
         },
         "winner_agreement_at_least_90pct": {
             "value": winner_agreement,
             "threshold": MIN_WINNER_AGREEMENT,
-            "passed": winner_agreement >= MIN_WINNER_AGREEMENT,
+            "passed": bool(
+                winner_agreement is not None
+                and winner_agreement >= MIN_WINNER_AGREEMENT
+            ),
+            "required_for_working_method": True,
         },
         "gate_agreement_at_least_90pct": {
             "value": gate_agreement,
             "threshold": MIN_GATE_AGREEMENT,
-            "passed": gate_agreement >= MIN_GATE_AGREEMENT,
+            "passed": bool(
+                gate_agreement is not None
+                and gate_agreement >= MIN_GATE_AGREEMENT
+            ),
+            "required_for_working_method": True,
         },
     }
 
@@ -157,10 +261,64 @@ def build_stability_report(
         for check in run_checks.values()
     ) and len(performance_criteria) == len(repeat_labels)
     stability_passed = all(
-        criterion["passed"] for criterion in stability_criteria.values()
+        criterion["passed"]
+        for criterion in stability_criteria.values()
+        if criterion["required_for_working_method"]
     )
+    evidence_valid_pair_count = len(evidence_rows)
+    structural_valid_pair_count = sum(
+        row["structural_pair_valid"] for row in per_case.values()
+    )
+    working_method_valid_pair_count = sum(
+        row["working_method_pair_valid"] for row in per_case.values()
+    )
+    structural_reliability_passed = bool(
+        evidence_valid_pair_count == int(expected_cases)
+        and structural_valid_pair_count == int(expected_cases)
+        and working_method_valid_pair_count == int(expected_cases)
+    )
+    validity = {
+        "all_aligned_case_count": len(aligned_ids),
+        "evidence_valid_pair_count": evidence_valid_pair_count,
+        "structural_valid_pair_count": structural_valid_pair_count,
+        "working_method_valid_pair_count": working_method_valid_pair_count,
+        "structural_invalid_pair_count": (
+            len(aligned_ids) - structural_valid_pair_count
+        ),
+        "working_method_invalid_pair_count": (
+            len(aligned_ids) - working_method_valid_pair_count
+        ),
+        "missing_evidence_event_count": {
+            label: sum(
+                int(row.get("evidence_event_count", 0) or 0) == 0
+                for row in runs[label].values()
+            )
+            for label in repeat_labels
+        },
+        "missing_gate_event_count": {
+            label: sum(
+                int(row.get("gate_event_count", 0) or 0) == 0
+                for row in runs[label].values()
+            )
+            for label in repeat_labels
+        },
+        "missing_answer_count": {
+            label: sum(
+                not bool(row.get("answer_present"))
+                for row in runs[label].values()
+            )
+            for label in repeat_labels
+        },
+        "terminal_occurrence_failure_count": {
+            label: sum(
+                int(row.get("terminal_occurrence_failure_count", 0) or 0)
+                for row in runs[label].values()
+            )
+            for label in repeat_labels
+        },
+    }
     return {
-        "schema_version": "MMLifelongOccurrenceEvidenceStabilityV1",
+        "schema_version": "MMLifelongOccurrenceEvidenceStabilityV2",
         "protocol": {
             "repeat_labels": list(repeat_labels),
             "expected_cases": int(expected_cases),
@@ -170,31 +328,40 @@ def build_stability_report(
         },
         "source_case_counts": {label: len(runs[label]) for label in repeat_labels},
         "aligned_case_count": len(aligned_ids),
+        "validity": validity,
+        "metric_denominators": {
+            "evidence_stability": evidence_valid_pair_count,
+            "working_method": working_method_valid_pair_count,
+        },
         "metrics": {
             "supported_row_jaccard_macro": supported_row_agreement,
-            "strict_supported_row_jaccard_macro": mean(
-                row["strict_supported_row_jaccard"] for row in per_case.values()
+            "strict_supported_row_jaccard_macro": _mean_metric(
+                evidence_rows, "strict_supported_row_jaccard"
             ),
-            "candidate_passage_jaccard_macro": mean(
-                row["candidate_passage_jaccard"] for row in per_case.values()
+            "candidate_passage_jaccard_macro": _mean_metric(
+                evidence_rows, "candidate_passage_jaccard"
             ),
-            "support_count_mae_macro": mean(
-                row["support_count_mae"] for row in per_case.values()
+            "support_count_mae_macro": _mean_metric(
+                evidence_rows, "support_count_mae"
             ),
             "winner_agreement": winner_agreement,
             "gate_agreement": gate_agreement,
             "gate_drift_case_count": sum(
-                not row["gate_agrees"] for row in per_case.values()
+                row["gate_agrees"] is False for row in per_case.values()
             ),
             "winner_drift_case_count": sum(
-                not row["winner_agrees"] for row in per_case.values()
+                row["winner_agrees"] is False for row in per_case.values()
             ),
             "no_match_to_selected_case_count": sum(
+                row["evidence_pair_valid"]
+                and
                 row["first_gate"] == "insufficient"
                 and row["second_gate"] == "sufficient"
                 for row in per_case.values()
             ),
             "selected_to_no_match_case_count": sum(
+                row["evidence_pair_valid"]
+                and
                 row["first_gate"] == "sufficient"
                 and row["second_gate"] == "insufficient"
                 for row in per_case.values()
@@ -204,15 +371,32 @@ def build_stability_report(
         "performance_by_run": performance_by_run,
         "performance_criteria": performance_criteria,
         "stability_passed": stability_passed,
+        "structural_reliability_passed": structural_reliability_passed,
         "performance_guardrails_passed": performance_passed,
-        "working_method_passed": stability_passed and performance_passed,
+        "working_method_passed": (
+            structural_reliability_passed
+            and stability_passed
+            and performance_passed
+        ),
         "gate_drift_case_ids": [
-            case_id for case_id, row in per_case.items() if not row["gate_agrees"]
+            case_id
+            for case_id, row in per_case.items()
+            if row["gate_agrees"] is False
         ],
         "winner_drift_case_ids": [
             case_id
             for case_id, row in per_case.items()
-            if not row["winner_agrees"]
+            if row["winner_agrees"] is False
+        ],
+        "evidence_invalid_pair_case_ids": [
+            case_id
+            for case_id, row in per_case.items()
+            if not row["evidence_pair_valid"]
+        ],
+        "working_method_invalid_pair_case_ids": [
+            case_id
+            for case_id, row in per_case.items()
+            if not row["working_method_pair_valid"]
         ],
         "per_case": per_case,
     }
@@ -229,6 +413,12 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         for row in trace
         if row.get("type") == "occurrence_sufficiency_gate_decision"
     )
+    resolution_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_gate_resolution_committed"
+    )
+    decoupled = bool(evidence_events or gate_events or resolution_events)
     supported_rows: set[tuple[str, str, str]] = set()
     strict_rows: set[tuple[str, str, str, str, tuple[str, ...]]] = set()
     candidate_passage_rows: set[tuple[str, str, str]] = set()
@@ -259,6 +449,7 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                         (set_id, occurrence_id, passage_id) for passage_id in passages
                     )
     else:
+        accepted_assessment_count = 0
         for decision in trace:
             if (
                 decision.get("type") != "reasoner_decision"
@@ -270,6 +461,7 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                     operation.get("op", operation.get("type", "")) or ""
                 ).casefold() != "assess_sufficiency":
                     continue
+                accepted_assessment_count += 1
                 set_id = str(operation.get("set_id", "") or "")
                 for constraint in tuple(
                     operation.get("constraints_checked", ()) or ()
@@ -315,6 +507,60 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         )
     final_gate = gate_events[-1] if gate_events else {}
     support_counts = final_gate.get("support_count_by_occurrence", {})
+    if decoupled:
+        evidence_by_position = {
+            _event_position(row): row for row in evidence_events
+        }
+        gate_by_position = {_event_position(row): row for row in gate_events}
+        resolution_by_position = {
+            _event_position(row): row for row in resolution_events
+        }
+        evidence_declaration_valid = bool(
+            evidence_events
+            and all(_evidence_event_valid(row) for row in evidence_events)
+        )
+        mechanical_gate_valid = bool(
+            gate_events
+            and len(gate_events) == len(evidence_events)
+            and set(gate_by_position) == set(evidence_by_position)
+            and all(
+                _mechanical_gate_event_valid(gate)
+                and str(gate.get("evidence_report_digest", "") or "")
+                == str(
+                    evidence_by_position[position].get(
+                        "evidence_report_digest", ""
+                    )
+                    or ""
+                )
+                for position, gate in gate_by_position.items()
+            )
+        )
+        mechanical_resolution_valid = bool(
+            resolution_events
+            and len(resolution_events) == len(gate_events)
+            and set(resolution_by_position) == set(gate_by_position)
+            and all(
+                _mechanical_resolution_valid(
+                    resolution,
+                    gate_by_position[position],
+                )
+                for position, resolution in resolution_by_position.items()
+            )
+        )
+    else:
+        evidence_declaration_valid = bool(
+            accepted_assessment_count
+            and accepted_assessment_count == len(gate_events)
+        )
+        mechanical_gate_valid = bool(
+            gate_events
+            and all(
+                str(row.get("verdict", "") or "")
+                in {"sufficient", "insufficient"}
+                for row in gate_events
+            )
+        )
+        mechanical_resolution_valid = mechanical_gate_valid
     return {
         "supported_rows": supported_rows,
         "strict_supported_rows": strict_rows,
@@ -331,7 +577,116 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             )
         ),
         "gate": str(final_gate.get("verdict", "") or ""),
+        "evidence_event_count": (
+            len(evidence_events) if decoupled else accepted_assessment_count
+        ),
+        "gate_event_count": len(gate_events),
+        "resolution_event_count": (
+            len(resolution_events) if decoupled else len(gate_events)
+        ),
+        "evidence_declaration_valid": evidence_declaration_valid,
+        "mechanical_gate_valid": mechanical_gate_valid,
+        "mechanical_resolution_valid": mechanical_resolution_valid,
+        "transaction_structural_valid": bool(
+            evidence_declaration_valid
+            and mechanical_gate_valid
+            and mechanical_resolution_valid
+        ),
     }
+
+
+def _event_position(row: Mapping[str, Any]) -> tuple[int, int, str]:
+    return (
+        int(row.get("round", 0) or 0),
+        int(row.get("occurrence_op_index", 0) or 0),
+        str(row.get("set_id", "") or ""),
+    )
+
+
+def _evidence_event_valid(event: Mapping[str, Any]) -> bool:
+    scope = tuple(str(value) for value in event.get("scope_occurrence_ids", ()) or ())
+    constraints = tuple(
+        row
+        for row in tuple(event.get("constraints", ()) or ())
+        if isinstance(row, Mapping)
+    )
+    if not (
+        str(event.get("set_id", "") or "")
+        and str(event.get("evidence_report_digest", "") or "")
+        and event.get("rule_blind") is True
+        and not bool(event.get("model_verdict_present"))
+        and event.get("support_complete") is True
+        and event.get("support_contract")
+        == "rule_blind_sparse_positive_evidence_v1"
+        and 1 <= len(scope) <= 5
+        and constraints
+    ):
+        return False
+    scope_set = set(scope)
+    return all(
+        str(candidate.get("occurrence_id", "") or "") in scope_set
+        and bool(tuple(candidate.get("evidence_passage_ids", ()) or ()))
+        for constraint in constraints
+        for candidate in tuple(
+            constraint.get("supported_candidates", ()) or ()
+        )
+        if isinstance(candidate, Mapping)
+    )
+
+
+def _mechanical_gate_event_valid(event: Mapping[str, Any]) -> bool:
+    raw_counts = event.get("support_count_by_occurrence", {})
+    if (
+        event.get("decision_owner") != "runtime"
+        or bool(event.get("model_verdict_present"))
+        or event.get("support_contract")
+        != "rule_blind_sparse_positive_evidence_v1"
+        or event.get("aggregation_rule") != "unique_supported_count_margin"
+        or not isinstance(raw_counts, Mapping)
+        or not raw_counts
+    ):
+        return False
+    try:
+        counts = {str(key): int(value) for key, value in raw_counts.items()}
+        best_recorded = int(event.get("best_support_count", -1))
+        runner_up_recorded = int(event.get("runner_up_support_count", -1))
+        minimum_margin = int(event.get("minimum_support_margin", 1) or 1)
+    except (TypeError, ValueError):
+        return False
+    if minimum_margin != 1:
+        return False
+    ordered = sorted(counts.items(), key=lambda item: -item[1])
+    best = ordered[0][1]
+    runner_up = ordered[1][1] if len(ordered) > 1 else 0
+    leaders = [key for key, value in ordered if value == best]
+    expected_winner = (
+        leaders[0]
+        if best > 0 and len(leaders) == 1 and best - runner_up >= minimum_margin
+        else ""
+    )
+    return bool(
+        best_recorded == best
+        and runner_up_recorded == runner_up
+        and str(event.get("winner_occurrence_id", "") or "")
+        == expected_winner
+        and str(event.get("verdict", "") or "")
+        == ("sufficient" if expected_winner else "insufficient")
+    )
+
+
+def _mechanical_resolution_valid(
+    resolution: Mapping[str, Any],
+    gate: Mapping[str, Any],
+) -> bool:
+    expected_op = "select" if gate.get("verdict") == "sufficient" else "no_match"
+    op = str(resolution.get("op", resolution.get("type", "")) or "").casefold()
+    if op != expected_op:
+        return False
+    if expected_op == "select":
+        return str(resolution.get("occurrence_id", "") or "") == str(
+            gate.get("winner_occurrence_id", "") or ""
+        )
+    return not str(resolution.get("occurrence_id", "") or "")
 
 
 def _load_performance(report_path: Path) -> Mapping[str, Any]:
@@ -353,24 +708,38 @@ def _load_performance(report_path: Path) -> Mapping[str, Any]:
 
 def render_markdown(report: Mapping[str, Any]) -> str:
     metrics = report["metrics"]
+    validity = report["validity"]
+    evidence_n = report["metric_denominators"]["evidence_stability"]
     lines = [
         "# MM-Lifelong Evidence Elicitation Stability",
         "",
-        f"Aligned cases: {report['aligned_case_count']}.",
+        f"Aligned cases: {report['aligned_case_count']}; evidence-valid pairs: {evidence_n}; full-method-valid pairs: {validity['working_method_valid_pair_count']}.",
         "",
         "| Metric | Value |",
         "|---|---:|",
-        f"| Supported-row Jaccard (macro) | {metrics['supported_row_jaccard_macro']:.4f} |",
-        f"| Strict supported-row Jaccard (macro) | {metrics['strict_supported_row_jaccard_macro']:.4f} |",
-        f"| Candidate-passage Jaccard (macro) | {metrics['candidate_passage_jaccard_macro']:.4f} |",
-        f"| Support-count MAE (macro) | {metrics['support_count_mae_macro']:.4f} |",
-        f"| Winner agreement | {metrics['winner_agreement']:.4f} |",
-        f"| Gate agreement | {metrics['gate_agreement']:.4f} |",
+        f"| Supported-row Jaccard (macro, n={evidence_n}) | {_format_metric(metrics['supported_row_jaccard_macro'])} |",
+        f"| Strict supported-row Jaccard (macro, n={evidence_n}) | {_format_metric(metrics['strict_supported_row_jaccard_macro'])} |",
+        f"| Candidate-passage Jaccard (macro, n={evidence_n}) | {_format_metric(metrics['candidate_passage_jaccard_macro'])} |",
+        f"| Support-count MAE (macro, n={evidence_n}) | {_format_metric(metrics['support_count_mae_macro'])} |",
+        f"| Winner agreement (n={evidence_n}) | {_format_metric(metrics['winner_agreement'])} |",
+        f"| Gate agreement (n={evidence_n}) | {_format_metric(metrics['gate_agreement'])} |",
         "",
-        f"Stability passed: `{report['stability_passed']}`. Performance guardrails passed in both repeats: `{report['performance_guardrails_passed']}`. Working method passed: `{report['working_method_passed']}`.",
+        f"Structural reliability passed: `{report['structural_reliability_passed']}`. Stability passed: `{report['stability_passed']}`. Performance guardrails passed in both repeats: `{report['performance_guardrails_passed']}`. Working method passed: `{report['working_method_passed']}`.",
         "",
     ]
     return "\n".join(lines)
+
+
+def _mean_metric(
+    rows: Sequence[Mapping[str, Any]], key: str
+) -> float | None:
+    values = [row.get(key) for row in rows]
+    numeric = [float(value) for value in values if isinstance(value, (int, float))]
+    return mean(numeric) if numeric else None
+
+
+def _format_metric(value: Any) -> str:
+    return f"{float(value):.4f}" if isinstance(value, (int, float)) else "n/a"
 
 
 def _jaccard(left: set[Any], right: set[Any]) -> float:
@@ -434,8 +803,9 @@ def main() -> int:
     )
     args.output_md.write_text(render_markdown(report), encoding="utf-8")
     print(
-        f"aligned={report['aligned_case_count']} gate_agreement="
-        f"{report['metrics']['gate_agreement']:.4f} "
+        f"aligned={report['aligned_case_count']} evidence_valid="
+        f"{report['validity']['evidence_valid_pair_count']} gate_agreement="
+        f"{_format_metric(report['metrics']['gate_agreement'])} "
         f"working_method_passed={report['working_method_passed']}"
     )
     return 0

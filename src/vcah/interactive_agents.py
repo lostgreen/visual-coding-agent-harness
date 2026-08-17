@@ -192,6 +192,24 @@ def _answer(value: Any, options: Mapping[str, str]) -> str:
     return f"{matches[0][0]}. {matches[0][1]}" if len(matches) == 1 else text
 
 
+def _raw_answer_text(value: Any) -> str:
+    if isinstance(value, Mapping):
+        nested = value.get("answer")
+        if nested is not None:
+            return _raw_answer_text(nested)
+        value = (
+            value.get("option")
+            or value.get("label")
+            or value.get("choice")
+            or value.get("text")
+        )
+    return str(value or "").strip()
+
+
+def _normalize_answer_alias(value: Any) -> str:
+    return re.sub(r"\s+", " ", _raw_answer_text(value)).strip().casefold()
+
+
 def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> InvestigationTask | None:
     goal = str(value.get("goal") or value.get("task") or "").strip()
     if not goal:
@@ -258,6 +276,7 @@ def _normalize_decision(
     round_id: int,
     task_errors: list[dict[str, Any]] | None = None,
     decision_errors: list[dict[str, Any]] | None = None,
+    normalizations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = dict(value)
     raw_tasks = payload.get("tasks", ())
@@ -266,6 +285,7 @@ def _normalize_decision(
     tasks = []
     normalized_task_errors = task_errors if task_errors is not None else []
     normalized_decision_errors = decision_errors if decision_errors is not None else []
+    normalized_events = normalizations if normalizations is not None else []
     if isinstance(raw_tasks, Sequence) and not isinstance(raw_tasks, (str, bytes)):
         for index, row in enumerate(raw_tasks, start=1):
             requested_task_id = (
@@ -340,6 +360,33 @@ def _normalize_decision(
     if action not in _DECISION_ACTIONS:
         action = "update_workspace"
     answer = payload.get("answer", "")
+    action_input = payload.get("action_input")
+    alias_answer = (
+        action_input.get("answer", "")
+        if isinstance(action_input, Mapping)
+        else ""
+    )
+    top_level_text = _raw_answer_text(answer)
+    alias_text = _raw_answer_text(alias_answer)
+    if action == "answer" and top_level_text and alias_text:
+        if _normalize_answer_alias(top_level_text) != _normalize_answer_alias(
+            alias_text
+        ):
+            normalized_decision_errors.append(
+                {
+                    "code": "answer_alias_conflict",
+                    "fields": ["answer", "action_input.answer"],
+                }
+            )
+    elif action == "answer" and not top_level_text and alias_text:
+        answer = alias_answer
+        normalized_events.append(
+            {
+                "type": "answer_alias_normalized",
+                "source": "action_input.answer",
+                "target": "answer",
+            }
+        )
     if (
         action == "answer"
         and not answer
@@ -537,11 +584,13 @@ class WorkspaceReasoner:
             )
         task_errors: list[dict[str, Any]] = []
         decision_errors: list[dict[str, Any]] = []
+        decision_normalizations: list[dict[str, Any]] = []
         value = _normalize_decision(
             payload or {"action": "update_workspace"},
             round_id=semantic_round,
             task_errors=task_errors,
             decision_errors=decision_errors,
+            normalizations=decision_normalizations,
         )
         value["answer"] = _answer(value["answer"], dict(kwargs.get("options") or {}))
         decision = ReasonerDecision(**value)
@@ -551,6 +600,11 @@ class WorkspaceReasoner:
             "prompt_digest": prompt_digest(prompt),
             "decision_payload_valid": bool(payload),
             "decision_schema_errors": decision_errors,
+            "decision_normalizations": decision_normalizations,
+            "answer_alias_normalized": any(
+                row.get("type") == "answer_alias_normalized"
+                for row in decision_normalizations
+            ),
             "task_resolution_errors": task_errors,
             "internal_control_retry_count": int(repair_attempted),
             "format_repaired": repaired,
@@ -2100,8 +2154,8 @@ def _occurrence_resolution_prompt_rule(
                 "concise question-critical constraints using only action, identity, event, relation, temporal, state, "
                 "attribute, object, location, order, or outcome types. For each constraint, list a candidate under "
                 "supported_candidates only when one or more visible evidence_passage_ids directly support that candidate. "
-                "Omit every candidate without direct visible support. Candidates listed in "
-                "sufficiency_out_of_scope_occurrence_ids need no evidence rows. Do not output a verdict and do not select, "
+                "Omit every candidate without direct visible support. evidence_scope.candidates is the complete legal "
+                "declaration surface; additional_candidate_count is informational and exposes no additional IDs. Do not output a verdict and do not select, "
                 "defer, or use no_match in the evidence transaction. Runtime validates and persists the evidence report, "
                 "then performs the gate decision and scoped resolution separately. "
             )
@@ -2375,7 +2429,7 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
                 '"evidence_passage_ids":["visible_passage_id"]}]}]}]}. '
                 'Constraint types are action, identity, event, relation, temporal, state, attribute, object, location, '
                 'order, or outcome. Include only directly evidenced supported candidates; omit all others. '
-                'sufficiency_out_of_scope_occurrence_ids need no rows. Do not include verdict, select, defer, or no_match; '
+                'Use only IDs in evidence_scope.candidates; additional_candidate_count exposes no additional IDs. Do not include verdict, select, defer, or no_match; '
                 'Runtime owns the later gate and resolution.\n'
             )
         else:

@@ -398,6 +398,45 @@ class OccurrenceResolutionStateV2:
             return ()
         return active.viable_occurrence_ids[DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT:]
 
+    def evidence_scope_candidates(self) -> tuple[dict[str, Any], ...]:
+        active = self.active_set
+        if not self.sufficiency_enabled or active is None:
+            return ()
+        rows: list[dict[str, Any]] = []
+        for occurrence_id in self.sufficiency_scope_occurrence_ids:
+            candidate = active.candidates[occurrence_id]
+            raw_card = candidate.get("candidate_card")
+            card = raw_card if isinstance(raw_card, Mapping) else {}
+            passages = [
+                {
+                    "passage_id": str(passage.get("passage_id", "") or ""),
+                    "time_range": list(passage.get("time_range", ()) or ()),
+                    "caption_excerpt": str(
+                        passage.get("caption_excerpt", "") or ""
+                    ),
+                    "query_matches": list(
+                        passage.get("query_matches", ()) or ()
+                    ),
+                    "evidence_role": "locator_only",
+                    "answer_support": False,
+                }
+                for passage in tuple(
+                    card.get("representative_passages", ()) or ()
+                )
+                if isinstance(passage, Mapping)
+            ]
+            rows.append(
+                {
+                    "occurrence_id": occurrence_id,
+                    "time_range": list(candidate.get("time_range", ()) or ()),
+                    "passage_ids": list(candidate.get("passage_ids", ()) or ()),
+                    "representative_passages": passages,
+                    "evidence_role": "locator_only",
+                    "answer_support": False,
+                }
+            )
+        return tuple(rows)
+
     def sync_sets(self, occurrence_sets: Sequence[Mapping[str, Any]]) -> bool:
         # A selected/no-match result is the scoped decision endpoint. Later
         # retrieval packets cannot silently replace it; search-more remains
@@ -480,7 +519,14 @@ class OccurrenceResolutionStateV2:
                 allow_resolution_transaction=allow_resolution_transaction,
             )
             if error is not None:
-                errors.append(error)
+                if error.get("code") == "_occurrence_evidence_validation_errors":
+                    errors.extend(
+                        dict(row)
+                        for row in tuple(error.get("errors", ()) or ())
+                        if isinstance(row, Mapping)
+                    )
+                else:
+                    errors.append(error)
         return errors
 
     def apply_ops(
@@ -514,7 +560,10 @@ class OccurrenceResolutionStateV2:
                     and active.evidence_report is not None
                     and active.sufficiency is not None
                 )
-                evidence_report = active.evidence_report.to_dict()
+                evidence_report = {
+                    **active.evidence_report.to_dict(),
+                    "evidence_report_digest": active.evidence_report.digest,
+                }
                 gate_decision = active.sufficiency.to_dict()
                 applied.append(active.evidence_report.to_operation())
                 runtime_op = {
@@ -621,6 +670,34 @@ class OccurrenceResolutionStateV2:
 
     def to_reasoner_dict(self) -> dict[str, Any]:
         """Expose lifecycle state without leaking evidence or gate internals."""
+        if self.sufficiency_required:
+            active = self.active_set
+            assert active is not None
+            return {
+                "schema_version": "OccurrenceResolutionStateV2",
+                "revision": self.revision,
+                "active_set_id": self.active_set_id,
+                "selection_required": True,
+                "search_required": False,
+                "active_resolution": active.resolution,
+                "candidate_count": len(active.candidates),
+                "resolution_required": True,
+                "arbitration_required": len(active.candidates) >= 2,
+                "selected_occurrence_ids": [],
+                "sufficiency_enabled": True,
+                "sufficiency_required": True,
+                "sufficiency_candidate_limit": (
+                    DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT
+                ),
+                "evidence_scope": {
+                    "set_id": active.set_id,
+                    "semantic_target": list(active.semantic_target),
+                    "candidates": list(self.evidence_scope_candidates()),
+                },
+                "additional_candidate_count": len(
+                    self.sufficiency_out_of_scope_occurrence_ids
+                ),
+            }
         payload = self.to_dict()
         payload.pop("active_evidence_report", None)
         payload.pop("active_sufficiency", None)
@@ -749,7 +826,10 @@ class OccurrenceResolutionStateV2:
                 operation_index=index,
             )
             if errors:
-                return errors[0]
+                return {
+                    "code": "_occurrence_evidence_validation_errors",
+                    "errors": [dict(error) for error in errors],
+                }
             assert report is not None
             decision = aggregate_occurrence_evidence(report)
             occurrence_set.evidence_report = report

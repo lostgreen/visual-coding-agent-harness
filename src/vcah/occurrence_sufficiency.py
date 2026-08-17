@@ -82,12 +82,55 @@ _EVIDENCE_SUPPORT_FIELDS = frozenset(
 
 
 @dataclass(frozen=True)
+class OccurrenceEvidenceDeclaration:
+    """Model-authored evidence input without Runtime-derived metadata."""
+
+    set_id: str
+    constraints: tuple[dict[str, Any], ...]
+
+    def to_operation(self) -> dict[str, Any]:
+        return {
+            "op": EVIDENCE_OPERATION,
+            "set_id": self.set_id,
+            "constraints": [
+                {
+                    "constraint_id": str(
+                        constraint.get("constraint_id", "") or ""
+                    ),
+                    "constraint_type": str(
+                        constraint.get("constraint_type", "") or ""
+                    ),
+                    "description": str(
+                        constraint.get("description", "") or ""
+                    ),
+                    "supported_candidates": [
+                        {
+                            "occurrence_id": str(
+                                row.get("occurrence_id", "") or ""
+                            ),
+                            "evidence_passage_ids": list(
+                                row.get("evidence_passage_ids", ()) or ()
+                            ),
+                        }
+                        for row in tuple(
+                            constraint.get("supported_candidates", ()) or ()
+                        )
+                        if isinstance(row, Mapping)
+                    ],
+                }
+                for constraint in self.constraints
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class OccurrenceEvidenceReport:
     set_id: str
     constraints: tuple[dict[str, Any], ...]
     implicit_unknown_support_count: int
     scope_occurrence_ids: tuple[str, ...]
     out_of_scope_occurrence_ids: tuple[str, ...]
+    validation_warnings: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +153,14 @@ class OccurrenceEvidenceReport:
             "out_of_scope_occurrence_ids": list(
                 self.out_of_scope_occurrence_ids
             ),
+            "validation_warnings": [
+                dict(warning) for warning in self.validation_warnings
+            ],
+            "dropped_out_of_scope_support_count": sum(
+                str(warning.get("code", "") or "")
+                == "occurrence_evidence_support_out_of_scope_dropped"
+                for warning in self.validation_warnings
+            ),
             "support_complete": True,
             "support_contract": EVIDENCE_SUPPORT_CONTRACT,
             "rule_blind": True,
@@ -117,11 +168,10 @@ class OccurrenceEvidenceReport:
         }
 
     def to_operation(self) -> dict[str, Any]:
-        return {
-            "op": EVIDENCE_OPERATION,
-            **self.to_dict(),
-            "evidence_report_digest": self.digest,
-        }
+        return OccurrenceEvidenceDeclaration(
+            set_id=self.set_id,
+            constraints=self.constraints,
+        ).to_operation()
 
     @property
     def digest(self) -> str:
@@ -189,26 +239,30 @@ def validate_evidence_operation(
     out_of_scope_occurrence_ids: Sequence[str] = (),
     operation_index: int,
 ) -> tuple[OccurrenceEvidenceReport | None, list[dict[str, Any]]]:
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     forbidden_fields = sorted(_FORBIDDEN_GATE_FIELDS & set(operation))
     if forbidden_fields:
-        return None, [
+        errors.append(
             _error(
                 "occurrence_evidence_forbidden_gate_field",
                 operation_index,
                 set_id=set_id,
                 forbidden_fields=forbidden_fields,
             )
-        ]
-    unexpected_fields = sorted(set(operation) - _EVIDENCE_OPERATION_FIELDS)
+        )
+    unexpected_fields = sorted(
+        set(operation) - _EVIDENCE_OPERATION_FIELDS - _FORBIDDEN_GATE_FIELDS
+    )
     if unexpected_fields:
-        return None, [
+        errors.append(
             _error(
                 "occurrence_evidence_operation_field_invalid",
                 operation_index,
                 set_id=set_id,
                 unexpected_fields=unexpected_fields,
             )
-        ]
+        )
 
     raw_constraints = operation.get("constraints")
     if not isinstance(raw_constraints, Sequence) or isinstance(
@@ -216,7 +270,7 @@ def validate_evidence_operation(
     ):
         raw_constraints = ()
     if not 1 <= len(raw_constraints) <= MAX_CONSTRAINTS:
-        return None, [
+        errors.append(
             _error(
                 "occurrence_evidence_constraints_required",
                 operation_index,
@@ -224,13 +278,15 @@ def validate_evidence_operation(
                 minimum=1,
                 maximum=MAX_CONSTRAINTS,
             )
-        ]
+        )
 
     viable_ids = tuple(dict.fromkeys(str(value) for value in viable_occurrence_ids))
     viable_set = set(viable_ids)
+    out_of_scope_set = {
+        str(value) for value in out_of_scope_occurrence_ids if str(value)
+    }
     normalized_constraints: list[dict[str, Any]] = []
     seen_constraint_ids: set[str] = set()
-    errors: list[dict[str, Any]] = []
     for constraint_index, raw_constraint in enumerate(raw_constraints):
         if not isinstance(raw_constraint, Mapping):
             errors.append(
@@ -270,8 +326,8 @@ def validate_evidence_operation(
                     constraint_id=constraint_id,
                 )
             )
-            continue
-        seen_constraint_ids.add(constraint_id)
+        else:
+            seen_constraint_ids.add(constraint_id)
         if constraint_type not in QUESTION_CRITICAL_CONSTRAINT_TYPES:
             errors.append(
                 _error(
@@ -325,13 +381,37 @@ def validate_evidence_operation(
                         unexpected_fields=unexpected_support_fields,
                     )
                 )
-            if occurrence_id not in viable_set or occurrence_id in seen_occurrence_ids:
+            if occurrence_id in seen_occurrence_ids:
                 errors.append(
                     _error(
                         "occurrence_evidence_support_candidate_invalid",
                         operation_index,
                         set_id=set_id,
                         constraint_index=constraint_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            if occurrence_id in out_of_scope_set:
+                warnings.append(
+                    _error(
+                        "occurrence_evidence_support_out_of_scope_dropped",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        support_index=support_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            if occurrence_id not in viable_set:
+                errors.append(
+                    _error(
+                        "occurrence_evidence_support_candidate_invalid",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        support_index=support_index,
                         occurrence_id=occurrence_id,
                     )
                 )
@@ -407,6 +487,7 @@ def validate_evidence_operation(
                     if str(value)
                 )
             ),
+            validation_warnings=tuple(warnings),
         ),
         [],
     )

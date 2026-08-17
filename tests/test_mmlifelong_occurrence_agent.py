@@ -15,6 +15,7 @@ from vcah.occurrence_agent import (
     candidate_card_excerpt_digest,
     validate_occurrence_method_configuration,
 )
+from vcah.occurrence_sufficiency import validate_evidence_operation
 from vcah.interactive_agents import _frozen_reasoner_prompt
 from vcah.multiround import (
     InvestigationTask,
@@ -23,6 +24,7 @@ from vcah.multiround import (
     _occurrence_answer_errors,
     _occurrence_locator_statuses,
     _occurrence_treatment_surface,
+    _reasoner_mechanical_status,
     _visible_occurrence_ids,
 )
 
@@ -824,7 +826,9 @@ def test_a4_normalizes_omitted_support_to_unknown() -> None:
     accepted = state.apply_ops((assessment,))
 
     assert accepted["accepted"] is True
-    normalized = accepted["applied"][0]
+    declaration = accepted["applied"][0]
+    normalized = accepted["evidence_report"]
+    assert set(declaration) == {"op", "set_id", "constraints"}
     assert normalized["implicit_unknown_support_count"] == 2
     assert normalized["support_complete"] is True
     assert normalized["support_contract"] == (
@@ -843,6 +847,72 @@ def test_a4_normalizes_omitted_support_to_unknown() -> None:
     assert gate["decision_owner"] == "runtime"
     assert gate["support_count_by_occurrence"] == {"occ_1": 2, "occ_2": 0}
     assert gate["verdict"] == "sufficient"
+
+
+def test_a4_evidence_declaration_report_roundtrip_is_validator_legal() -> None:
+    candidates = {
+        "occ_1": {"passage_ids": ["p1"]},
+        "occ_2": {"passage_ids": ["p2"]},
+    }
+    declaration = _sufficiency_op(verdict="sufficient")
+
+    report, errors = validate_evidence_operation(
+        declaration,
+        set_id="attempt_sufficiency",
+        candidates=candidates,
+        viable_occurrence_ids=("occ_1", "occ_2"),
+        operation_index=0,
+    )
+    assert errors == []
+    assert report is not None
+
+    roundtrip, roundtrip_errors = validate_evidence_operation(
+        report.to_operation(),
+        set_id="attempt_sufficiency",
+        candidates=candidates,
+        viable_occurrence_ids=("occ_1", "occ_2"),
+        operation_index=0,
+    )
+    assert roundtrip_errors == []
+    assert roundtrip is not None
+    assert roundtrip.to_dict() == report.to_dict()
+
+
+def test_a4_evidence_validation_returns_all_deterministic_errors() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                    {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                ],
+            },
+        )
+    )
+    operation = _sufficiency_op(verdict="sufficient")
+    operation["schema_version"] = "OccurrenceEvidenceReportV1"
+    operation["constraints"][0]["supported_candidates"] = [
+        {"occurrence_id": "unknown", "evidence_passage_ids": ["p1"]},
+        {"occurrence_id": "occ_1", "evidence_passage_ids": ["foreign"]},
+        {
+            "occurrence_id": "occ_2",
+            "evidence_passage_ids": ["p2"],
+            "status": "supported",
+        },
+    ]
+
+    result = state.apply_ops((operation,))
+
+    assert result["accepted"] is False
+    codes = {error["code"] for error in result["errors"]}
+    assert {
+        "occurrence_evidence_operation_field_invalid",
+        "occurrence_evidence_support_candidate_invalid",
+        "occurrence_evidence_passage_not_visible",
+        "occurrence_evidence_support_field_invalid",
+    }.issubset(codes)
 
 
 def test_a4_unique_supported_count_tie_is_insufficient() -> None:
@@ -907,6 +977,29 @@ def test_a4_sufficiency_scope_is_top_five_and_out_of_scope_is_not_selectable() -
         "occ_6",
         "occ_7",
     ]
+    reasoner_view = state.to_reasoner_dict()
+    assert "viable_occurrence_ids" not in reasoner_view
+    assert "sufficiency_scope_occurrence_ids" not in reasoner_view
+    assert "sufficiency_out_of_scope_occurrence_ids" not in reasoner_view
+    assert "sets" not in reasoner_view
+    assert reasoner_view["additional_candidate_count"] == 2
+    assert [
+        row["occurrence_id"]
+        for row in reasoner_view["evidence_scope"]["candidates"]
+    ] == ["occ_1", "occ_2", "occ_3", "occ_4", "occ_5"]
+    reasoner_status = _reasoner_mechanical_status(
+        {
+            "occurrence_resolution_state": serialized,
+            "caption_occurrence_sets": [{"candidates": [{"occurrence_id": "occ_6"}]}],
+            "pending_caption_occurrences": [{"occurrence_id": "occ_6"}],
+            "flat_occurrence_passages": [{"passage_id": "p6"}],
+        },
+        state,
+    )
+    assert "caption_occurrence_sets" not in reasoner_status
+    assert "pending_caption_occurrences" not in reasoner_status
+    assert "flat_occurrence_passages" not in reasoner_status
+    assert reasoner_status["occurrence_resolution_state"] == reasoner_view
 
     supported_candidates = [
         {
@@ -931,17 +1024,34 @@ def test_a4_sufficiency_scope_is_top_five_and_out_of_scope_is_not_selectable() -
     out_of_scope["constraints"][0]["supported_candidates"] = [
         {"occurrence_id": "occ_6", "evidence_passage_ids": ["p6"]}
     ]
-    rejected = state.apply_ops(
-        (out_of_scope,)
+    dropped = state.apply_ops((out_of_scope,))
+    assert dropped["accepted"] is True
+    assert dropped["evidence_report"][
+        "dropped_out_of_scope_support_count"
+    ] == 1
+    assert dropped["evidence_report"]["validation_warnings"][0]["code"] == (
+        "occurrence_evidence_support_out_of_scope_dropped"
     )
-    assert rejected["accepted"] is False
-    assert rejected["errors"][0]["code"] == (
-        "occurrence_evidence_support_candidate_invalid"
-    )
+    assert dropped["runtime_occurrence_ops"][0]["op"] == "no_match"
 
-    accepted = state.apply_ops((assessment,))
+    fresh = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    fresh.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {
+                        "occurrence_id": f"occ_{index}",
+                        "passage_ids": [f"p{index}"],
+                    }
+                    for index in range(1, 8)
+                ],
+            },
+        )
+    )
+    accepted = fresh.apply_ops((assessment,))
     assert accepted["accepted"] is True
-    assert accepted["applied"][0]["out_of_scope_occurrence_ids"] == [
+    assert accepted["evidence_report"]["out_of_scope_occurrence_ids"] == [
         "occ_6",
         "occ_7",
     ]
@@ -1098,8 +1208,15 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
                     "sufficiency_enabled": True,
                     "sufficiency_required": True,
                     "sufficiency_candidate_limit": 5,
-                    "sufficiency_scope_occurrence_ids": ["occ_1", "occ_2"],
-                    "sufficiency_out_of_scope_occurrence_ids": [],
+                    "evidence_scope": {
+                        "set_id": "attempt_1",
+                        "semantic_target": ["target"],
+                        "candidates": [
+                            {"occurrence_id": "occ_1"},
+                            {"occurrence_id": "occ_2"},
+                        ],
+                    },
+                    "additional_candidate_count": 0,
                     "active_sufficiency": None,
                 }
             },
@@ -1109,7 +1226,9 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
     assert "question-critical constraints" in sufficiency_prompt
     assert "declare_occurrence_evidence" in sufficiency_prompt
     assert "evidence_passage_ids" in sufficiency_prompt
-    assert "sufficiency_scope_occurrence_ids" in sufficiency_prompt
+    assert "evidence_scope" in sufficiency_prompt
+    assert "sufficiency_scope_occurrence_ids" not in sufficiency_prompt
+    assert "sufficiency_out_of_scope_occurrence_ids" not in sufficiency_prompt
     assert "Omit every candidate without direct visible support" in sufficiency_prompt
     assert "Do not output a verdict" in sufficiency_prompt
     assert "unique highest count" not in sufficiency_prompt

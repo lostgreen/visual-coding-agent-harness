@@ -27,6 +27,14 @@ def _case(*, supported: set[tuple[str, str, str]], winner: str, gate: str) -> di
         "support_counts": {"occ_1": int(winner == "occ_1"), "occ_2": 0},
         "winner": winner,
         "gate": gate,
+        "evidence_declaration_valid": True,
+        "mechanical_gate_valid": True,
+        "full_structural_valid": True,
+        "working_method_valid": True,
+        "answer_present": True,
+        "terminal_occurrence_failure_count": 0,
+        "evidence_event_count": 1,
+        "gate_event_count": 1,
     }
 
 
@@ -92,4 +100,58 @@ def test_stability_reports_gate_and_winner_drift() -> None:
     assert report["metrics"]["winner_agreement"] == 0.0
     assert report["metrics"]["no_match_to_selected_case_count"] == 1
     assert report["gate_drift_case_ids"] == ["c1"]
+    assert report["working_method_passed"] is False
+
+
+def test_stability_excludes_missing_events_from_mechanism_denominators() -> None:
+    stable = _case(
+        supported={("set_1", "identity", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    missing = {
+        **stable,
+        "supported_rows": set(),
+        "strict_supported_rows": set(),
+        "candidate_passage_rows": set(),
+        "support_counts": {},
+        "winner": "",
+        "gate": "",
+        "evidence_declaration_valid": False,
+        "mechanical_gate_valid": False,
+        "full_structural_valid": False,
+        "working_method_valid": False,
+        "answer_present": False,
+        "evidence_event_count": 0,
+        "gate_event_count": 0,
+    }
+    passing = {
+        label: {
+            "false_commit_rate": 0.25,
+            "commit_recall": 0.70,
+            "osa_given_commit": 1.0,
+        }
+        for label in ("repeat_1", "repeat_2")
+    }
+
+    report = STABILITY.build_stability_report(
+        {
+            "repeat_1": {"valid": stable, "missing": stable},
+            "repeat_2": {"valid": stable, "missing": missing},
+        },
+        repeat_labels=("repeat_1", "repeat_2"),
+        expected_cases=2,
+        performance=passing,
+    )
+
+    assert report["aligned_case_count"] == 2
+    assert report["validity"]["evidence_valid_pair_count"] == 1
+    assert report["validity"]["working_method_valid_pair_count"] == 1
+    assert report["validity"]["missing_evidence_event_count"] == {
+        "repeat_1": 0,
+        "repeat_2": 1,
+    }
+    assert report["metrics"]["supported_row_jaccard_macro"] == 1.0
+    assert report["per_case"]["missing"]["supported_row_jaccard"] is None
+    assert report["structural_reliability_passed"] is False
     assert report["working_method_passed"] is False

@@ -954,21 +954,69 @@ class VirtualVideoMultiRoundDriver:
             retry_occurrence_next_round = False
             decision: ReasonerDecision | None = None
             requested_rows: tuple[Mapping[str, Any], ...] = ()
+            reasoner_status = _reasoner_mechanical_status(
+                status,
+                occurrence_state,
+            )
+            if (
+                isinstance(occurrence_state, OccurrenceResolutionStateV2)
+                and occurrence_state.sufficiency_required
+            ):
+                reasoner_state = reasoner_status.get(
+                    "occurrence_resolution_state", {}
+                )
+                evidence_scope = (
+                    reasoner_state.get("evidence_scope", {})
+                    if isinstance(reasoner_state, Mapping)
+                    else {}
+                )
+                visible_ids = tuple(
+                    str(row.get("occurrence_id", "") or "")
+                    for row in tuple(
+                        evidence_scope.get("candidates", ()) or ()
+                    )
+                    if isinstance(row, Mapping)
+                    and str(row.get("occurrence_id", "") or "")
+                )
+                legal_ids = occurrence_state.sufficiency_scope_occurrence_ids
+                trace.append(
+                    {
+                        "type": "occurrence_evidence_scope_exposed",
+                        "round": round_id,
+                        "set_id": occurrence_state.active_set_id,
+                        "model_visible_candidate_ids": list(visible_ids),
+                        "validator_legal_candidate_ids": list(legal_ids),
+                        "all_model_visible_candidates_validator_legal": (
+                            visible_ids == legal_ids
+                        ),
+                        "additional_candidate_count": len(
+                            occurrence_state.sufficiency_out_of_scope_occurrence_ids
+                        ),
+                    }
+                )
             while True:
+                reasoner_requested_observations = (
+                    ()
+                    if isinstance(
+                        occurrence_state, OccurrenceResolutionStateV2
+                    )
+                    and occurrence_state.sufficiency_required
+                    else requested_observations
+                )
                 working_view = (
                     runtime_catalog.render(document, feedback=feedback)
                     if self.evidence_state_mode == "runtime_derived"
                     else render_frozen_working_view(
                         document,
                         observation_log,
-                        requested_observations=requested_observations,
+                        requested_observations=reasoner_requested_observations,
                         feedback=feedback,
                     )
                     if self.controller_mode == "frozen_baseline"
                     else render_working_view(
                         document,
                         observation_log,
-                        requested_observations=requested_observations,
+                        requested_observations=reasoner_requested_observations,
                         feedback=feedback,
                     )
                 )
@@ -978,7 +1026,7 @@ class VirtualVideoMultiRoundDriver:
                     options=dict(workspace.case.options),
                     workspace_overview=overview,
                     working_document_view=working_view,
-                    mechanical_status=status,
+                    mechanical_status=reasoner_status,
                     remaining_budget=remaining,
                     force_finalize=force_finalize,
                     final_attempt=forced_decision_calls if force_finalize else 0,
@@ -1026,6 +1074,7 @@ class VirtualVideoMultiRoundDriver:
                         error
                         for error in raw_schema_errors
                         if str(error.get("code", "")).startswith("occurrence_")
+                        or str(error.get("code", "")) == "answer_alias_conflict"
                     ]
                     if self.controller_mode == "frozen_baseline"
                     else list(raw_schema_errors)
@@ -1136,6 +1185,9 @@ class VirtualVideoMultiRoundDriver:
                             parsed_decision.action
                             if parsed_decision is not None
                             else ""
+                        ),
+                        "answer_alias_normalized": bool(
+                            decision_metadata.get("answer_alias_normalized")
                         ),
                         "schema_valid": not raw_schema_errors and not schema_errors,
                         "errors": list(raw_schema_errors or schema_errors),
@@ -1304,10 +1356,14 @@ class VirtualVideoMultiRoundDriver:
                         operation.get("op", "") or ""
                     ) != SUFFICIENCY_OPERATION:
                         continue
+                    raw_report = occurrence_apply_result.get("evidence_report")
+                    report = (
+                        raw_report if isinstance(raw_report, Mapping) else {}
+                    )
                     constraints = tuple(
                         row
                         for row in tuple(
-                            operation.get("constraints", ()) or ()
+                            report.get("constraints", ()) or ()
                         )
                         if isinstance(row, Mapping)
                     )
@@ -1316,7 +1372,7 @@ class VirtualVideoMultiRoundDriver:
                             "type": "occurrence_evidence_declaration",
                             "round": round_id,
                             "occurrence_op_index": operation_index,
-                            "set_id": str(operation.get("set_id", "") or ""),
+                            "set_id": str(report.get("set_id", "") or ""),
                             "candidate_count": (
                                 occurrence_state.candidate_count
                                 if isinstance(
@@ -1325,27 +1381,40 @@ class VirtualVideoMultiRoundDriver:
                                 else 0
                             ),
                             "implicit_unknown_support_count": int(
-                                operation.get("implicit_unknown_support_count", 0)
+                                report.get("implicit_unknown_support_count", 0)
                                 or 0
                             ),
                             "support_complete": bool(
-                                operation.get("support_complete")
+                                report.get("support_complete")
                             ),
                             "scope_occurrence_ids": list(
-                                operation.get("scope_occurrence_ids", ()) or ()
+                                report.get("scope_occurrence_ids", ()) or ()
                             ),
                             "out_of_scope_occurrence_ids": list(
-                                operation.get("out_of_scope_occurrence_ids", ()) or ()
+                                report.get("out_of_scope_occurrence_ids", ()) or ()
                             ),
                             "support_contract": str(
-                                operation.get("support_contract", "") or ""
+                                report.get("support_contract", "") or ""
                             ),
-                            "rule_blind": bool(operation.get("rule_blind")),
+                            "rule_blind": bool(report.get("rule_blind")),
                             "model_verdict_present": bool(
-                                operation.get("model_verdict_present")
+                                report.get("model_verdict_present")
                             ),
                             "evidence_report_digest": str(
-                                operation.get("evidence_report_digest", "") or ""
+                                report.get("evidence_report_digest", "") or ""
+                            ),
+                            "validation_warnings": [
+                                dict(row)
+                                for row in tuple(
+                                    report.get("validation_warnings", ()) or ()
+                                )
+                                if isinstance(row, Mapping)
+                            ],
+                            "dropped_out_of_scope_support_count": int(
+                                report.get(
+                                    "dropped_out_of_scope_support_count", 0
+                                )
+                                or 0
                             ),
                             "constraints": [dict(row) for row in constraints],
                         }
@@ -1531,6 +1600,9 @@ class VirtualVideoMultiRoundDriver:
                         "force_finalize": force_finalize,
                         "final_attempt": forced_decision_calls if force_finalize else 0,
                         "answer_workspace_commit": answer_workspace_commit,
+                        "answer_alias_normalized": bool(
+                            decision_metadata.get("answer_alias_normalized")
+                        ),
                         "closure_repair": closure_repair_active,
                         "state_mutation_op_count": sum(
                             str(operation.get("op", operation.get("type", "")) or "").casefold()
@@ -1545,7 +1617,7 @@ class VirtualVideoMultiRoundDriver:
                         ),
                         "mechanical_status_digest": prompt_digest(
                             json.dumps(
-                                to_jsonable(status),
+                                to_jsonable(reasoner_status),
                                 sort_keys=True,
                                 separators=(",", ":"),
                             )
@@ -2099,6 +2171,33 @@ def _frozen_mechanical_status(
         if str(key) in _FROZEN_MECHANICAL_STATUS_KEYS
         or str(key) in runtime_keys
     }
+
+
+def _reasoner_mechanical_status(
+    status: Mapping[str, Any],
+    occurrence_state: OccurrenceResolutionStateV1
+    | OccurrenceResolutionStateV2
+    | None,
+) -> dict[str, Any]:
+    payload = dict(status)
+    if not (
+        isinstance(occurrence_state, OccurrenceResolutionStateV2)
+        and occurrence_state.sufficiency_required
+    ):
+        return payload
+    for key in (
+        "caption_occurrence_sets",
+        "caption_occurrence_candidate_count",
+        "pending_caption_occurrences",
+        "pending_caption_occurrence_count",
+        "pending_caption_candidates",
+        "pending_caption_candidate_count",
+        "flat_occurrence_passages",
+        "flat_occurrence_queries",
+    ):
+        payload.pop(key, None)
+    payload["occurrence_resolution_state"] = occurrence_state.to_reasoner_dict()
+    return payload
 
 
 def _visible_occurrence_ids(status: Mapping[str, Any]) -> tuple[str, ...]:
@@ -3042,6 +3141,10 @@ def _control_retry_feedback(
     if any("_already_exists:" in detail for detail in details):
         repair_rules.append(
             "Omit add operations for IDs that already exist at this revision; use the corresponding set/update operation instead."
+        )
+    if "answer_alias_conflict" in codes:
+        repair_rules.append(
+            "Return the answer in one canonical top-level answer field. Remove action_input.answer, or make it exactly identical to the top-level answer."
         )
     if any("satisfied_obligation_requires_attempt:" in detail for detail in details):
         repair_rules.append(
