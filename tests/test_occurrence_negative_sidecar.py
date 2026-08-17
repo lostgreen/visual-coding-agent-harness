@@ -70,6 +70,18 @@ assert ROW_AUDIT_SPEC and ROW_AUDIT_SPEC.loader
 ROW_AUDIT = importlib.util.module_from_spec(ROW_AUDIT_SPEC)
 ROW_AUDIT_SPEC.loader.exec_module(ROW_AUDIT)
 
+ROW_JUDGE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "evaluate_mmlifelong_occurrence_negative_rows.py"
+)
+ROW_JUDGE_SPEC = importlib.util.spec_from_file_location(
+    "negative_sidecar_row_judge", ROW_JUDGE_PATH
+)
+assert ROW_JUDGE_SPEC and ROW_JUDGE_SPEC.loader
+ROW_JUDGE = importlib.util.module_from_spec(ROW_JUDGE_SPEC)
+ROW_JUDGE_SPEC.loader.exec_module(ROW_JUDGE)
+
 
 def _write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +287,9 @@ def test_snapshot_requires_decision_and_records_packet_fallback(tmp_path: Path) 
         }
     ]
     _write_json(runtime_path, runtime)
-    with pytest.raises(NegativeSidecarScopeMismatchError, match="no frozen sufficiency"):
+    with pytest.raises(
+        NegativeSidecarScopeMismatchError, match="no frozen sufficiency"
+    ):
         load_negative_sidecar_snapshot(
             tmp_path / "run" / "cases" / "case-1",
             replay_fixture_path=tmp_path / "fixtures" / "cases" / "case-1.json",
@@ -461,6 +475,18 @@ def test_row_quality_audit_is_blinded_and_case_clustered(tmp_path: Path) -> None
         roots,
         positive_run_root=tmp_path / "run",
         replay_fixture_root=tmp_path / "fixtures",
+        frozen_rows=[
+            {
+                "arm": "a4",
+                "case_id": "case-1",
+                "candidate_recall_resolved_set": False,
+                "final_resolution": "selected",
+                "selected_occurrence_ids": ["occ-1"],
+                "osa_strict": False,
+            }
+        ],
+        reliability_fraction=0.5,
+        seed=7,
     )
     serialized = json.dumps(blind, sort_keys=True)
     assert blind["item_count"] == 2
@@ -468,18 +494,156 @@ def test_row_quality_audit_is_blinded_and_case_clustered(tmp_path: Path) -> None
     assert "repeat_label" not in serialized
     assert "winner" not in serialized
     assert "gold" not in serialized
+    primary = [
+        {
+            "audit_item_id": key["rows"][0]["audit_item_id"],
+            "verdict": "true_contradiction",
+        },
+        {
+            "audit_item_id": key["rows"][1]["audit_item_id"],
+            "verdict": "false_contradiction",
+        },
+    ]
+    primary_by_id = {row["audit_item_id"]: row for row in primary}
+    reliability_id = key["reliability_sample_item_ids"][0]
     judgments = {
+        "judgment_protocol_digest": key["judgment_protocol_digest"],
         "judgments": [
-            {"audit_item_id": key["rows"][0]["audit_item_id"], "verdict": "true_contradiction"},
-            {"audit_item_id": key["rows"][1]["audit_item_id"], "verdict": "false_contradiction"},
-        ]
+            *primary,
+        ],
+        "reliability_judgments": [primary_by_id[reliability_id]],
     }
-    report = ROW_AUDIT.analyze_judgments(
-        key, judgments, bootstrap_samples=100, seed=7
-    )
+    report = ROW_AUDIT.analyze_judgments(key, judgments, bootstrap_samples=100, seed=7)
     assert report["complete"] is True
     assert report["row_precision"] == 0.5
     assert report["by_constraint_type"]["event"]["true_count"] == 1
+    assert report["unique_semantic_claim_count"] == 1
+    assert report["duplicate_emitted_row_count"] == 1
+    assert report["discordant_duplicate_claim_count"] == 1
+    assert report["unique_semantic_claim_precision"]["precision"] is None
+    assert report["reliability"]["cohen_kappa"] == 1.0
+    assert report["winner_discrimination"]["available"] is True
+
+
+def test_row_audit_reconnects_validated_claims_to_frozen_winners() -> None:
+    winner_cases = []
+    key_rows = []
+    judgments = []
+    for case_id, winner_class in (
+        ("false-1", "false_winner"),
+        ("false-2", "false_winner"),
+        ("positive-1", "candidate_present_winner"),
+        ("positive-2", "candidate_present_winner"),
+    ):
+        winner_cases.append(
+            {
+                "case_id": case_id,
+                "winner_class": winner_class,
+                "strict_correct": winner_class == "candidate_present_winner",
+                "selected_occurrence_id_digest": f"winner-{case_id}",
+            }
+        )
+        for repeat in ("r1", "r2"):
+            item_id = f"{repeat}-{case_id}"
+            key_rows.append(
+                {
+                    "audit_item_id": item_id,
+                    "repeat_label": repeat,
+                    "case_id": case_id,
+                    "constraint_type": "identity",
+                    "semantic_claim_digest": item_id,
+                    "targets_selected_winner": True,
+                }
+            )
+            judgments.append(
+                {
+                    "audit_item_id": item_id,
+                    "verdict": (
+                        "true_contradiction"
+                        if winner_class == "false_winner"
+                        else "false_contradiction"
+                    ),
+                }
+            )
+    report = ROW_AUDIT.analyze_judgments(
+        {
+            "rows": key_rows,
+            "winner_cases": winner_cases,
+            "reliability_sample_item_ids": [],
+        },
+        {"judgments": judgments},
+        bootstrap_samples=100,
+        seed=7,
+    )
+    discrimination = report["winner_discrimination"]
+    assert report["complete"] is True
+    assert discrimination["validated_discrimination_established"] is True
+    for repeat in discrimination["per_repeat"].values():
+        assert repeat["validated"]["false_hit_count"] == 2
+        assert repeat["validated"]["candidate_present_hit_count"] == 0
+        assert repeat["validated"]["false_candidate_gap"] == 1.0
+
+
+def test_blind_row_judge_uses_one_item_without_persisting_prose(tmp_path: Path) -> None:
+    item = {
+        "audit_item_id": "blind-1",
+        "question": "What happens?",
+        "options": {"A": "Open", "B": "Close"},
+        "constraint": {"constraint_type": "event", "description": "It opens."},
+        "candidate_label": "candidate-1",
+        "candidate_passages": [
+            {
+                "passage_id": "p-1",
+                "time_range": [0, 1],
+                "caption_excerpt": "It remains closed.",
+                "cited": True,
+            }
+        ],
+        "audit_question": "Does the cited passage directly contradict it?",
+        "allowed_verdicts": sorted(ROW_AUDIT.VALID_VERDICTS),
+    }
+    task = ROW_JUDGE._task("blind-1", item, kind="primary")
+    prompt = ROW_JUDGE._judgment_prompt(
+        item,
+        protocol=ROW_AUDIT.BLIND_JUDGMENT_PROTOCOL,
+        instance_nonce=task["task_id"],
+    )
+    assert "blind-1" not in prompt
+    assert "Absence of support is not contradiction" in prompt
+
+    class _Client:
+        model = "judge-model"
+        last_response_metadata = {}
+
+        def chat(self, *_args, **_kwargs):
+            self.last_response_metadata = {
+                "finish_reason": "stop",
+                "completion_tokens": 8,
+            }
+            return '{"verdict":"true_contradiction"}'
+
+    result = ROW_JUDGE._judge_task(
+        task,
+        _Client(),
+        {
+            "judgment_protocol": ROW_AUDIT.BLIND_JUDGMENT_PROTOCOL,
+            "judgment_protocol_digest": "protocol-digest",
+        },
+        SimpleNamespace(
+            out_root=str(tmp_path / "judge"),
+            resume=False,
+            judge_max_retries=2,
+            max_completion_tokens=4096,
+        ),
+    )
+    persisted = json.loads(
+        (tmp_path / "judge" / "tasks" / f"{task['task_id']}.json").read_text()
+    )
+    assert result["status"] == "success"
+    assert persisted["verdict"] == "true_contradiction"
+    assert persisted["raw_response_persisted"] is False
+    assert "raw_response" not in persisted
+    assert "prompt" not in persisted
 
 
 def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
