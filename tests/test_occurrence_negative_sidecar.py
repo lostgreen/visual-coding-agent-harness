@@ -254,7 +254,17 @@ def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
 
     report = ANALYZER.build_report(
         repeats,
-        frozen_rows=frozen_rows,
+        frozen_rows=[
+            *frozen_rows,
+            {
+                "arm": "a4",
+                "case_id": "unused-frozen-control",
+                "candidate_recall_resolved_set": False,
+                "final_resolution": "no_match",
+                "selected_occurrence_ids": [],
+                "osa_strict": False,
+            },
+        ],
         expected_cases=20,
     )
 

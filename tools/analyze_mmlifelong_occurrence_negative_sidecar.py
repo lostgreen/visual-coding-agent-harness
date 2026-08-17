@@ -57,8 +57,9 @@ def build_report(
         for row in frozen_rows
         if str(row.get("arm", "") or "") == "a4"
     }
-    if set(frozen) != set(aligned_ids):
-        raise ValueError("frozen selection cases do not match sidecar cases")
+    if not set(aligned_ids) <= set(frozen):
+        raise ValueError("sidecar cases are missing from frozen selections")
+    frozen = {case_id: frozen[case_id] for case_id in aligned_ids}
     false_ids = tuple(
         case_id
         for case_id in aligned_ids
