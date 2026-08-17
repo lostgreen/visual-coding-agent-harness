@@ -3,12 +3,22 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from vcah.occurrence_negative_sidecar import (
+    NegativeSidecarOracleLeakError,
+    NegativeSidecarScopeMismatchError,
+    assert_negative_sidecar_payload,
     load_negative_sidecar_snapshot,
     negative_sidecar_prompt,
     parse_negative_sidecar_response,
+    positive_source_manifest_digest,
+    replay_source_manifest_digest,
+    scan_persisted_json_surface,
     validate_negative_sidecar_output,
+    validate_negative_sidecar_output_detailed,
 )
 
 
@@ -35,6 +45,30 @@ AUDIT_SPEC = importlib.util.spec_from_file_location(
 assert AUDIT_SPEC and AUDIT_SPEC.loader
 AUDIT = importlib.util.module_from_spec(AUDIT_SPEC)
 AUDIT_SPEC.loader.exec_module(AUDIT)
+
+RUNNER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "run_mmlifelong_occurrence_negative_sidecar.py"
+)
+RUNNER_SPEC = importlib.util.spec_from_file_location(
+    "negative_sidecar_runner", RUNNER_PATH
+)
+assert RUNNER_SPEC and RUNNER_SPEC.loader
+RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(RUNNER)
+
+ROW_AUDIT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "audit_mmlifelong_occurrence_negative_rows.py"
+)
+ROW_AUDIT_SPEC = importlib.util.spec_from_file_location(
+    "negative_sidecar_row_audit", ROW_AUDIT_PATH
+)
+assert ROW_AUDIT_SPEC and ROW_AUDIT_SPEC.loader
+ROW_AUDIT = importlib.util.module_from_spec(ROW_AUDIT_SPEC)
+ROW_AUDIT_SPEC.loader.exec_module(ROW_AUDIT)
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -179,10 +213,84 @@ def test_negative_output_validation_is_scope_and_passage_bound(tmp_path: Path) -
         ],
         "winner": "occ-1",
     }
-    rows, errors = validate_negative_sidecar_output(invalid, snapshot=snapshot)
-    assert not rows
-    assert "negative_sidecar_top_level_field_invalid" in errors
-    assert "negative_sidecar_passage_not_visible" in errors
+    result = validate_negative_sidecar_output_detailed(invalid, snapshot=snapshot)
+    assert result.status == "validation_failed"
+    assert not result.rows
+    assert result.unknown_field_count == 1
+    assert "negative_sidecar_unknown_top_level_fields_dropped" in result.warning_codes
+    assert result.dropped_rows[0]["error_codes"] == [
+        "negative_sidecar_passage_not_visible"
+    ]
+
+
+def test_negative_output_keeps_valid_rows_and_strips_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(tmp_path)
+    result = validate_negative_sidecar_output_detailed(
+        {
+            "contradictions": [
+                {
+                    "constraint_id": "c-1",
+                    "occurrence_id": "occ-1",
+                    "evidence_passage_ids": ["p-1"],
+                    "reason": "extra prose",
+                },
+                {
+                    "constraint_id": "c-1",
+                    "occurrence_id": "outside",
+                    "evidence_passage_ids": ["p-x"],
+                },
+            ],
+            "comment": "ignored",
+        },
+        snapshot=snapshot,
+    )
+
+    assert result.status == "partial_valid"
+    assert len(result.rows) == 1
+    assert result.rows[0]["occurrence_id"] == "occ-1"
+    assert result.unknown_field_count == 2
+    assert result.dropped_rows[0]["row_index"] == 1
+    assert "negative_sidecar_candidate_invalid" in result.error_codes
+
+
+def test_payload_blacklist_reports_recursive_path() -> None:
+    with pytest.raises(NegativeSidecarOracleLeakError, match=r"\$\.nested\.verdict"):
+        assert_negative_sidecar_payload({"nested": {"verdict": "selected"}})
+
+
+def test_snapshot_requires_decision_and_records_packet_fallback(tmp_path: Path) -> None:
+    snapshot = _snapshot(tmp_path)
+    assert snapshot.packet_match_mode == "exact"
+    runtime_path = tmp_path / "run" / "cases" / "case-1" / "runtime_summary.json"
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    runtime["trace"] = [
+        row
+        for row in runtime["trace"]
+        if row["type"] != "occurrence_sufficiency_decision"
+    ]
+    _write_json(runtime_path, runtime)
+    with pytest.raises(NegativeSidecarScopeMismatchError, match="no frozen sufficiency"):
+        load_negative_sidecar_snapshot(
+            tmp_path / "run" / "cases" / "case-1",
+            replay_fixture_path=tmp_path / "fixtures" / "cases" / "case-1.json",
+        )
+
+    runtime["trace"].append(
+        {"type": "occurrence_sufficiency_decision", "set_id": "set-1"}
+    )
+    _write_json(runtime_path, runtime)
+    fixture_path = tmp_path / "fixtures" / "cases" / "case-1.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    fixture["packets"][0]["packet"]["occurrence_set"]["attempt_id"] = "other-set"
+    _write_json(fixture_path, fixture)
+    fallback = load_negative_sidecar_snapshot(
+        tmp_path / "run" / "cases" / "case-1",
+        replay_fixture_path=fixture_path,
+    )
+    assert fallback.packet_match_mode == "fallback"
+    assert fallback.packet_attempt_id == "other-set"
 
 
 def test_input_audit_reconstructs_without_model_calls(tmp_path: Path) -> None:
@@ -200,6 +308,173 @@ def test_input_audit_reconstructs_without_model_calls(tmp_path: Path) -> None:
     assert report["structural_gate_passed"] is True
     assert report["successful_snapshot_count"] == 1
     assert report["model_calls_used"] is False
+    assert report["checks"]["all_packet_matches_exact"] is True
+
+
+def test_independent_audit_recomputes_sources_and_detects_mutation(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(tmp_path)
+    positive_root = tmp_path / "run"
+    replay_root = tmp_path / "fixtures"
+    positive_digest = positive_source_manifest_digest(positive_root, ["case-1"])
+    replay_digest = replay_source_manifest_digest(replay_root, ["case-1"])
+    roots = {"r1": tmp_path / "r1", "r2": tmp_path / "r2"}
+    for label, root in roots.items():
+        _write_json(
+            root / "run_manifest.json",
+            {
+                "positive_root_unmodified": True,
+                "positive_source_manifest_before": positive_digest,
+                "positive_source_manifest_after": positive_digest,
+                "replay_source_manifest_digest": replay_digest,
+                "temperature": 0,
+                "top_p": 1,
+                "requested_seed": 7,
+                "provider_seed_supported": True,
+                "provider_reported_seed_support": "supported",
+                "response_format": {"type": "json_object"},
+            },
+        )
+        _write_json(
+            root / "cases" / "case-1" / "sidecar_result.json",
+            {
+                "case_id": "case-1",
+                "repeat_label": label,
+                "status": "success",
+                "actual_model": "test-model",
+                "snapshot_digest": snapshot.digest,
+                "model_response_digest": "response-digest",
+                "source_digests": {
+                    "case_sha256": snapshot.source_case_sha256,
+                    "runtime_sha256": snapshot.source_runtime_sha256,
+                    "replay_fixture_sha256": snapshot.replay_fixture_sha256,
+                },
+                "packet_match_mode": "exact",
+                "attempt_count": 1,
+                "attempt_history": [{"attempt_index": 1, "status": "success"}],
+                "status_history": ["success"],
+                "resumed_from_failure": False,
+                "contradiction_rows": [],
+            },
+        )
+
+    audit, candidates = ANALYZER.build_independent_audit(
+        roots,
+        positive_run_root=positive_root,
+        replay_fixture_root=replay_root,
+        case_ids=["case-1"],
+    )
+    assert audit["passed"] is True
+    assert candidates["case-1"] == ("occ-1", "occ-2")
+
+    case_path = positive_root / "cases" / "case-1" / "case.json"
+    case = json.loads(case_path.read_text(encoding="utf-8"))
+    case["question"] = "Mutated after the run"
+    _write_json(case_path, case)
+    mutated, _ = ANALYZER.build_independent_audit(
+        roots,
+        positive_run_root=positive_root,
+        replay_fixture_root=replay_root,
+        case_ids=["case-1"],
+    )
+    assert mutated["passed"] is False
+    assert mutated["checks"]["r1_snapshot_digest_recomputed_matches"] is False
+    assert mutated["checks"]["r2_positive_root_unmodified_recorded"] is False
+
+
+def test_persisted_surface_scan_is_observational(tmp_path: Path) -> None:
+    _write_json(tmp_path / "safe.json", {"prompt_digest": "abc"})
+    assert scan_persisted_json_surface(tmp_path)["passed"] is True
+    _write_json(tmp_path / "unsafe.json", {"raw_response": "hidden"})
+    report = scan_persisted_json_surface(tmp_path)
+    assert report["passed"] is False
+    assert report["violations"][0]["kind"] == "forbidden_key"
+
+
+class _SequenceClient:
+    model = "test-model"
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.last_response_metadata = {
+            "finish_reason": "stop",
+            "completion_tokens": 10,
+            "reasoning_tokens": 0,
+        }
+
+    def chat(self, *_: object, **__: object) -> str:
+        return self.responses.pop(0)
+
+
+def test_runner_retries_json_once_and_preserves_resume_history(tmp_path: Path) -> None:
+    _snapshot(tmp_path)
+    out_root = tmp_path / "out"
+    args = SimpleNamespace(
+        out_root=str(out_root),
+        positive_run_root=str(tmp_path / "run"),
+        replay_fixture_root=str(tmp_path / "fixtures"),
+        repeat_label="r1",
+        max_completion_tokens=4096,
+        resume=False,
+    )
+    first = RUNNER._run_one(
+        "case-1", _SequenceClient(["not-json", "still-not-json"]), args
+    )
+    assert first["status"] == "validation_failed"
+    assert first["parse_retry_count"] == 1
+    assert first["status_history"] == ["invalid_json", "validation_failed"]
+
+    args.resume = True
+    valid = json.dumps({"contradictions": []})
+    second = RUNNER._run_one("case-1", _SequenceClient([valid]), args)
+    assert second["status"] == "success"
+    assert second["resumed_from_failure"] is True
+    assert second["attempt_count"] == 3
+    assert second["first_attempt_status"] == "invalid_json"
+
+
+def test_row_quality_audit_is_blinded_and_case_clustered(tmp_path: Path) -> None:
+    _snapshot(tmp_path)
+    roots = {"r1": tmp_path / "r1", "r2": tmp_path / "r2"}
+    contradiction = {
+        "constraint_id": "c-1",
+        "constraint_type": "event",
+        "occurrence_id": "occ-1",
+        "evidence_passage_ids": ["p-1"],
+    }
+    for label, root in roots.items():
+        _write_json(
+            root / "cases" / "case-1" / "sidecar_result.json",
+            {
+                "case_id": "case-1",
+                "repeat_label": label,
+                "contradiction_rows": [contradiction],
+            },
+        )
+    blind, key = ROW_AUDIT.prepare_audit(
+        roots,
+        positive_run_root=tmp_path / "run",
+        replay_fixture_root=tmp_path / "fixtures",
+    )
+    serialized = json.dumps(blind, sort_keys=True)
+    assert blind["item_count"] == 2
+    assert "case-1" not in serialized
+    assert "repeat_label" not in serialized
+    assert "winner" not in serialized
+    assert "gold" not in serialized
+    judgments = {
+        "judgments": [
+            {"audit_item_id": key["rows"][0]["audit_item_id"], "verdict": "true_contradiction"},
+            {"audit_item_id": key["rows"][1]["audit_item_id"], "verdict": "false_contradiction"},
+        ]
+    }
+    report = ROW_AUDIT.analyze_judgments(
+        key, judgments, bootstrap_samples=100, seed=7
+    )
+    assert report["complete"] is True
+    assert report["row_precision"] == 0.5
+    assert report["by_constraint_type"]["event"]["true_count"] == 1
 
 
 def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
@@ -241,6 +516,7 @@ def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
                 "status": "success",
                 "actual_model": "test-model",
                 "live_model_call": True,
+                "model_response_digest": f"response-{case_id}",
                 "snapshot_digest": f"snapshot-{case_id}",
                 "contradiction_rows": contradiction_rows,
                 "no_oracle_input_gate_passed": True,
@@ -266,13 +542,18 @@ def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
             },
         ],
         expected_cases=20,
+        independent_audit={"checks": {"synthetic_audit": True}, "passed": True},
+        bootstrap_samples=200,
+        permutation_samples=200,
+        seed=7,
     )
 
     assert report["structural_gates"]["passed"] is True
     assert report["per_repeat"]["r1"]["false_winner_contradicted_count"] == 5
     assert report["per_repeat"]["r1"]["positive_winner_contradicted_count"] == 0
     assert report["stability"]["winner_flag_exact_agreement"] is True
-    assert report["decision"] == "QUALIFIES_FOR_HARD_GUARD_EXPERIMENT"
+    assert report["stability"]["winner_flag_cohen_kappa"] == 1.0
+    assert report["decision"] == "NEGATIVE_ROW_QUALITY_AUDIT_REQUIRED"
 
     canary = ANALYZER.build_report(
         repeats,
@@ -281,6 +562,10 @@ def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
         expected_false_commits=12,
         expected_positive_commits=8,
         structural_only=True,
+        independent_audit={"checks": {"synthetic_audit": True}, "passed": True},
+        bootstrap_samples=20,
+        permutation_samples=20,
+        seed=7,
     )
     assert canary["structural_gates"]["passed"] is True
     assert canary["decision"] == "STRUCTURAL_CANARY_ONLY"

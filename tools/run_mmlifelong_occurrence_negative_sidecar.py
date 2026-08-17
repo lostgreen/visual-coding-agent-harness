@@ -15,13 +15,16 @@ from typing import Any, Mapping, Sequence
 from vcah.model_client import OpenAICompatibleClient
 from vcah.occurrence_negative_sidecar import (
     NEGATIVE_SIDECAR_CONTRACT,
+    classify_sidecar_failure,
     file_sha256,
     load_negative_sidecar_snapshot,
     negative_sidecar_prompt,
     parse_negative_sidecar_response,
+    positive_source_manifest_digest,
+    replay_source_manifest_digest,
     safe_response_metadata,
     stable_digest,
-    validate_negative_sidecar_output,
+    validate_negative_sidecar_output_detailed,
 )
 
 
@@ -48,10 +51,17 @@ def run_batch(args: argparse.Namespace) -> Path:
     if not case_ids:
         raise ValueError("no sidecar cases selected")
 
+    positive_manifest_before = positive_source_manifest_digest(
+        Path(args.positive_run_root), case_ids
+    )
+    replay_manifest_digest = replay_source_manifest_digest(
+        Path(args.replay_fixture_root), case_ids
+    )
+
     client = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.section)
     workers = max(1, min(MAX_WORKERS, int(args.workers), len(case_ids)))
     run_manifest = {
-        "schema_version": "MMLifelongOccurrenceNegativeSidecarRunV1",
+        "schema_version": "MMLifelongOccurrenceNegativeSidecarRunV2",
         "contract": NEGATIVE_SIDECAR_CONTRACT,
         "repeat_label": str(args.repeat_label),
         "case_count": len(case_ids),
@@ -62,6 +72,18 @@ def run_batch(args: argparse.Namespace) -> Path:
         "api_section": str(args.section),
         "actual_model": str(client.model),
         "max_completion_tokens": int(args.max_completion_tokens),
+        "temperature": client.replay_settings.get("temperature"),
+        "top_p": client.replay_settings.get("top_p"),
+        "requested_seed": client.replay_settings.get("requested_seed"),
+        "provider_seed_supported": client.replay_settings.get(
+            "provider_seed_supported"
+        ),
+        "provider_reported_seed_support": client.replay_settings.get(
+            "provider_reported_seed_support"
+        ),
+        "response_format": {"type": "json_object"},
+        "positive_source_manifest_before": positive_manifest_before,
+        "replay_source_manifest_digest": replay_manifest_digest,
         "workers": workers,
         "workspace_write_enabled": False,
         "reasoner_context_write_enabled": False,
@@ -93,8 +115,21 @@ def run_batch(args: argparse.Namespace) -> Path:
                 f"rows={result.get('contradiction_row_count', 0)}",
                 flush=True,
             )
+    positive_manifest_after = positive_source_manifest_digest(
+        Path(args.positive_run_root), case_ids
+    )
+    run_manifest.update(
+        {
+            "positive_source_manifest_after": positive_manifest_after,
+            "positive_root_unmodified": (
+                positive_manifest_before == positive_manifest_after
+            ),
+        }
+    )
+    _write_json_atomic(out_root / "run_manifest.json", run_manifest)
     summary_path = _write_summary(out_root, case_ids, results, run_manifest)
-    if Counter(row["status"] for row in results.values()).get("success", 0) != len(
+    completed_statuses = {"success", "partial_valid"}
+    if sum(row["status"] in completed_statuses for row in results.values()) != len(
         case_ids
     ):
         raise SystemExit(1)
@@ -122,56 +157,105 @@ def _run_one(
             "repeat_label": str(args.repeat_label),
             "status": "source_failed",
             "error_type": type(exc).__name__,
+            "failure_kind": classify_sidecar_failure(exc),
         }
         _write_json_atomic(result_path, result)
         return result
-    if args.resume and result_path.is_file():
-        prior = _read_json(result_path)
+    prior = _read_json(result_path) if args.resume and result_path.is_file() else None
+    if prior is not None:
         if (
-            prior.get("status") == "success"
+            prior.get("status") in {"success", "partial_valid"}
             and prior.get("snapshot_digest") == snapshot.digest
             and prior.get("actual_model") == client.model
         ):
-            return {**prior, "resumed": True}
+            return {**prior, "resume_reused_success": True}
 
     prompt = negative_sidecar_prompt(snapshot)
     started = time.monotonic()
-    try:
-        raw = client.chat(
-            prompt,
-            max_tokens=max(4096, int(args.max_completion_tokens)),
-            response_format={"type": "json_object"},
-        )
-        response_metadata = safe_response_metadata(client.last_response_metadata)
-    except Exception as exc:
-        result = {
-            "schema_version": "MMLifelongOccurrenceNegativeSidecarCaseV1",
-            "contract": NEGATIVE_SIDECAR_CONTRACT,
-            "case_id": case_id,
-            "repeat_label": str(args.repeat_label),
-            "status": "model_failed",
-            "error_type": type(exc).__name__,
-            "snapshot_digest": snapshot.digest,
-            "prompt_digest": stable_digest(prompt),
-            "actual_model": str(client.model),
-            "duration_sec": round(time.monotonic() - started, 3),
-        }
-        _write_json_atomic(result_path, result)
-        return result
-
-    parsed = parse_negative_sidecar_response(raw)
-    normalized, errors = validate_negative_sidecar_output(
-        parsed,
-        snapshot=snapshot,
+    attempt_history = _prior_attempt_history(prior)
+    resumed_from_failure = bool(
+        prior is not None and prior.get("status") not in {"success", "partial_valid"}
     )
-    status = "success" if not errors else "validation_failed"
+    parse_retry_count = 0
+    response_metadata: dict[str, Any] = {}
+    raw = ""
+    validation = None
+    for parse_attempt in range(2):
+        try:
+            raw = client.chat(
+                prompt,
+                max_tokens=max(4096, int(args.max_completion_tokens)),
+                response_format={"type": "json_object"},
+            )
+            response_metadata = safe_response_metadata(client.last_response_metadata)
+        except Exception as exc:
+            attempt_history.append(
+                {
+                    "attempt_index": len(attempt_history) + 1,
+                    "status": "model_failed",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            result = {
+                "schema_version": "MMLifelongOccurrenceNegativeSidecarCaseV2",
+                "contract": NEGATIVE_SIDECAR_CONTRACT,
+                "case_id": case_id,
+                "repeat_label": str(args.repeat_label),
+                "status": "model_failed",
+                "error_type": type(exc).__name__,
+                "snapshot_digest": snapshot.digest,
+                "prompt_digest": stable_digest(prompt),
+                "actual_model": str(client.model),
+                "duration_sec": round(time.monotonic() - started, 3),
+                "packet_match_mode": snapshot.packet_match_mode,
+                "packet_attempt_id": snapshot.packet_attempt_id,
+                "attempt_history": attempt_history,
+                "attempt_count": len(attempt_history),
+                "first_attempt_status": attempt_history[0]["status"],
+                "status_history": [row["status"] for row in attempt_history],
+                "resumed_from_failure": resumed_from_failure,
+            }
+            _write_json_atomic(result_path, result)
+            return result
+        parsed = parse_negative_sidecar_response(raw)
+        if parsed is None and parse_attempt == 0:
+            parse_retry_count = 1
+            attempt_history.append(
+                {
+                    "attempt_index": len(attempt_history) + 1,
+                    "status": "invalid_json",
+                    "model_response_digest": stable_digest(raw),
+                    "response_metadata": response_metadata,
+                }
+            )
+            continue
+        validation = validate_negative_sidecar_output_detailed(
+            parsed,
+            snapshot=snapshot,
+        )
+        attempt_history.append(
+            {
+                "attempt_index": len(attempt_history) + 1,
+                "status": validation.status,
+                "model_response_digest": stable_digest(raw),
+                "response_metadata": response_metadata,
+            }
+        )
+        break
+    assert validation is not None
     result = {
-        "schema_version": "MMLifelongOccurrenceNegativeSidecarCaseV1",
+        "schema_version": "MMLifelongOccurrenceNegativeSidecarCaseV2",
         "contract": NEGATIVE_SIDECAR_CONTRACT,
         "case_id": case_id,
         "repeat_label": str(args.repeat_label),
-        "status": status,
-        "resumed": False,
+        "status": validation.status,
+        "resume_reused_success": False,
+        "resumed_from_failure": resumed_from_failure,
+        "attempt_count": len(attempt_history),
+        "first_attempt_status": attempt_history[0]["status"],
+        "status_history": [row["status"] for row in attempt_history],
+        "attempt_history": attempt_history,
+        "parse_retry_count": parse_retry_count,
         "snapshot_digest": snapshot.digest,
         "prompt_digest": stable_digest(prompt),
         "model_response_digest": stable_digest(raw),
@@ -190,9 +274,15 @@ def _run_one(
             "runtime_sha256": snapshot.source_runtime_sha256,
             "replay_fixture_sha256": snapshot.replay_fixture_sha256,
         },
-        "contradiction_rows": list(normalized),
-        "contradiction_row_count": len(normalized),
-        "validation_error_codes": list(errors),
+        "packet_match_mode": snapshot.packet_match_mode,
+        "packet_attempt_id": snapshot.packet_attempt_id,
+        "contradiction_rows": list(validation.rows),
+        "contradiction_row_count": len(validation.rows),
+        "dropped_rows": list(validation.dropped_rows),
+        "dropped_row_count": len(validation.dropped_rows),
+        "validation_error_codes": list(validation.error_codes),
+        "validation_warning_codes": list(validation.warning_codes),
+        "unknown_field_count": validation.unknown_field_count,
         "response_metadata": response_metadata,
         "raw_response_persisted": False,
         "prompt_persisted": False,
@@ -234,6 +324,10 @@ def _write_summary(
                     results[case_id].get("contradiction_row_count", 0) or 0
                 ),
                 "resumed": bool(results[case_id].get("resumed")),
+                "resumed_from_failure": bool(
+                    results[case_id].get("resumed_from_failure")
+                ),
+                "attempt_count": int(results[case_id].get("attempt_count", 0) or 0),
             }
             for case_id in case_ids
             if case_id in results
@@ -241,6 +335,25 @@ def _write_summary(
     }
     _write_json_atomic(path, payload)
     return path
+
+
+def _prior_attempt_history(prior: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if prior is None:
+        return []
+    rows = [
+        dict(row)
+        for row in tuple(prior.get("attempt_history", ()) or ())
+        if isinstance(row, Mapping)
+    ]
+    if rows:
+        return rows
+    return [
+        {
+            "attempt_index": 1,
+            "status": str(prior.get("status", "unknown") or "unknown"),
+            "legacy_attempt": True,
+        }
+    ]
 
 
 def _manifest_case_ids(path: Path) -> tuple[str, ...]:

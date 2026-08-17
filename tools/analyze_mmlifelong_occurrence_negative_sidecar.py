@@ -7,9 +7,19 @@ import argparse
 from collections import Counter
 import importlib.util
 import json
+import math
 from pathlib import Path
-from statistics import mean
+import random
+from statistics import mean, median
 from typing import Any, Mapping, Sequence
+
+from vcah.occurrence_negative_sidecar import (
+    load_negative_sidecar_snapshot,
+    negative_sidecar_forbidden_paths,
+    positive_source_manifest_digest,
+    replay_source_manifest_digest,
+    scan_persisted_json_surface,
+)
 
 
 REQUIRED_FALSE_BLOCKS = 5
@@ -39,6 +49,12 @@ def build_report(
     required_false_blocks: int = REQUIRED_FALSE_BLOCKS,
     allowed_positive_blocks: int = ALLOWED_POSITIVE_BLOCKS,
     structural_only: bool = False,
+    independent_audit: Mapping[str, Any] | None = None,
+    candidate_ids_by_case: Mapping[str, Sequence[str]] | None = None,
+    include_partial_valid: bool = False,
+    bootstrap_samples: int = 10000,
+    permutation_samples: int = 10000,
+    seed: int = 20260817,
 ) -> dict[str, Any]:
     if len(repeats) != 2:
         raise ValueError("exactly two sidecar repeats are required")
@@ -60,15 +76,32 @@ def build_report(
     if not set(aligned_ids) <= set(frozen):
         raise ValueError("sidecar cases are missing from frozen selections")
     frozen = {case_id: frozen[case_id] for case_id in aligned_ids}
+    non_singleton_winner_case_ids = tuple(
+        case_id
+        for case_id in aligned_ids
+        if frozen[case_id].get("final_resolution") == "selected"
+        and len(
+            tuple(
+                value
+                for value in tuple(
+                    frozen[case_id].get("selected_occurrence_ids", ()) or ()
+                )
+                if str(value)
+            )
+        )
+        != 1
+    )
     false_ids = tuple(
         case_id
         for case_id in aligned_ids
+        if case_id not in non_singleton_winner_case_ids
         if frozen[case_id].get("candidate_recall_resolved_set") is False
         and frozen[case_id].get("final_resolution") == "selected"
     )
     positive_ids = tuple(
         case_id
         for case_id in aligned_ids
+        if case_id not in non_singleton_winner_case_ids
         if frozen[case_id].get("candidate_recall_resolved_set") is True
         and frozen[case_id].get("final_resolution") == "selected"
     )
@@ -76,7 +109,13 @@ def build_report(
         case_id for case_id in positive_ids if frozen[case_id].get("osa_strict") is True
     )
 
-    gates = _structural_gates(repeats, aligned_ids=aligned_ids)
+    gates = _structural_gates(
+        repeats,
+        aligned_ids=aligned_ids,
+        independent_audit=independent_audit,
+        include_partial_valid=include_partial_valid,
+        non_singleton_winner_case_ids=non_singleton_winner_case_ids,
+    )
     gates["checks"]["frozen_denominators_match"] = bool(
         len(false_ids) == int(expected_false_commits)
         and len(positive_ids) == int(expected_positive_commits)
@@ -88,6 +127,7 @@ def build_report(
             frozen=frozen,
             false_ids=false_ids,
             positive_ids=positive_ids,
+            candidate_ids_by_case=candidate_ids_by_case or {},
         )
         for label in labels
     }
@@ -97,8 +137,10 @@ def build_report(
             false_ids=false_ids,
             positive_ids=positive_ids,
             strict_correct_ids=strict_correct_ids,
+            bootstrap_samples=bootstrap_samples,
+            seed=seed + index * 101,
         )
-        for label in labels
+        for index, label in enumerate(labels)
     }
     stability = _stability_metrics(
         normalized[left_label],
@@ -107,6 +149,36 @@ def build_report(
         false_ids=false_ids,
         positive_ids=positive_ids,
     )
+    strata_by_case = {
+        case_id: _permutation_stratum(
+            frozen[case_id],
+            candidate_count=len(normalized[left_label][case_id]["candidate_ids"]),
+        )
+        for case_id in (*false_ids, *positive_ids)
+    }
+    permutation_nulls = {
+        label: {
+            "within_case_pseudo_winner": _within_case_pseudo_winner_null(
+                normalized[label],
+                case_ids=false_ids,
+                observed_rate=per_repeat[label][
+                    "false_winner_contradiction_coverage"
+                ],
+                samples=permutation_samples,
+                seed=seed + index * 211,
+            ),
+            "correctness_label": _correctness_label_permutation_null(
+                normalized[label],
+                false_ids=false_ids,
+                positive_ids=positive_ids,
+                strata_by_case=strata_by_case,
+                observed_gap=per_repeat[label]["coverage_collateral_gap"],
+                samples=permutation_samples,
+                seed=seed + index * 307,
+            ),
+        }
+        for index, label in enumerate(labels)
+    }
     coverage_passed = all(
         row["false_winner_contradicted_count"] >= int(required_false_blocks)
         for row in per_repeat.values()
@@ -115,15 +187,20 @@ def build_report(
         row["positive_winner_contradicted_count"] <= int(allowed_positive_blocks)
         for row in per_repeat.values()
     )
-    stable = bool(stability["winner_flag_exact_agreement"])
+    stable = bool(stability["stability_threshold_passed"])
+    discrimination_established = all(
+        row["coverage_collateral_gap_bootstrap"]["ci95"][0] is not None
+        and row["coverage_collateral_gap_bootstrap"]["ci95"][0] > 0
+        for row in per_repeat.values()
+    )
     if structural_only:
         decision = "STRUCTURAL_CANARY_ONLY"
-    elif coverage_passed and collateral_passed and stable:
-        decision = "QUALIFIES_FOR_HARD_GUARD_EXPERIMENT"
-    elif coverage_passed and not collateral_passed:
-        decision = "CONTRADICTION_AS_PENDING_EVIDENCE_TRIGGER_ONLY"
+    elif not gates["passed"]:
+        decision = "HISTORICAL_RUN_PROVENANCE_INCOMPLETE"
+    elif discrimination_established and stable:
+        decision = "NEGATIVE_ROW_QUALITY_AUDIT_REQUIRED"
     else:
-        decision = "STOP_SIGNED_EVIDENCE_LINE"
+        decision = "WINNER_DISCRIMINATION_NOT_ESTABLISHED"
 
     case_rows = []
     for case_id in (*false_ids, *positive_ids):
@@ -155,7 +232,7 @@ def build_report(
         }
     )
     return {
-        "schema_version": "MMLifelongOccurrenceNegativeSidecarAnalysisV1",
+        "schema_version": "MMLifelongOccurrenceNegativeSidecarAnalysisV2",
         "repeat_labels": list(labels),
         "case_count": len(aligned_ids),
         "frozen_counts": {
@@ -171,14 +248,27 @@ def build_report(
             "coverage_passed": coverage_passed,
             "collateral_passed": collateral_passed,
             "exact_winner_flag_stability_passed": stable,
+            "discrimination_established": discrimination_established,
             "structural_only": structural_only,
         },
         "structural_gates": gates,
+        "independent_audit": dict(independent_audit or {}),
         "actual_models": actual_models,
         "per_repeat": per_repeat,
         "stability": stability,
+        "permutation_nulls": permutation_nulls,
+        "non_singleton_winner_case_ids": list(non_singleton_winner_case_ids),
+        "partial_valid_policy": {
+            "included_in_primary_analysis": bool(include_partial_valid),
+        },
+        "bootstrap_samples": bootstrap_samples,
+        "permutation_samples": permutation_samples,
+        "seed": seed,
         "case_rows": case_rows,
         "decision": decision,
+        "winner_discrimination_conclusion": (
+            "ESTABLISHED" if discrimination_established else "NOT_ESTABLISHED"
+        ),
         "endpoint_values_were_gates": False,
     }
 
@@ -189,6 +279,10 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "# WP11 OOB Negative-Only Sidecar",
         "",
         f"Decision: **{report['decision']}**",
+        (
+            "Winner-correctness discrimination: "
+            f"**{report['winner_discrimination_conclusion']}**."
+        ),
         "",
         (
             f"Structural gates: **{'PASS' if report['structural_gates']['passed'] else 'FAIL'}**. "
@@ -196,20 +290,20 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         ),
         f"Model: {', '.join(report['actual_models']) or 'unknown'}.",
         "",
-        "| Repeat | False-winner coverage | Positive-commit collateral | Strict-correct collision | Identity false blocks | Event false blocks |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Repeat | False-winner coverage (Wilson 95%) | Positive collateral (Wilson 95%) | Gap (bootstrap 95%) | Strict-correct collision |",
+        "|---|---:|---:|---:|---:|",
     ]
     for label in labels:
         row = report["per_repeat"][label]
         lines.append(
             f"| {label} | {row['false_winner_contradicted_count']}/"
-            f"{row['false_commit_count']} | "
+            f"{row['false_commit_count']} {_fmt_ci(row['false_winner_contradiction_coverage_wilson95'])} | "
             f"{row['positive_winner_contradicted_count']}/"
-            f"{row['positive_commit_count']} | "
+            f"{row['positive_commit_count']} {_fmt_ci(row['positive_winner_contradiction_rate_wilson95'])} | "
+            f"{_fmt(row['coverage_collateral_gap'])} "
+            f"{_fmt_ci(row['coverage_collateral_gap_bootstrap']['ci95'])} | "
             f"{row['strict_correct_winner_contradicted_count']}/"
-            f"{row['strict_correct_commit_count']} | "
-            f"{row['false_winner_contradiction_by_type'].get('identity', 0)} | "
-            f"{row['false_winner_contradiction_by_type'].get('event', 0)} |"
+            f"{row['strict_correct_commit_count']} |"
         )
     stability = report["stability"]
     constraint_types = sorted(
@@ -260,9 +354,36 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"{stability['winner_flag_exact_agreement']}."
             ),
             (
+                "Agreement Wilson 95% / Cohen's kappa / threshold pass: "
+                f"{_fmt_ci(stability['winner_flag_agreement_wilson95'])} / "
+                f"{_fmt(stability['winner_flag_cohen_kappa'])} / "
+                f"{stability['stability_threshold_passed']}."
+            ),
+            (
                 "False/positive winner-flag agreement: "
                 f"{_fmt(stability['false_winner_flag_agreement_rate'])} / "
                 f"{_fmt(stability['positive_winner_flag_agreement_rate'])}."
+            ),
+            (
+                "Nonempty-case mean row Jaccard / both-empty cases: "
+                f"{_fmt(stability['mean_case_row_jaccard_nonempty'])} / "
+                f"{stability['both_empty_case_count']}."
+            ),
+            "",
+            "## Zero-model permutation nulls",
+            "",
+            "| Repeat | Pseudo-winner null mean (95%) | p(actual false coverage >= null) | Label-null mean gap (95%) | p(actual gap >= null) |",
+            "|---|---:|---:|---:|---:|",
+            *(
+                "| "
+                f"{label} | "
+                f"{_fmt(report['permutation_nulls'][label]['within_case_pseudo_winner'].get('mean_rate'))} "
+                f"{_fmt_ci(report['permutation_nulls'][label]['within_case_pseudo_winner']['ci95'])} | "
+                f"{_fmt(report['permutation_nulls'][label]['within_case_pseudo_winner']['p_ge_observed'])} | "
+                f"{_fmt(report['permutation_nulls'][label]['correctness_label'].get('mean_gap'))} "
+                f"{_fmt_ci(report['permutation_nulls'][label]['correctness_label']['ci95'])} | "
+                f"{_fmt(report['permutation_nulls'][label]['correctness_label']['p_ge_observed'])} |"
+                for label in labels
             ),
             "",
             "## Frozen winner cases",
@@ -282,9 +403,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Hard-guard qualification uses the declared false-block, collateral, "
-            "and winner-flag stability thresholds. Structural-only runs do not make "
-            "a mechanism decision.",
+            "Winner correctness discrimination is established only when the "
+            "case-cluster bootstrap gap CI lower bound is above zero in both "
+            "repeats. Historical endpoint thresholds are diagnostics, not gates.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -296,6 +417,7 @@ def _normalize_repeat(
     frozen: Mapping[str, Mapping[str, Any]],
     false_ids: Sequence[str],
     positive_ids: Sequence[str],
+    candidate_ids_by_case: Mapping[str, Sequence[str]],
 ) -> dict[str, dict[str, Any]]:
     commit_ids = set((*false_ids, *positive_ids))
     normalized: dict[str, dict[str, Any]] = {}
@@ -317,6 +439,35 @@ def _normalize_repeat(
             for row in contradiction_rows
             if winner and str(row.get("occurrence_id", "") or "") == winner
         )
+        candidate_ids = tuple(
+            dict.fromkeys(
+                str(value)
+                for value in tuple(candidate_ids_by_case.get(case_id, ()) or ())
+                if str(value)
+            )
+        )
+        if not candidate_ids:
+            candidate_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *(
+                            str(row.get("occurrence_id", "") or "")
+                            for row in contradiction_rows
+                            if str(row.get("occurrence_id", "") or "")
+                        ),
+                        *((winner,) if winner else ()),
+                    )
+                )
+            )
+        contradicted_candidate_ids = tuple(
+            sorted(
+                {
+                    str(row.get("occurrence_id", "") or "")
+                    for row in contradiction_rows
+                    if str(row.get("occurrence_id", "") or "")
+                }
+            )
+        )
         normalized[case_id] = {
             "winner": winner if case_id in commit_ids else "",
             "winner_contradicted": bool(winner_rows),
@@ -335,6 +486,14 @@ def _normalize_repeat(
                 }
             ),
             "rows": contradiction_rows,
+            "candidate_ids": candidate_ids,
+            "candidate_count": int(
+                dict(result.get("input_counts", {}) or {}).get(
+                    "candidate_count", len(candidate_ids)
+                )
+                or len(candidate_ids)
+            ),
+            "contradicted_candidate_ids": contradicted_candidate_ids,
         }
     return normalized
 
@@ -345,6 +504,8 @@ def _repeat_metrics(
     false_ids: Sequence[str],
     positive_ids: Sequence[str],
     strict_correct_ids: Sequence[str],
+    bootstrap_samples: int,
+    seed: int,
 ) -> dict[str, Any]:
     false_hits = tuple(
         case_id for case_id in false_ids if rows[case_id]["winner_contradicted"]
@@ -357,14 +518,51 @@ def _repeat_metrics(
         for case_id in strict_correct_ids
         if rows[case_id]["winner_contradicted"]
     )
+    false_rate = _ratio(len(false_hits), len(false_ids))
+    positive_rate = _ratio(len(positive_hits), len(positive_ids))
+    gap = (
+        false_rate - positive_rate
+        if false_rate is not None and positive_rate is not None
+        else None
+    )
+    row_counts = [len(tuple(row.get("rows", ()) or ())) for row in rows.values()]
+    contradicted_fractions = [
+        _ratio(
+            len(tuple(row.get("contradicted_candidate_ids", ()) or ())),
+            int(row.get("candidate_count", 0) or 0),
+        )
+        for row in rows.values()
+    ]
+    contradicted_fractions = [
+        value for value in contradicted_fractions if value is not None
+    ]
+    degenerate = tuple(
+        case_id
+        for case_id, row in rows.items()
+        if int(row.get("candidate_count", 0) or 0) > 0
+        and len(tuple(row.get("contradicted_candidate_ids", ()) or ()))
+        >= int(row.get("candidate_count", 0) or 0)
+    )
     return {
         "false_commit_count": len(false_ids),
         "false_winner_contradicted_count": len(false_hits),
-        "false_winner_contradiction_coverage": _ratio(len(false_hits), len(false_ids)),
+        "false_winner_contradiction_coverage": false_rate,
+        "false_winner_contradiction_coverage_wilson95": _wilson_interval(
+            len(false_hits), len(false_ids)
+        ),
         "positive_commit_count": len(positive_ids),
         "positive_winner_contradicted_count": len(positive_hits),
-        "positive_winner_contradiction_rate": _ratio(
+        "positive_winner_contradiction_rate": positive_rate,
+        "positive_winner_contradiction_rate_wilson95": _wilson_interval(
             len(positive_hits), len(positive_ids)
+        ),
+        "coverage_collateral_gap": gap,
+        "coverage_collateral_gap_bootstrap": _bootstrap_rate_gap(
+            rows,
+            false_ids=false_ids,
+            positive_ids=positive_ids,
+            samples=bootstrap_samples,
+            seed=seed,
         ),
         "strict_correct_commit_count": len(strict_correct_ids),
         "strict_correct_winner_contradicted_count": len(strict_hits),
@@ -375,6 +573,12 @@ def _repeat_metrics(
         "positive_winner_contradiction_by_type": _type_counts(rows, positive_hits),
         "false_winner_contradicted_case_ids": list(false_hits),
         "positive_winner_contradicted_case_ids": list(positive_hits),
+        "contradiction_row_count": sum(row_counts),
+        "rows_per_case_distribution": _distribution(row_counts),
+        "contradicted_fraction_of_scope": _distribution(contradicted_fractions),
+        "degenerate_contradict_all_case_ids": list(degenerate),
+        "degenerate_contradict_all_rate": _ratio(len(degenerate), len(rows)),
+        "by_scope_size": _scope_size_metrics(rows),
     }
 
 
@@ -401,6 +605,24 @@ def _stability_metrics(
         left[case_id]["winner_contradicted"] == right[case_id]["winner_contradicted"]
         for case_id in positive_ids
     )
+    case_jaccards = [
+        _case_row_jaccard(left[case_id], right[case_id])
+        for case_id in aligned_ids
+    ]
+    nonempty_case_jaccards = [value for value in case_jaccards if value is not None]
+    left_flags = [bool(left[case_id]["winner_contradicted"]) for case_id in commit_ids]
+    right_flags = [
+        bool(right[case_id]["winner_contradicted"]) for case_id in commit_ids
+    ]
+    kappa = _cohen_kappa(left_flags, right_flags)
+    agreement_wilson95 = _wilson_interval(agreement, len(commit_ids))
+    agreement_lower = agreement_wilson95[0]
+    stability_passed = bool(
+        kappa is not None
+        and kappa >= 0.6
+        and agreement_lower is not None
+        and agreement_lower >= 0.75
+    )
     return {
         "row_jaccard": _jaccard(left_sets["row"], right_sets["row"]),
         "candidate_jaccard": _jaccard(left_sets["candidate"], right_sets["candidate"]),
@@ -408,12 +630,16 @@ def _stability_metrics(
             left_sets["constraint"], right_sets["constraint"]
         ),
         "strict_passage_jaccard": _jaccard(left_sets["strict"], right_sets["strict"]),
-        "mean_case_row_jaccard": mean(
-            _case_row_jaccard(left[case_id], right[case_id]) for case_id in aligned_ids
+        "mean_case_row_jaccard_nonempty": (
+            mean(nonempty_case_jaccards) if nonempty_case_jaccards else None
         ),
+        "both_empty_case_count": sum(value is None for value in case_jaccards),
         "winner_flag_case_count": len(commit_ids),
         "winner_flag_agreement_count": agreement,
         "winner_flag_agreement_rate": _ratio(agreement, len(commit_ids)),
+        "winner_flag_agreement_wilson95": agreement_wilson95,
+        "winner_flag_cohen_kappa": kappa,
+        "stability_threshold_passed": stability_passed,
         "winner_flag_exact_agreement": agreement == len(commit_ids),
         "false_winner_flag_agreement_rate": _ratio(false_agreement, len(false_ids)),
         "positive_winner_flag_agreement_rate": _ratio(
@@ -426,6 +652,9 @@ def _structural_gates(
     repeats: Mapping[str, Mapping[str, Mapping[str, Any]]],
     *,
     aligned_ids: Sequence[str],
+    independent_audit: Mapping[str, Any] | None,
+    include_partial_valid: bool,
+    non_singleton_winner_case_ids: Sequence[str],
 ) -> dict[str, Any]:
     labels = tuple(repeats)
     actual_models = {
@@ -433,12 +662,18 @@ def _structural_gates(
         for repeat in repeats.values()
         for row in repeat.values()
     }
+    accepted_statuses = {"success"}
+    if include_partial_valid:
+        accepted_statuses.add("partial_valid")
+    independent_checks = dict(
+        (independent_audit or {}).get("checks", {}) or {}
+    )
     checks: dict[str, bool] = {
         "aligned_case_sets": all(
             set(repeats[label]) == set(aligned_ids) for label in labels
         ),
-        "all_results_successful": all(
-            row.get("status") == "success"
+        "all_results_primary_eligible": all(
+            row.get("status") in accepted_statuses
             for repeat in repeats.values()
             for row in repeat.values()
         ),
@@ -448,40 +683,22 @@ def _structural_gates(
             for row in repeat.values()
         ),
         "actual_model_consistent": len(actual_models) == 1 and "" not in actual_models,
-        "live_model_calls": all(
-            row.get("live_model_call") is True
+        "model_call_evidence_present": all(
+            bool(row.get("model_response_digest"))
             for repeat in repeats.values()
             for row in repeat.values()
         ),
-        "snapshot_inputs_matched": all(
+        "recorded_snapshot_inputs_matched": all(
             repeats[labels[0]][case_id].get("snapshot_digest")
             == repeats[labels[1]][case_id].get("snapshot_digest")
             for case_id in aligned_ids
         ),
-        "no_oracle_input_gate": all(
-            row.get("no_oracle_input_gate_passed") is True
-            for repeat in repeats.values()
-            for row in repeat.values()
-        ),
-        "negative_only_visibility": all(
-            row.get("positive_support_visible_to_model") is False
-            and row.get("selection_state_visible_to_model") is False
-            for repeat in repeats.values()
-            for row in repeat.values()
-        ),
-        "out_of_band_isolation": all(
-            row.get("workspace_write_enabled") is False
-            and row.get("reasoner_context_write_enabled") is False
-            for repeat in repeats.values()
-            for row in repeat.values()
-        ),
-        "no_raw_response_or_prompt_persisted": all(
-            row.get("raw_response_persisted") is False
-            and row.get("prompt_persisted") is False
-            for repeat in repeats.values()
-            for row in repeat.values()
-        ),
+        "non_singleton_winner_absent": not non_singleton_winner_case_ids,
+        "independent_audit_available": bool(independent_audit),
     }
+    checks.update(
+        {f"independent_{key}": bool(value) for key, value in independent_checks.items()}
+    )
     return {"passed": all(checks.values()), "checks": checks}
 
 
@@ -503,7 +720,9 @@ def _evidence_sets(
     return result
 
 
-def _case_row_jaccard(left: Mapping[str, Any], right: Mapping[str, Any]) -> float:
+def _case_row_jaccard(
+    left: Mapping[str, Any], right: Mapping[str, Any]
+) -> float | None:
     def keys(row: Mapping[str, Any]) -> set[tuple[str, str]]:
         return {
             (
@@ -525,9 +744,352 @@ def _type_counts(
     return dict(sorted(counts.items()))
 
 
-def _jaccard(left: set[Any], right: set[Any]) -> float:
+def build_independent_audit(
+    repeat_roots: Mapping[str, Path],
+    *,
+    positive_run_root: Path,
+    replay_fixture_root: Path,
+    case_ids: Sequence[str],
+) -> tuple[dict[str, Any], dict[str, tuple[str, ...]]]:
+    ids = tuple(sorted(set(case_ids)))
+    positive_digest = positive_source_manifest_digest(positive_run_root, ids)
+    replay_digest = replay_source_manifest_digest(replay_fixture_root, ids)
+    snapshots: dict[str, Any] = {}
+    failures: list[dict[str, str]] = []
+    for case_id in ids:
+        try:
+            snapshots[case_id] = load_negative_sidecar_snapshot(
+                Path(positive_run_root) / "cases" / case_id,
+                replay_fixture_path=(
+                    Path(replay_fixture_root) / "cases" / f"{case_id}.json"
+                ),
+            )
+        except Exception as exc:
+            failures.append(
+                {"case_id": case_id, "error_type": type(exc).__name__}
+            )
+    candidate_ids_by_case = {
+        case_id: tuple(
+            str(row.get("occurrence_id", "") or "")
+            for row in snapshot.candidates
+            if str(row.get("occurrence_id", "") or "")
+        )
+        for case_id, snapshot in snapshots.items()
+    }
+    repeat_checks: dict[str, dict[str, bool]] = {}
+    persisted_scans: dict[str, dict[str, Any]] = {}
+    for label, root in repeat_roots.items():
+        run_root = Path(root)
+        manifest_path = run_root / "run_manifest.json"
+        manifest = _read_json(manifest_path) if manifest_path.is_file() else {}
+        results = collect_repeat(run_root)
+        persisted_scan = scan_persisted_json_surface(run_root)
+        persisted_scans[label] = persisted_scan
+        result_rows = [results.get(case_id, {}) for case_id in ids]
+        repeat_checks[label] = {
+            "snapshot_digest_recomputed_matches": all(
+                case_id in snapshots
+                and results.get(case_id, {}).get("snapshot_digest")
+                == snapshots[case_id].digest
+                for case_id in ids
+            ),
+            "source_digests_recomputed_match": all(
+                case_id in snapshots
+                and dict(results.get(case_id, {}).get("source_digests", {}) or {})
+                == {
+                    "case_sha256": snapshots[case_id].source_case_sha256,
+                    "runtime_sha256": snapshots[case_id].source_runtime_sha256,
+                    "replay_fixture_sha256": snapshots[
+                        case_id
+                    ].replay_fixture_sha256,
+                }
+                for case_id in ids
+            ),
+            "packet_match_exact": all(
+                case_id in snapshots
+                and snapshots[case_id].packet_match_mode == "exact"
+                and results.get(case_id, {}).get("packet_match_mode") == "exact"
+                for case_id in ids
+            ),
+            "persisted_surface_scan_passed": bool(persisted_scan["passed"]),
+            "positive_root_unmodified_recorded": bool(
+                manifest.get("positive_root_unmodified") is True
+                and manifest.get("positive_source_manifest_before")
+                == manifest.get("positive_source_manifest_after")
+                == positive_digest
+            ),
+            "replay_manifest_recomputed_matches": (
+                manifest.get("replay_source_manifest_digest") == replay_digest
+            ),
+            "reproducibility_settings_recorded": all(
+                key in manifest
+                for key in (
+                    "temperature",
+                    "top_p",
+                    "requested_seed",
+                    "provider_seed_supported",
+                    "provider_reported_seed_support",
+                    "response_format",
+                )
+            ),
+            "attempt_provenance_complete": all(
+                isinstance(row.get("attempt_count"), int)
+                and row.get("attempt_count", 0) >= 1
+                and isinstance(row.get("attempt_history"), Sequence)
+                and not isinstance(row.get("attempt_history"), (str, bytes))
+                and len(tuple(row.get("attempt_history", ()) or ()))
+                == int(row.get("attempt_count", 0) or 0)
+                and isinstance(row.get("status_history"), Sequence)
+                and not isinstance(row.get("status_history"), (str, bytes))
+                and "resumed_from_failure" in row
+                for row in result_rows
+            ),
+            "out_of_band_root_separate": _roots_are_separate(
+                run_root, positive_run_root
+            ),
+        }
+    payload_checks = {
+        case_id: not negative_sidecar_forbidden_paths(snapshot.model_payload())
+        for case_id, snapshot in snapshots.items()
+    }
+    checks = {
+        "snapshot_reconstruction_complete": len(snapshots) == len(ids) and not failures,
+        "recomputed_payload_negative_only": len(payload_checks) == len(ids)
+        and all(payload_checks.values()),
+        **{
+            f"{label}_{key}": value
+            for label, values in repeat_checks.items()
+            for key, value in values.items()
+        },
+    }
+    return (
+        {
+            "schema_version": "MMLifelongOccurrenceNegativeSidecarIndependentAuditV1",
+            "checks": checks,
+            "passed": all(checks.values()),
+            "failure_count": len(failures),
+            "failures": failures,
+            "positive_source_manifest_digest": positive_digest,
+            "replay_source_manifest_digest": replay_digest,
+            "persisted_surface_scans": persisted_scans,
+        },
+        candidate_ids_by_case,
+    )
+
+
+def _roots_are_separate(left: Path, right: Path) -> bool:
+    left_resolved = Path(left).resolve()
+    right_resolved = Path(right).resolve()
+    return (
+        left_resolved != right_resolved
+        and left_resolved not in right_resolved.parents
+        and right_resolved not in left_resolved.parents
+    )
+
+
+def _bootstrap_rate_gap(
+    rows: Mapping[str, Mapping[str, Any]],
+    *,
+    false_ids: Sequence[str],
+    positive_ids: Sequence[str],
+    samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    if not false_ids or not positive_ids or samples <= 0:
+        return {"samples": samples, "ci95": [None, None], "positive_probability": None}
+    rng = random.Random(seed)
+    gaps: list[float] = []
+    for _ in range(samples):
+        sampled_false = [rng.choice(false_ids) for _ in false_ids]
+        sampled_positive = [rng.choice(positive_ids) for _ in positive_ids]
+        false_rate = mean(
+            bool(rows[case_id]["winner_contradicted"])
+            for case_id in sampled_false
+        )
+        positive_rate = mean(
+            bool(rows[case_id]["winner_contradicted"])
+            for case_id in sampled_positive
+        )
+        gaps.append(false_rate - positive_rate)
+    gaps.sort()
+    return {
+        "samples": samples,
+        "ci95": [_quantile(gaps, 0.025), _quantile(gaps, 0.975)],
+        "positive_probability": sum(value > 0 for value in gaps) / len(gaps),
+    }
+
+
+def _within_case_pseudo_winner_null(
+    rows: Mapping[str, Mapping[str, Any]],
+    *,
+    case_ids: Sequence[str],
+    observed_rate: float | None,
+    samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    eligible = tuple(
+        case_id for case_id in case_ids if tuple(rows[case_id]["candidate_ids"])
+    )
+    if not eligible or samples <= 0:
+        return {"samples": samples, "eligible_cases": len(eligible), "ci95": [None, None], "p_ge_observed": None}
+    rng = random.Random(seed)
+    rates: list[float] = []
+    for _ in range(samples):
+        hits = 0
+        for case_id in eligible:
+            pseudo = rng.choice(tuple(rows[case_id]["candidate_ids"]))
+            hits += pseudo in set(rows[case_id]["contradicted_candidate_ids"])
+        rates.append(hits / len(eligible))
+    rates.sort()
+    return {
+        "samples": samples,
+        "eligible_cases": len(eligible),
+        "mean_rate": mean(rates),
+        "ci95": [_quantile(rates, 0.025), _quantile(rates, 0.975)],
+        "p_ge_observed": (
+            (1 + sum(value >= observed_rate for value in rates)) / (samples + 1)
+            if observed_rate is not None
+            else None
+        ),
+    }
+
+
+def _correctness_label_permutation_null(
+    rows: Mapping[str, Mapping[str, Any]],
+    *,
+    false_ids: Sequence[str],
+    positive_ids: Sequence[str],
+    strata_by_case: Mapping[str, tuple[Any, ...]],
+    observed_gap: float | None,
+    samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    labels = {case_id: case_id in false_ids for case_id in (*false_ids, *positive_ids)}
+    strata: dict[tuple[Any, ...], list[str]] = {}
+    for case_id in labels:
+        strata.setdefault(strata_by_case[case_id], []).append(case_id)
+    exchangeable = sum(
+        len(case_ids)
+        for case_ids in strata.values()
+        if len({labels[case_id] for case_id in case_ids}) > 1
+    )
+    if not false_ids or not positive_ids or samples <= 0:
+        return {"samples": samples, "exchangeable_case_count": exchangeable, "ci95": [None, None], "p_ge_observed": None}
+    rng = random.Random(seed)
+    gaps: list[float] = []
+    for _ in range(samples):
+        permuted = dict(labels)
+        for case_ids in strata.values():
+            shuffled = [labels[case_id] for case_id in case_ids]
+            rng.shuffle(shuffled)
+            permuted.update(zip(case_ids, shuffled))
+        permuted_false = [case_id for case_id, value in permuted.items() if value]
+        permuted_positive = [case_id for case_id, value in permuted.items() if not value]
+        left = mean(bool(rows[case_id]["winner_contradicted"]) for case_id in permuted_false)
+        right = mean(bool(rows[case_id]["winner_contradicted"]) for case_id in permuted_positive)
+        gaps.append(left - right)
+    gaps.sort()
+    return {
+        "samples": samples,
+        "exchangeable_case_count": exchangeable,
+        "mean_gap": mean(gaps),
+        "ci95": [_quantile(gaps, 0.025), _quantile(gaps, 0.975)],
+        "p_ge_observed": (
+            (1 + sum(value >= observed_gap for value in gaps)) / (samples + 1)
+            if observed_gap is not None
+            else None
+        ),
+    }
+
+
+def _permutation_stratum(
+    row: Mapping[str, Any], *, candidate_count: int
+) -> tuple[Any, ...]:
+    return (
+        int(row.get("sufficiency_scope_candidate_count", candidate_count) or candidate_count),
+        row.get("sufficiency_minimum_support_margin"),
+        row.get("sufficiency_sufficient_candidate_count"),
+    )
+
+
+def _scope_size_metrics(rows: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    grouped: dict[int, list[Mapping[str, Any]]] = {}
+    for row in rows.values():
+        grouped.setdefault(int(row.get("candidate_count", 0) or 0), []).append(row)
+    return {
+        str(size): {
+            "case_count": len(group),
+            "mean_contradiction_rows": mean(
+                len(tuple(row.get("rows", ()) or ())) for row in group
+            ),
+            "mean_contradicted_fraction": mean(
+                _ratio(
+                    len(tuple(row.get("contradicted_candidate_ids", ()) or ())),
+                    size,
+                )
+                or 0.0
+                for row in group
+            ),
+        }
+        for size, group in sorted(grouped.items())
+    }
+
+
+def _distribution(values: Sequence[float | int]) -> dict[str, Any]:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return {"count": 0, "min": None, "q1": None, "median": None, "q3": None, "max": None, "mean": None}
+    return {
+        "count": len(ordered),
+        "min": ordered[0],
+        "q1": _quantile(ordered, 0.25),
+        "median": median(ordered),
+        "q3": _quantile(ordered, 0.75),
+        "max": ordered[-1],
+        "mean": mean(ordered),
+    }
+
+
+def _cohen_kappa(left: Sequence[bool], right: Sequence[bool]) -> float | None:
+    if len(left) != len(right) or not left:
+        return None
+    observed = mean(a == b for a, b in zip(left, right))
+    left_positive = mean(left)
+    right_positive = mean(right)
+    expected = left_positive * right_positive + (1 - left_positive) * (1 - right_positive)
+    if math.isclose(expected, 1.0):
+        return 1.0 if math.isclose(observed, 1.0) else None
+    return (observed - expected) / (1 - expected)
+
+
+def _wilson_interval(successes: int, total: int) -> list[float | None]:
+    if total <= 0:
+        return [None, None]
+    z = 1.959963984540054
+    proportion = successes / total
+    denominator = 1 + z * z / total
+    center = (proportion + z * z / (2 * total)) / denominator
+    spread = z * math.sqrt(
+        proportion * (1 - proportion) / total + z * z / (4 * total * total)
+    ) / denominator
+    return [max(0.0, center - spread), min(1.0, center + spread)]
+
+
+def _quantile(values: Sequence[float], probability: float) -> float | None:
+    if not values:
+        return None
+    position = (len(values) - 1) * probability
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return float(values[lower])
+    weight = position - lower
+    return float(values[lower] * (1 - weight) + values[upper] * weight)
+
+
+def _jaccard(left: set[Any], right: set[Any]) -> float | None:
     union = left | right
-    return len(left & right) / len(union) if union else 1.0
+    return len(left & right) / len(union) if union else None
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -536,6 +1098,13 @@ def _ratio(numerator: int, denominator: int) -> float | None:
 
 def _fmt(value: Any) -> str:
     return "NA" if value is None else f"{float(value):.4f}"
+
+
+def _fmt_ci(value: Sequence[Any]) -> str:
+    values = tuple(value or ())
+    if len(values) != 2 or any(item is None for item in values):
+        return "[NA, NA]"
+    return f"[{_fmt(values[0])}, {_fmt(values[1])}]"
 
 
 def _load_frozen_rows(
@@ -584,6 +1153,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeat", action="append", type=_parse_repeat, required=True)
     parser.add_argument("--frozen-run-root", required=True)
+    parser.add_argument("--replay-fixture-root", required=True)
     parser.add_argument("--evaluation-record-root", required=True)
     parser.add_argument("--expected-cases", type=int, required=True)
     parser.add_argument(
@@ -599,10 +1169,22 @@ def main() -> None:
         "--allowed-positive-blocks", type=int, default=ALLOWED_POSITIVE_BLOCKS
     )
     parser.add_argument("--structural-only", action="store_true")
+    parser.add_argument("--include-partial-valid", action="store_true")
+    parser.add_argument("--bootstrap-samples", type=int, default=10000)
+    parser.add_argument("--permutation-samples", type=int, default=10000)
+    parser.add_argument("--seed", type=int, default=20260817)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-md", required=True)
     args = parser.parse_args()
+    repeat_roots = {label: path for label, path in args.repeat}
     repeats = {label: collect_repeat(path) for label, path in args.repeat}
+    aligned_ids = tuple(sorted(set.intersection(*(set(rows) for rows in repeats.values()))))
+    independent_audit, candidate_ids_by_case = build_independent_audit(
+        repeat_roots,
+        positive_run_root=Path(args.frozen_run_root),
+        replay_fixture_root=Path(args.replay_fixture_root),
+        case_ids=aligned_ids,
+    )
     frozen_rows = _load_frozen_rows(
         Path(args.frozen_run_root),
         evaluation_record_root=Path(args.evaluation_record_root),
@@ -616,6 +1198,12 @@ def main() -> None:
         required_false_blocks=args.required_false_blocks,
         allowed_positive_blocks=args.allowed_positive_blocks,
         structural_only=args.structural_only,
+        independent_audit=independent_audit,
+        candidate_ids_by_case=candidate_ids_by_case,
+        include_partial_valid=args.include_partial_valid,
+        bootstrap_samples=args.bootstrap_samples,
+        permutation_samples=args.permutation_samples,
+        seed=args.seed,
     )
     _write_json(Path(args.output_json), report)
     Path(args.output_md).write_text(render_markdown(report), encoding="utf-8")
