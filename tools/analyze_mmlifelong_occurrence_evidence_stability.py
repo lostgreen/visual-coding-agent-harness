@@ -321,7 +321,7 @@ def build_stability_report(
         },
     }
     return {
-        "schema_version": "MMLifelongOccurrenceEvidenceStabilityV2",
+        "schema_version": "MMLifelongOccurrenceEvidenceStabilityV3",
         "protocol": {
             "repeat_labels": list(repeat_labels),
             "expected_cases": int(expected_cases),
@@ -377,6 +377,11 @@ def build_stability_report(
             repeat_labels=repeat_labels,
             performance_cases=performance_cases or {},
         ),
+        "error_attribution": build_error_attribution(
+            runs,
+            repeat_labels=repeat_labels,
+            performance_cases=performance_cases or {},
+        ),
         "performance_criteria": performance_criteria,
         "stability_passed": stability_passed,
         "structural_reliability_passed": structural_reliability_passed,
@@ -408,6 +413,279 @@ def build_stability_report(
         ],
         "per_case": per_case,
     }
+
+
+def build_error_attribution(
+    runs: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    *,
+    repeat_labels: Sequence[str],
+    performance_cases: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Separate repeat-stable gate errors from one-repeat drift.
+
+    A correct commit is deliberately strict: both the gold occurrence is in
+    scope and the committed occurrence is correct (``osa_strict is True``).
+    Support stability is measured over unique candidate-constraint rows. The
+    decision-support view keeps only rows attached to each repeat's winner.
+    """
+
+    if len(repeat_labels) != 2 or len(set(repeat_labels)) != 2:
+        raise ValueError("error attribution requires exactly two repeat labels")
+    left_label, right_label = repeat_labels
+    left_run = runs.get(left_label, {})
+    right_run = runs.get(right_label, {})
+    left_performance = performance_cases.get(left_label, {})
+    right_performance = performance_cases.get(right_label, {})
+    aligned_ids = tuple(sorted(set(left_run) & set(right_run)))
+
+    left_false = {
+        case_id
+        for case_id in aligned_ids
+        if left_performance.get(case_id, {}).get("false_commit") is True
+    }
+    right_false = {
+        case_id
+        for case_id in aligned_ids
+        if right_performance.get(case_id, {}).get("false_commit") is True
+    }
+    left_correct = {
+        case_id
+        for case_id in aligned_ids
+        if left_performance.get(case_id, {}).get("osa_strict") is True
+    }
+    right_correct = {
+        case_id
+        for case_id in aligned_ids
+        if right_performance.get(case_id, {}).get("osa_strict") is True
+    }
+
+    category_ids = {
+        "shared_false_commits": tuple(sorted(left_false & right_false)),
+        f"{left_label}_only_false_commits": tuple(
+            sorted(left_false - right_false)
+        ),
+        f"{right_label}_only_false_commits": tuple(
+            sorted(right_false - left_false)
+        ),
+        "shared_correct_commits": tuple(sorted(left_correct & right_correct)),
+    }
+    false_union = left_false | right_false
+
+    per_case: dict[str, dict[str, Any]] = {}
+    for case_id in aligned_ids:
+        left = left_run[case_id]
+        right = right_run[case_id]
+        left_rows = set(left.get("supported_rows", set()) or set())
+        right_rows = set(right.get("supported_rows", set()) or set())
+        stable_rows = left_rows & right_rows
+        unstable_rows = left_rows ^ right_rows
+        left_winner = str(left.get("winner", "") or "")
+        right_winner = str(right.get("winner", "") or "")
+        left_decision_rows = {
+            row for row in left_rows if len(row) >= 3 and row[2] == left_winner
+        }
+        right_decision_rows = {
+            row for row in right_rows if len(row) >= 3 and row[2] == right_winner
+        }
+        stable_decision_rows = left_decision_rows & right_decision_rows
+        unstable_decision_rows = left_decision_rows ^ right_decision_rows
+        left_present = _candidate_present(left_performance.get(case_id, {}))
+        right_present = _candidate_present(right_performance.get(case_id, {}))
+        union_rows = left_rows | right_rows
+        candidate_ids = sorted(
+            set(str(key) for key in left.get("support_counts", {}))
+            | set(str(key) for key in right.get("support_counts", {}))
+        )
+        per_case[case_id] = {
+            "candidate_present": (
+                left_present if left_present == right_present else None
+            ),
+            "candidate_present_by_run": {
+                left_label: left_present,
+                right_label: right_present,
+            },
+            "gate": {
+                left_label: left.get("gate"),
+                right_label: right.get("gate"),
+            },
+            "winner": {
+                left_label: left_winner,
+                right_label: right_winner,
+            },
+            "support_counts": {
+                left_label: dict(left.get("support_counts", {}) or {}),
+                right_label: dict(right.get("support_counts", {}) or {}),
+            },
+            "supported_row_intersection": _serialize_support_rows(stable_rows),
+            "supported_row_xor": _serialize_support_rows(unstable_rows),
+            "decision_support_intersection": _serialize_support_rows(
+                stable_decision_rows
+            ),
+            "decision_support_xor": _serialize_support_rows(
+                unstable_decision_rows
+            ),
+            "constraint_types": sorted(
+                {str(row[1]) for row in union_rows if len(row) >= 3}
+            ),
+            "candidate_ids": candidate_ids,
+            "outcomes": {
+                left_label: _commit_outcome(left_performance.get(case_id, {})),
+                right_label: _commit_outcome(right_performance.get(case_id, {})),
+            },
+        }
+
+    category_summaries = {
+        category: _summarize_support_stability(
+            case_ids,
+            left_run=left_run,
+            right_run=right_run,
+        )
+        for category, case_ids in category_ids.items()
+    }
+    return {
+        "diagnostic_only": True,
+        "aggregation_changed": False,
+        "correct_commit_definition": "osa_strict is true in both repeats",
+        "support_stability_definition": (
+            "stable rows are candidate-constraint support keys declared in both "
+            "repeats; unstable rows are their symmetric difference"
+        ),
+        "false_commit_count_by_run": {
+            left_label: len(left_false),
+            right_label: len(right_false),
+        },
+        "shared_false_commit_count": len(left_false & right_false),
+        "false_commit_union_count": len(false_union),
+        "shared_false_commit_fraction_of_union": (
+            len(left_false & right_false) / len(false_union)
+            if false_union
+            else None
+        ),
+        "candidate_presence_mismatch_case_ids": [
+            case_id
+            for case_id, row in per_case.items()
+            if row["candidate_present"] is None
+            and any(
+                value is not None
+                for value in row["candidate_present_by_run"].values()
+            )
+        ],
+        "case_ids": {key: list(value) for key, value in category_ids.items()},
+        "category_summaries": category_summaries,
+        "per_case": per_case,
+    }
+
+
+def _summarize_support_stability(
+    case_ids: Sequence[str],
+    *,
+    left_run: Mapping[str, Mapping[str, Any]],
+    right_run: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    stable_rows: list[tuple[str, str, str]] = []
+    unstable_rows: list[tuple[str, str, str]] = []
+    stable_decision_rows: list[tuple[str, str, str]] = []
+    unstable_decision_rows: list[tuple[str, str, str]] = []
+    for case_id in case_ids:
+        left = left_run[case_id]
+        right = right_run[case_id]
+        left_rows = set(left.get("supported_rows", set()) or set())
+        right_rows = set(right.get("supported_rows", set()) or set())
+        stable_rows.extend(left_rows & right_rows)
+        unstable_rows.extend(left_rows ^ right_rows)
+        left_winner = str(left.get("winner", "") or "")
+        right_winner = str(right.get("winner", "") or "")
+        left_decision = {
+            row for row in left_rows if len(row) >= 3 and row[2] == left_winner
+        }
+        right_decision = {
+            row for row in right_rows if len(row) >= 3 and row[2] == right_winner
+        }
+        stable_decision_rows.extend(left_decision & right_decision)
+        unstable_decision_rows.extend(left_decision ^ right_decision)
+    return {
+        "case_count": len(case_ids),
+        "all_positive_support": _support_stability_counts(
+            stable_rows, unstable_rows
+        ),
+        "decision_positive_support": _support_stability_counts(
+            stable_decision_rows, unstable_decision_rows
+        ),
+    }
+
+
+def _support_stability_counts(
+    stable_rows: Sequence[tuple[str, str, str]],
+    unstable_rows: Sequence[tuple[str, str, str]],
+) -> dict[str, Any]:
+    types = sorted(
+        {str(row[1]) for row in (*stable_rows, *unstable_rows) if len(row) >= 3}
+    )
+    stable_count = len(stable_rows)
+    unstable_count = len(unstable_rows)
+    return {
+        "stable_supported_row_count": stable_count,
+        "unstable_supported_row_count": unstable_count,
+        "stable_supported_rate": _ratio(stable_count, stable_count + unstable_count),
+        "by_constraint_type": {
+            constraint_type: {
+                "stable_supported_row_count": sum(
+                    len(row) >= 3 and str(row[1]) == constraint_type
+                    for row in stable_rows
+                ),
+                "unstable_supported_row_count": sum(
+                    len(row) >= 3 and str(row[1]) == constraint_type
+                    for row in unstable_rows
+                ),
+                "stable_supported_rate": _ratio(
+                    sum(
+                        len(row) >= 3 and str(row[1]) == constraint_type
+                        for row in stable_rows
+                    ),
+                    sum(
+                        len(row) >= 3 and str(row[1]) == constraint_type
+                        for row in (*stable_rows, *unstable_rows)
+                    ),
+                ),
+            }
+            for constraint_type in types
+        },
+    }
+
+
+def _candidate_present(performance: Mapping[str, Any]) -> bool | None:
+    if isinstance(performance.get("false_abstention"), bool):
+        return True
+    if isinstance(performance.get("false_commit"), bool):
+        return False
+    return None
+
+
+def _commit_outcome(performance: Mapping[str, Any]) -> str:
+    if performance.get("false_commit") is True:
+        return "false_commit"
+    if performance.get("osa_strict") is True:
+        return "correct_commit"
+    if performance.get("false_abstention") is True:
+        return "false_abstention"
+    if performance.get("false_commit") is False:
+        return "correct_no_match"
+    if performance.get("osa_strict") is False:
+        return "wrong_occurrence_commit"
+    return "unclassified"
+
+
+def _serialize_support_rows(
+    rows: Sequence[tuple[str, str, str]] | set[tuple[str, str, str]],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "set_id": str(set_id),
+            "constraint_type": str(constraint_type),
+            "occurrence_id": str(occurrence_id),
+        }
+        for set_id, constraint_type, occurrence_id in sorted(rows)
+    ]
 
 
 def build_scope_size_diagnostic(
@@ -818,6 +1096,7 @@ def _load_performance_cases(
 def render_markdown(report: Mapping[str, Any]) -> str:
     metrics = report["metrics"]
     validity = report["validity"]
+    attribution = report["error_attribution"]
     evidence_n = report["metric_denominators"]["evidence_stability"]
     lines = [
         "# MM-Lifelong Evidence Elicitation Stability",
@@ -835,7 +1114,22 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         f"Structural reliability passed: `{report['structural_reliability_passed']}`. Stability passed: `{report['stability_passed']}`. Performance guardrails passed in both repeats: `{report['performance_guardrails_passed']}`. Working method passed: `{report['working_method_passed']}`.",
         "",
+        "## WP11-0 Error Attribution",
+        "",
+        f"Shared false commits: {attribution['shared_false_commit_count']}/{attribution['false_commit_union_count']} unique false-commit cases ({_format_metric(attribution['shared_false_commit_fraction_of_union'])}).",
+        "",
+        "| Outcome group | Cases | Stable decision-support rows | Unstable decision-support rows | Stable rate |",
+        "|---|---:|---:|---:|---:|",
     ]
+    for category, summary in attribution["category_summaries"].items():
+        support = summary["decision_positive_support"]
+        lines.append(
+            f"| {category} | {summary['case_count']} | "
+            f"{support['stable_supported_row_count']} | "
+            f"{support['unstable_supported_row_count']} | "
+            f"{_format_metric(support['stable_supported_rate'])} |"
+        )
+    lines.append("")
     for label, run in report["scope_size_diagnostic"]["by_run"].items():
         lines.extend(
             [
@@ -868,6 +1162,10 @@ def _mean_metric(
 def _mean_values(values: Sequence[Any]) -> float | None:
     numeric = [float(value) for value in values if isinstance(value, (int, float))]
     return mean(numeric) if numeric else None
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
 
 
 def _format_metric(value: Any) -> str:

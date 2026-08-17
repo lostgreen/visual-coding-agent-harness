@@ -195,3 +195,103 @@ def test_scope_size_diagnostic_stratifies_gate_errors_without_changing_r5() -> N
     assert size_two["mean_total_support_count"] == 3.0
     assert size_two["mean_winner_margin"] == 1.0
     assert diagnostic["aggregation_changed"] is False
+
+
+def test_error_attribution_separates_shared_and_repeat_only_false_commits() -> None:
+    shared_left = _case(
+        supported={
+            ("set_1", "identity", "occ_1"),
+            ("set_1", "event", "occ_1"),
+        },
+        winner="occ_1",
+        gate="sufficient",
+    )
+    shared_right = _case(
+        supported={
+            ("set_1", "identity", "occ_1"),
+            ("set_1", "state", "occ_1"),
+        },
+        winner="occ_1",
+        gate="sufficient",
+    )
+    left_only = _case(
+        supported={("set_2", "event", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    right_only = _case(
+        supported={("set_3", "location", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    no_match = _case(supported=set(), winner="", gate="insufficient")
+    correct = _case(
+        supported={("set_4", "identity", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    runs = {
+        "repeat_1": {
+            "shared": shared_left,
+            "left_only": left_only,
+            "right_only": no_match,
+            "correct": correct,
+        },
+        "repeat_2": {
+            "shared": shared_right,
+            "left_only": no_match,
+            "right_only": right_only,
+            "correct": correct,
+        },
+    }
+    performance_cases = {
+        "repeat_1": {
+            "shared": {"false_commit": True},
+            "left_only": {"false_commit": True},
+            "right_only": {"false_commit": False},
+            "correct": {"false_abstention": False, "osa_strict": True},
+        },
+        "repeat_2": {
+            "shared": {"false_commit": True},
+            "left_only": {"false_commit": False},
+            "right_only": {"false_commit": True},
+            "correct": {"false_abstention": False, "osa_strict": True},
+        },
+    }
+
+    result = STABILITY.build_error_attribution(
+        runs,
+        repeat_labels=("repeat_1", "repeat_2"),
+        performance_cases=performance_cases,
+    )
+
+    assert result["case_ids"]["shared_false_commits"] == ["shared"]
+    assert result["case_ids"]["repeat_1_only_false_commits"] == ["left_only"]
+    assert result["case_ids"]["repeat_2_only_false_commits"] == ["right_only"]
+    assert result["case_ids"]["shared_correct_commits"] == ["correct"]
+    assert result["shared_false_commit_fraction_of_union"] == 1 / 3
+    shared = result["category_summaries"]["shared_false_commits"]
+    assert shared["decision_positive_support"] == {
+        "stable_supported_row_count": 1,
+        "unstable_supported_row_count": 2,
+        "stable_supported_rate": 1 / 3,
+        "by_constraint_type": {
+            "event": {
+                "stable_supported_row_count": 0,
+                "unstable_supported_row_count": 1,
+                "stable_supported_rate": 0.0,
+            },
+            "identity": {
+                "stable_supported_row_count": 1,
+                "unstable_supported_row_count": 0,
+                "stable_supported_rate": 1.0,
+            },
+            "state": {
+                "stable_supported_row_count": 0,
+                "unstable_supported_row_count": 1,
+                "stable_supported_rate": 0.0,
+            },
+        },
+    }
+    assert result["per_case"]["shared"]["candidate_present"] is False
+    assert result["per_case"]["correct"]["candidate_present"] is True
