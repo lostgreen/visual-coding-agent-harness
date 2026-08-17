@@ -51,6 +51,12 @@ The canary passes only when all cases meet every condition on the first launch:
 
 No frozen39 run starts before the canary passes.
 
+Reasoner decisions use the provider's JSON-object response mode for transport
+reliability. This constrains serialization only: the semantic prompt, action
+schema, R5 rule, candidate scope, and budgets remain unchanged. The requested
+response-format type is recorded in response metadata and participates in
+matched-response request identity.
+
 ## Frozen39 Repeats
 
 Run two independent A4 repeats with unchanged R5 and the frozen39 cohort. Each

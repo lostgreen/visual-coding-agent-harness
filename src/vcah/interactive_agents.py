@@ -543,7 +543,11 @@ class WorkspaceReasoner:
                 "force_finalize": bool(kwargs.get("force_finalize")),
             },
         )
-        raw = self.api.chat(prompt, max_tokens=_completion_budget(2200))
+        raw = self.api.chat(
+            prompt,
+            max_tokens=_completion_budget(2200),
+            response_format={"type": "json_object"},
+        )
         api_response = dict(self.api.last_response_metadata)
         parsed = _parse_json(raw)
         payload = _decision_payload(parsed)
@@ -563,7 +567,11 @@ class WorkspaceReasoner:
                 "do not invent observations, claims, references, support, or an answer. Return JSON only.\n"
                 f"Response: {raw}"
             )
-            repaired_raw = self.api.chat(repair_prompt, max_tokens=_completion_budget(1400))
+            repaired_raw = self.api.chat(
+                repair_prompt,
+                max_tokens=_completion_budget(1400),
+                response_format={"type": "json_object"},
+            )
             repaired_parsed = _parse_json(repaired_raw)
             payload = _decision_payload(repaired_parsed)
             repaired = bool(payload)

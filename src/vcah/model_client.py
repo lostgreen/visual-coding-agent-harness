@@ -202,6 +202,7 @@ class OpenAICompatibleClient:
         image_labels: Sequence[str] = (),
         prompt_position: str = "first",
         max_tokens: int = 900,
+        response_format: Mapping[str, Any] | None = None,
         _retry_truncation: bool = True,
     ) -> str:
         requested_paths = tuple(str(path) for path in image_paths)
@@ -261,6 +262,11 @@ class OpenAICompatibleClient:
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
         }
+        normalized_response_format = (
+            dict(response_format) if response_format is not None else None
+        )
+        if normalized_response_format is not None:
+            body["response_format"] = normalized_response_format
         if "gpt-5" in self.model.casefold():
             body["max_completion_tokens"] = int(max_tokens)
         else:
@@ -320,6 +326,9 @@ class OpenAICompatibleClient:
                 "requested_seed": requested_seed,
                 "provider_seed_supported": self.provider_seed_supported,
                 "provider_reported_seed_support": self.provider_reported_seed_support,
+                "response_format_type": str(
+                    (normalized_response_format or {}).get("type", "")
+                ),
                 **attachment_metadata,
             }
             if str(choice.get("finish_reason") or "").casefold() != "length" or not _retry_truncation:
@@ -334,6 +343,7 @@ class OpenAICompatibleClient:
                 image_labels=requested_labels,
                 prompt_position=position,
                 max_tokens=max(4096, int(max_tokens) * 2),
+                response_format=normalized_response_format,
                 _retry_truncation=False,
             )
             retry_metadata = self.last_response_metadata
@@ -522,6 +532,7 @@ class MatchedResponseCacheClient:
         image_labels: Sequence[str] = (),
         prompt_position: str = "first",
         max_tokens: int = 900,
+        response_format: Mapping[str, Any] | None = None,
         _retry_truncation: bool = True,
     ) -> str:
         if not self.session.active:
@@ -531,6 +542,7 @@ class MatchedResponseCacheClient:
                 image_labels=image_labels,
                 prompt_position=prompt_position,
                 max_tokens=max_tokens,
+                response_format=response_format,
                 _retry_truncation=_retry_truncation,
             )
             self._last_response_metadata = {
@@ -551,6 +563,7 @@ class MatchedResponseCacheClient:
             image_labels=image_labels,
             prompt_position=prompt_position,
             max_tokens=max_tokens,
+            response_format=response_format,
         )
         request_digest = _stable_json_digest(request)
         fixture_path = (
@@ -586,6 +599,7 @@ class MatchedResponseCacheClient:
             image_labels=image_labels,
             prompt_position=prompt_position,
             max_tokens=max_tokens,
+            response_format=response_format,
             _retry_truncation=_retry_truncation,
         )
         response_metadata = dict(self.delegate.last_response_metadata)
@@ -647,6 +661,7 @@ def _matched_response_request(
     image_labels: Sequence[str],
     prompt_position: str,
     max_tokens: int,
+    response_format: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     image_digests = []
     for raw_path in image_paths:
@@ -660,6 +675,7 @@ def _matched_response_request(
         "image_labels": [str(value) for value in image_labels],
         "prompt_position": str(prompt_position),
         "max_tokens": int(max_tokens),
+        "response_format": dict(response_format or {}),
     }
 
 

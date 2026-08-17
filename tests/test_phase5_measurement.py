@@ -79,7 +79,8 @@ def test_frozen_reasoner_retains_historical_single_json_repair(tmp_path) -> None
         def __init__(self) -> None:
             self.outputs = iter(("not json", '{"action":"answer","answer":"fact"}'))
 
-        def chat(self, prompt, *, max_tokens):
+        def chat(self, prompt, *, max_tokens, response_format=None):
+            assert response_format == {"type": "json_object"}
             return next(self.outputs)
 
     reasoner = WorkspaceReasoner(

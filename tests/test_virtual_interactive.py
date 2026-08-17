@@ -134,8 +134,22 @@ class FakeAPI:
         self.calls: list[dict[str, Any]] = []
         self.last_response_metadata: dict[str, Any] = {}
 
-    def chat(self, prompt: str, *, image_paths: Sequence[str] = (), max_tokens: int = 0) -> str:
-        self.calls.append({"prompt": prompt, "image_paths": tuple(image_paths), "max_tokens": max_tokens})
+    def chat(
+        self,
+        prompt: str,
+        *,
+        image_paths: Sequence[str] = (),
+        max_tokens: int = 0,
+        response_format: Mapping[str, Any] | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "image_paths": tuple(image_paths),
+                "max_tokens": max_tokens,
+                "response_format": dict(response_format or {}),
+            }
+        )
         self.last_response_metadata = {
             "images_requested": len(image_paths),
             "images_attached": len(image_paths),
@@ -398,6 +412,8 @@ def test_reasoner_repairs_schema_invalid_json_object(tmp_path: Path) -> None:
         "reasoner_workspace",
     ]
     assert rows[-1]["format_repaired"] is True
+    assert api.calls[0]["response_format"] == {"type": "json_object"}
+    assert api.calls[1]["response_format"] == {"type": "json_object"}
 
 
 def test_reasoner_accepts_decision_as_answer_text_alias(tmp_path: Path) -> None:
@@ -955,6 +971,48 @@ def test_client_rejects_missing_images_before_request(monkeypatch: pytest.Monkey
 
     with pytest.raises(ImageAttachmentError):
         client.chat("inspect", image_paths=(str(tmp_path / "missing.jpg"),))
+
+
+def test_client_sends_json_object_response_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Mapping[str, Any]] = []
+
+    class Response:
+        status_code = 200
+        headers: Mapping[str, str] = {}
+        text = ""
+
+        def json(self) -> Mapping[str, Any]:
+            return {
+                "choices": [
+                    {"finish_reason": "stop", "message": {"content": '{"ok":true}'}}
+                ],
+                "usage": {},
+            }
+
+    def post(url: str, **kwargs: Any) -> Response:
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("vcah.model_client.requests.post", post)
+    client = OpenAICompatibleClient(
+        {
+            "base": "https://example.invalid/v1",
+            "model": "reasoner",
+            "api_key": "secret",
+            "max_retries": 0,
+        }
+    )
+
+    response = client.chat(
+        "return JSON",
+        response_format={"type": "json_object"},
+    )
+
+    assert response == '{"ok":true}'
+    assert calls[0]["json"]["response_format"] == {"type": "json_object"}
+    assert client.last_response_metadata["response_format_type"] == "json_object"
 
 
 def test_client_can_interleave_image_labels_and_place_prompt_last(
