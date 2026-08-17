@@ -27,6 +27,7 @@ from vcah.occurrence_agent import (
     occurrence_excerpt_digest,
     occurrence_visible_text_digest,
 )
+from vcah.occurrence_sufficiency import SUFFICIENCY_OPERATION
 from vcah.phase5 import inspection_mode_policy_errors
 from vcah.runtime_metrics import (
     export_item_supporting_intervals,
@@ -69,6 +70,20 @@ _MUST_NOT_ANSWER_OCCURRENCE_CODES = frozenset(
         "occurrence_sufficiency_requires_insufficient",
         "occurrence_sufficiency_forbids_selection",
         "occurrence_sufficiency_candidate_not_supported",
+        "occurrence_evidence_transaction_must_be_isolated",
+        "occurrence_evidence_forbidden_gate_field",
+        "occurrence_evidence_operation_field_invalid",
+        "occurrence_evidence_constraints_required",
+        "occurrence_evidence_constraint_must_be_object",
+        "occurrence_evidence_constraint_field_invalid",
+        "occurrence_evidence_constraint_id_invalid",
+        "occurrence_evidence_constraint_type_invalid",
+        "occurrence_evidence_constraint_description_invalid",
+        "occurrence_evidence_support_must_be_object",
+        "occurrence_evidence_support_field_invalid",
+        "occurrence_evidence_support_candidate_invalid",
+        "occurrence_evidence_passage_not_visible",
+        "occurrence_evidence_support_requires_passage",
         "occurrence_locator_inspection_required",
         "occurrence_locator_binding_required",
         "occurrence_locator_unbound_window_forbidden",
@@ -786,7 +801,9 @@ class VirtualVideoMultiRoundDriver:
                         )
                         sufficiency_activated_recorded = True
                     occurrence_state.save(occurrence_state_path)
-                    status["occurrence_resolution_state"] = occurrence_state.to_dict()
+                    status["occurrence_resolution_state"] = (
+                        occurrence_state.to_reasoner_dict()
+                    )
                     locator_statuses = _occurrence_locator_statuses(
                         occurrence_state,
                         observation_log.rows,
@@ -1285,18 +1302,18 @@ class VirtualVideoMultiRoundDriver:
                 ):
                     if not isinstance(operation, Mapping) or str(
                         operation.get("op", "") or ""
-                    ) != "assess_sufficiency":
+                    ) != SUFFICIENCY_OPERATION:
                         continue
                     constraints = tuple(
                         row
                         for row in tuple(
-                            operation.get("constraints_checked", ()) or ()
+                            operation.get("constraints", ()) or ()
                         )
                         if isinstance(row, Mapping)
                     )
                     trace.append(
                         {
-                            "type": "occurrence_sufficiency_decision",
+                            "type": "occurrence_evidence_declaration",
                             "round": round_id,
                             "occurrence_op_index": operation_index,
                             "set_id": str(operation.get("set_id", "") or ""),
@@ -1306,13 +1323,6 @@ class VirtualVideoMultiRoundDriver:
                                     occurrence_state, OccurrenceResolutionStateV2
                                 )
                                 else 0
-                            ),
-                            "verdict": str(operation.get("verdict", "") or ""),
-                            "declared_verdict": str(
-                                operation.get("declared_verdict", "") or ""
-                            ),
-                            "verdict_normalized": bool(
-                                operation.get("verdict_normalized")
                             ),
                             "implicit_unknown_support_count": int(
                                 operation.get("implicit_unknown_support_count", 0)
@@ -1330,34 +1340,39 @@ class VirtualVideoMultiRoundDriver:
                             "support_contract": str(
                                 operation.get("support_contract", "") or ""
                             ),
-                            "aggregation_rule": str(
-                                operation.get("aggregation_rule", "") or ""
+                            "rule_blind": bool(operation.get("rule_blind")),
+                            "model_verdict_present": bool(
+                                operation.get("model_verdict_present")
                             ),
-                            "minimum_support_margin": int(
-                                operation.get("minimum_support_margin", 0) or 0
+                            "evidence_report_digest": str(
+                                operation.get("evidence_report_digest", "") or ""
                             ),
-                            "support_count_by_occurrence": dict(
-                                operation.get("support_count_by_occurrence", {}) or {}
-                            ),
-                            "best_support_count": int(
-                                operation.get("best_support_count", 0) or 0
-                            ),
-                            "runner_up_support_count": int(
-                                operation.get("runner_up_support_count", 0) or 0
-                            ),
-                            "constraints_checked": [
-                                str(row.get("constraint_id", "") or "")
-                                for row in constraints
-                            ],
-                            "constraint_types": [
-                                str(row.get("constraint_type", "") or "")
-                                for row in constraints
-                            ],
-                            "sufficient_occurrence_ids": list(
-                                operation.get("sufficient_occurrence_ids", ()) or ()
-                            ),
+                            "constraints": [dict(row) for row in constraints],
                         }
                     )
+                    gate_decision = occurrence_apply_result.get("gate_decision")
+                    if isinstance(gate_decision, Mapping):
+                        trace.append(
+                            {
+                                "type": "occurrence_sufficiency_gate_decision",
+                                "round": round_id,
+                                "occurrence_op_index": operation_index,
+                                **dict(gate_decision),
+                            }
+                        )
+                    for runtime_operation in tuple(
+                        occurrence_apply_result.get("runtime_occurrence_ops", ()) or ()
+                    ):
+                        if not isinstance(runtime_operation, Mapping):
+                            continue
+                        trace.append(
+                            {
+                                "type": "occurrence_gate_resolution_committed",
+                                "round": round_id,
+                                "occurrence_op_index": operation_index,
+                                **dict(runtime_operation),
+                            }
+                        )
                 if (
                     isinstance(occurrence_state, OccurrenceResolutionStateV2)
                     and occurrence_apply_result["accepted"]
@@ -1390,6 +1405,9 @@ class VirtualVideoMultiRoundDriver:
                             reason=f"resolution_revision:{revision_op}",
                             revision_op=revision_op,
                         )
+                effective_occurrence_ops = tuple(decision.occurrence_ops) + tuple(
+                    occurrence_apply_result.get("runtime_occurrence_ops", ()) or ()
+                )
                 occurrence_selection_committed = bool(
                     occurrence_apply_result["accepted"]
                     and any(
@@ -1398,7 +1416,7 @@ class VirtualVideoMultiRoundDriver:
                             or ""
                         ).casefold()
                         == "select"
-                        for operation in decision.occurrence_ops
+                        for operation in effective_occurrence_ops
                         if isinstance(operation, Mapping)
                     )
                 )
@@ -1410,7 +1428,7 @@ class VirtualVideoMultiRoundDriver:
                             or ""
                         ).casefold()
                         in {"select", "no_match"}
-                        for operation in decision.occurrence_ops
+                        for operation in effective_occurrence_ops
                         if isinstance(operation, Mapping)
                     )
                 )
@@ -1461,6 +1479,16 @@ class VirtualVideoMultiRoundDriver:
                         "workspace_errors": list(apply_result.errors),
                         "occurrence_ops": [
                             dict(operation) for operation in decision.occurrence_ops
+                        ],
+                        "runtime_occurrence_ops": [
+                            dict(operation)
+                            for operation in tuple(
+                                occurrence_apply_result.get(
+                                    "runtime_occurrence_ops", ()
+                                )
+                                or ()
+                            )
+                            if isinstance(operation, Mapping)
                         ],
                         "occurrence_ops_accepted": occurrence_apply_result[
                             "accepted"
@@ -2459,7 +2487,9 @@ def _scoped_occurrence_answer_errors(
         for operation in decision.occurrence_ops
         if isinstance(operation, Mapping)
     }
-    submits_resolution = bool(operation_names & {"select", "no_match"})
+    submits_resolution = bool(operation_names & {"select", "no_match"}) or bool(
+        state.sufficiency_enabled and SUFFICIENCY_OPERATION in operation_names
+    )
     if active.resolution == "deferred":
         if decision.action == "answer" and decision.answer:
             return [
@@ -3056,7 +3086,12 @@ def _control_retry_feedback(
         for error in errors
         if str(error.get("code", "")).startswith("occurrence_sufficiency_")
     )
-    if sufficiency_errors:
+    evidence_errors = tuple(
+        error
+        for error in errors
+        if str(error.get("code", "")).startswith("occurrence_evidence_")
+    )
+    if sufficiency_errors or evidence_errors:
         active_sufficiency = None
         if isinstance(occurrence_state, OccurrenceResolutionStateV2):
             active = occurrence_state.active_set
@@ -3092,15 +3127,8 @@ def _control_retry_feedback(
                 "Do not answer, reassess, select, or defer. The active assessment is insufficient; return action=update_workspace with exactly one no_match operation for the active set."
             )
         else:
-            terminal_rule = (
-                "End the same transaction with exactly one terminal select or no_match operation: use select only when the normalized matrix supports that candidate on every constraint; otherwise use no_match. Do not use defer during finalization."
-                if force_finalize
-                or "occurrence_sufficiency_resolution_required" in codes
-                else "End the same transaction with a compatible select, defer, or no_match operation."
-            )
             repair_rules.append(
-                "Do not answer. Submit one assess_sufficiency operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. Report a supported row only when visible evidence_passage_ids directly support that candidate on that constraint; omit all other rows. Runtime normalizes omissions to unknown and permits selection only for a unique candidate whose supported-constraint count leads the runner-up by at least one. "
-                + terminal_rule
+                "Do not answer, select, defer, or declare a verdict. Submit exactly one isolated declare_occurrence_evidence operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. For each constraint, include supported_candidates only when visible evidence_passage_ids directly support that candidate; omit every other candidate. Runtime validates and persists this evidence report, then performs the gate decision and scoped resolution mechanically."
             )
     if "occurrence_search_required" in codes:
         repair_rules.append(

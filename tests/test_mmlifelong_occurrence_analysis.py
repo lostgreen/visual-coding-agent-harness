@@ -1112,6 +1112,106 @@ def test_sufficiency_transaction_audit_checks_order_and_verdict() -> None:
     assert invalid["ordering_failure_count"] == 1
 
 
+def test_decoupled_evidence_gate_audit_requires_digest_linked_mechanical_resolution() -> None:
+    decision = {
+        "type": "reasoner_decision",
+        "round": 2,
+        "occurrence_ops_accepted": True,
+        "occurrence_ops": [
+            {"op": "declare_occurrence_evidence", "set_id": "set_1"}
+        ],
+        "runtime_occurrence_ops": [
+            {
+                "op": "select",
+                "set_id": "set_1",
+                "occurrence_id": "occ_1",
+                "source": "runtime_sufficiency_gate",
+            }
+        ],
+    }
+    evidence = {
+        "type": "occurrence_evidence_declaration",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set_1",
+        "candidate_count": 2,
+        "rule_blind": True,
+        "model_verdict_present": False,
+        "evidence_report_digest": "evidence-digest",
+        "support_complete": True,
+        "support_contract": "rule_blind_sparse_positive_evidence_v1",
+        "scope_occurrence_ids": ["occ_1", "occ_2"],
+        "out_of_scope_occurrence_ids": [],
+        "implicit_unknown_support_count": 1,
+        "constraints": [
+            {
+                "constraint_id": "identity",
+                "constraint_type": "identity",
+                "description": "target identity",
+                "supported_candidates": [
+                    {
+                        "occurrence_id": "occ_1",
+                        "evidence_passage_ids": ["p1"],
+                    }
+                ],
+            }
+        ],
+    }
+    gate = {
+        "type": "occurrence_sufficiency_gate_decision",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set_1",
+        "verdict": "sufficient",
+        "winner_occurrence_id": "occ_1",
+        "sufficient_occurrence_ids": ["occ_1"],
+        "support_contract": "rule_blind_sparse_positive_evidence_v1",
+        "aggregation_rule": "unique_supported_count_margin",
+        "minimum_support_margin": 1,
+        "support_count_by_occurrence": {"occ_1": 1, "occ_2": 0},
+        "best_support_count": 1,
+        "runner_up_support_count": 0,
+        "decision_owner": "runtime",
+        "model_verdict_present": False,
+        "evidence_report_digest": "evidence-digest",
+    }
+    resolution = {
+        "type": "occurrence_gate_resolution_committed",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set_1",
+        "op": "select",
+        "occurrence_id": "occ_1",
+        "source": "runtime_sufficiency_gate",
+    }
+    trace = (
+        {"type": "occurrence_sufficiency_activated", "round": 1},
+        evidence,
+        gate,
+        resolution,
+        decision,
+    )
+
+    audit = AUDIT._sufficiency_transaction_audit((decision,), trace)
+    assert audit["evidence_gate_decoupled"] is True
+    assert audit["event_count_mismatch"] is False
+    assert audit["ordering_failure_count"] == 0
+    assert audit["verdict_transition_failure_count"] == 0
+    assert audit["aggregation_failure_count"] == 0
+
+    metrics = ANALYSIS._sufficiency_transaction_metrics(trace)
+    assert metrics["sufficiency_evidence_gate_decoupled"] is True
+    assert metrics["sufficiency_transaction_valid"] is True
+    assert metrics["sufficiency_support_complete"] is True
+    assert metrics["sufficiency_aggregation_valid"] is True
+
+    bad_gate = {**gate, "evidence_report_digest": "wrong"}
+    invalid = AUDIT._sufficiency_transaction_audit(
+        (decision,), (trace[0], evidence, bad_gate, resolution, decision)
+    )
+    assert invalid["ordering_failure_count"] == 1
+
+
 def test_locator_outcomes_are_pair_weighted_not_case_macro_averaged() -> None:
     signature = [{"action": "investigate", "tasks": []}]
     inspected = _row("a3", "c1", score=0.0, signature=signature)

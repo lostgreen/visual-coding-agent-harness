@@ -12,8 +12,9 @@ from typing import Any, Mapping
 SUPPORTED_ARMS = {"a0", "a1-flat", "a1", "a2", "a2-clean", "a3", "a4"}
 SCOPED_ARMS = {"a2-clean", "a3", "a4"}
 EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT = (
-    "sparse_supported_rows_omission_is_unknown"
+    "rule_blind_sparse_positive_evidence_v1"
 )
+LEGACY_SUFFICIENCY_SUPPORT_CONTRACT = "sparse_supported_rows_omission_is_unknown"
 EXPECTED_SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
 EXPECTED_SUFFICIENCY_SUPPORT_MARGIN = 1
 EXPECTED_LIFECYCLE_RETRY_CODES = {
@@ -48,6 +49,20 @@ EXPECTED_LIFECYCLE_RETRY_CODES = {
     "occurrence_sufficiency_supported_requires_evidence",
     "occurrence_sufficiency_support_incomplete",
     "occurrence_sufficiency_verdict_inconsistent",
+    "occurrence_evidence_transaction_must_be_isolated",
+    "occurrence_evidence_forbidden_gate_field",
+    "occurrence_evidence_operation_field_invalid",
+    "occurrence_evidence_constraints_required",
+    "occurrence_evidence_constraint_must_be_object",
+    "occurrence_evidence_constraint_field_invalid",
+    "occurrence_evidence_constraint_id_invalid",
+    "occurrence_evidence_constraint_type_invalid",
+    "occurrence_evidence_constraint_description_invalid",
+    "occurrence_evidence_support_must_be_object",
+    "occurrence_evidence_support_field_invalid",
+    "occurrence_evidence_support_candidate_invalid",
+    "occurrence_evidence_passage_not_visible",
+    "occurrence_evidence_support_requires_passage",
 }
 
 
@@ -137,14 +152,14 @@ def audit_roots(
                 .casefold()
                 == "select"
                 for row in decisions
-                for operation in tuple(row.get("occurrence_ops", ()) or ())
+                for operation in _decision_occurrence_ops(row)
                 if isinstance(operation, Mapping)
             )
             accepted_ops = tuple(
                 (index, dict(operation))
                 for index, row in enumerate(decisions)
                 if row.get("occurrence_ops_accepted") is not False
-                for operation in tuple(row.get("occurrence_ops", ()) or ())
+                for operation in _decision_occurrence_ops(row)
                 if isinstance(operation, Mapping)
             )
             sufficiency_audit = _sufficiency_transaction_audit(decisions, trace)
@@ -158,7 +173,7 @@ def audit_roots(
                         operation.get("op", operation.get("type", "")) or ""
                     ).casefold()
                     == "select"
-                    for operation in tuple(row.get("occurrence_ops", ()) or ())
+                    for operation in _decision_occurrence_ops(row)
                     if isinstance(operation, Mapping)
                 )
             )
@@ -517,6 +532,19 @@ def audit_roots(
             "sufficiency_decision_event_count": sum(
                 row["sufficiency_audit"]["decision_event_count"] for row in cases
             ),
+            "evidence_gate_decoupled_case_count": sum(
+                row["sufficiency_audit"].get("evidence_gate_decoupled") is True
+                for row in cases
+            ),
+            "mechanical_sufficiency_resolution_count": sum(
+                int(
+                    row["sufficiency_audit"].get(
+                        "mechanical_resolution_count", 0
+                    )
+                    or 0
+                )
+                for row in cases
+            ),
             "sufficiency_support_surface_applicable_case_count": sum(
                 row["sufficiency_audit"]["support_surface_applicable"]
                 for row in cases
@@ -851,6 +879,16 @@ def audit_roots(
                 == 0
             )
         ),
+        "a4_evidence_gate_decoupled": (
+            "a4" not in per_arm
+            or per_arm["a4"]["evidence_gate_decoupled_case_count"] == 0
+            or (
+                per_arm["a4"]["evidence_gate_decoupled_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"]["mechanical_sufficiency_resolution_count"]
+                >= int(expected_cases)
+            )
+        ),
         "a4_support_surface_complete": (
             "a4" not in per_arm
             or per_arm["a4"]["sufficiency_support_surface_applicable_case_count"] == 0
@@ -970,6 +1008,17 @@ def _scoped_state_sets(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return values
 
 
+def _decision_occurrence_ops(
+    decision: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    return tuple(
+        operation
+        for key in ("occurrence_ops", "runtime_occurrence_ops")
+        for operation in tuple(decision.get(key, ()) or ())
+        if isinstance(operation, Mapping)
+    )
+
+
 def _scoped_operation_valid(
     operation: Mapping[str, Any],
     scoped_sets: Mapping[str, Mapping[str, Any]],
@@ -979,7 +1028,12 @@ def _scoped_operation_valid(
         return False
     op = _operation_name(operation)
     occurrence_id = str(operation.get("occurrence_id", "") or "")
-    if op in {"defer", "no_match", "assess_sufficiency"}:
+    if op in {
+        "defer",
+        "no_match",
+        "assess_sufficiency",
+        "declare_occurrence_evidence",
+    }:
         return not occurrence_id
     return bool(
         occurrence_id
@@ -991,6 +1045,10 @@ def _sufficiency_transaction_audit(
     decisions: tuple[Mapping[str, Any], ...],
     trace: tuple[Mapping[str, Any], ...],
 ) -> dict[str, Any]:
+    if any(
+        row.get("type") == "occurrence_evidence_declaration" for row in trace
+    ):
+        return _decoupled_evidence_gate_audit(decisions, trace)
     events = tuple(
         row
         for row in trace
@@ -1102,9 +1160,151 @@ def _sufficiency_transaction_audit(
     }
 
 
+def _decoupled_evidence_gate_audit(
+    decisions: tuple[Mapping[str, Any], ...],
+    trace: tuple[Mapping[str, Any], ...],
+) -> dict[str, Any]:
+    evidence_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_evidence_declaration"
+    )
+    gate_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_sufficiency_gate_decision"
+    )
+    resolution_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_gate_resolution_committed"
+    )
+    evidence_op_count = sum(
+        _operation_name(operation) == "declare_occurrence_evidence"
+        for decision in decisions
+        if decision.get("occurrence_ops_accepted") is not False
+        for operation in tuple(decision.get("occurrence_ops", ()) or ())
+        if isinstance(operation, Mapping)
+    )
+    terminal_op_count = sum(
+        _operation_name(operation) in {"select", "no_match"}
+        for decision in decisions
+        if decision.get("occurrence_ops_accepted") is not False
+        for operation in tuple(decision.get("runtime_occurrence_ops", ()) or ())
+        if isinstance(operation, Mapping)
+    )
+    evidence_by_position = {
+        _event_position(row): row for row in evidence_events
+    }
+    gate_by_position = {_event_position(row): row for row in gate_events}
+    resolution_by_position = {
+        _event_position(row): row for row in resolution_events
+    }
+    positions = set(evidence_by_position) | set(gate_by_position) | set(
+        resolution_by_position
+    )
+    ordering_failure_count = 0
+    verdict_transition_failure_count = 0
+    for position in positions:
+        evidence = evidence_by_position.get(position)
+        gate = gate_by_position.get(position)
+        resolution = resolution_by_position.get(position)
+        if evidence is None or gate is None or resolution is None:
+            ordering_failure_count += 1
+            continue
+        if (
+            str(evidence.get("evidence_report_digest", "") or "")
+            != str(gate.get("evidence_report_digest", "") or "")
+            or str(evidence.get("set_id", "") or "")
+            != str(gate.get("set_id", "") or "")
+        ):
+            ordering_failure_count += 1
+        expected_op = "select" if gate.get("verdict") == "sufficient" else "no_match"
+        if _operation_name(resolution) != expected_op:
+            verdict_transition_failure_count += 1
+        if expected_op == "select" and str(
+            resolution.get("occurrence_id", "") or ""
+        ) != str(gate.get("winner_occurrence_id", "") or ""):
+            verdict_transition_failure_count += 1
+
+    event_shape_failure_count = sum(
+        not bool(row.get("rule_blind"))
+        or bool(row.get("model_verdict_present"))
+        or int(row.get("candidate_count", 0) or 0) < 1
+        or not tuple(row.get("constraints", ()) or ())
+        for row in evidence_events
+    ) + sum(
+        row.get("decision_owner") != "runtime"
+        or bool(row.get("model_verdict_present"))
+        or str(row.get("verdict", "")) not in {"sufficient", "insufficient"}
+        for row in gate_events
+    )
+    support_surface_failure_count = sum(
+        not bool(row.get("support_complete"))
+        or row.get("support_contract") != EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT
+        or not 1 <= len(tuple(row.get("scope_occurrence_ids", ()) or ())) <= 5
+        or bool(
+            set(tuple(row.get("scope_occurrence_ids", ()) or ()))
+            & set(tuple(row.get("out_of_scope_occurrence_ids", ()) or ()))
+        )
+        or any(
+            not tuple(constraint.get("supported_candidates", ()) or ())
+            and "supported_candidates" not in constraint
+            for constraint in tuple(row.get("constraints", ()) or ())
+            if isinstance(constraint, Mapping)
+        )
+        for row in evidence_events
+    )
+    event_count_mismatch = not (
+        len(evidence_events)
+        == len(gate_events)
+        == len(resolution_events)
+        == evidence_op_count
+        == terminal_op_count
+    )
+    return {
+        "activation_event_count": sum(
+            row.get("type") == "occurrence_sufficiency_activated" for row in trace
+        ),
+        "decision_event_count": len(gate_events),
+        "assessment_op_count": evidence_op_count,
+        "terminal_op_count": terminal_op_count,
+        "event_shape_failure_count": event_shape_failure_count,
+        "event_count_mismatch": event_count_mismatch,
+        "ordering_failure_count": ordering_failure_count,
+        "verdict_transition_failure_count": verdict_transition_failure_count,
+        "verdict_normalization_count": 0,
+        "implicit_unknown_support_count": sum(
+            int(row.get("implicit_unknown_support_count", 0) or 0)
+            for row in evidence_events
+        ),
+        "support_surface_applicable": bool(evidence_events),
+        "support_surface_failure_count": support_surface_failure_count,
+        "aggregation_applicable": bool(gate_events),
+        "aggregation_failure_count": sum(
+            not _sufficiency_aggregation_event_valid(row) for row in gate_events
+        ),
+        "incomplete_support_retry_count": 0,
+        "evidence_gate_decoupled": True,
+        "mechanical_resolution_count": len(resolution_events),
+    }
+
+
+def _event_position(row: Mapping[str, Any]) -> tuple[int, int, str]:
+    return (
+        int(row.get("round", 0) or 0),
+        int(row.get("occurrence_op_index", 0) or 0),
+        str(row.get("set_id", "") or ""),
+    )
+
+
 def _sufficiency_aggregation_event_valid(event: Mapping[str, Any]) -> bool:
     if (
-        event.get("support_contract") != EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT
+        event.get("support_contract")
+        not in {
+            EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT,
+            LEGACY_SUFFICIENCY_SUPPORT_CONTRACT,
+        }
         or event.get("aggregation_rule") != EXPECTED_SUFFICIENCY_AGGREGATION_RULE
         or int(event.get("minimum_support_margin", 0) or 0)
         != EXPECTED_SUFFICIENCY_SUPPORT_MARGIN
@@ -1147,7 +1347,7 @@ def _selected_locator_pairs(
         for row in trace
         if row.get("type") == "reasoner_decision"
         and row.get("occurrence_ops_accepted") is not False
-        for operation in tuple(row.get("occurrence_ops", ()) or ())
+        for operation in _decision_occurrence_ops(row)
         if isinstance(operation, Mapping)
         and _operation_name(operation) == "select"
         and _operation_set_id(operation)

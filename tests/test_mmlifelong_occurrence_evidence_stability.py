@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+
+MODULE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "analyze_mmlifelong_occurrence_evidence_stability.py"
+)
+SPEC = importlib.util.spec_from_file_location("evidence_stability", MODULE_PATH)
+assert SPEC and SPEC.loader
+STABILITY = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(STABILITY)
+
+
+def _case(*, supported: set[tuple[str, str, str]], winner: str, gate: str) -> dict:
+    return {
+        "supported_rows": supported,
+        "strict_supported_rows": {
+            (*row[:2], "description", row[2], ("p1",)) for row in supported
+        },
+        "candidate_passage_rows": {
+            (row[0], row[2], "p1") for row in supported
+        },
+        "support_counts": {"occ_1": int(winner == "occ_1"), "occ_2": 0},
+        "winner": winner,
+        "gate": gate,
+    }
+
+
+def test_stability_requires_both_repeats_to_pass_preregistered_guardrails() -> None:
+    stable = _case(
+        supported={("set_1", "identity", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    runs = {
+        "repeat_1": {"c1": stable, "c2": stable},
+        "repeat_2": {"c1": stable, "c2": stable},
+    }
+    passing = {
+        label: {
+            "false_commit_rate": 0.25,
+            "commit_recall": 0.70,
+            "osa_given_commit": 1.0,
+        }
+        for label in runs
+    }
+
+    report = STABILITY.build_stability_report(
+        runs,
+        repeat_labels=("repeat_1", "repeat_2"),
+        expected_cases=2,
+        performance=passing,
+        baseline_supported_row_agreement=0.80,
+    )
+
+    assert report["stability_passed"] is True
+    assert report["performance_guardrails_passed"] is True
+    assert report["working_method_passed"] is True
+    assert report["metrics"]["gate_agreement"] == 1.0
+
+    failing = {**passing, "repeat_2": {**passing["repeat_2"], "false_commit_rate": 0.31}}
+    failed = STABILITY.build_stability_report(
+        runs,
+        repeat_labels=("repeat_1", "repeat_2"),
+        expected_cases=2,
+        performance=failing,
+        baseline_supported_row_agreement=0.80,
+    )
+    assert failed["performance_guardrails_passed"] is False
+    assert failed["working_method_passed"] is False
+
+
+def test_stability_reports_gate_and_winner_drift() -> None:
+    selected = _case(
+        supported={("set_1", "identity", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    abstained = _case(supported=set(), winner="", gate="insufficient")
+
+    report = STABILITY.build_stability_report(
+        {"repeat_1": {"c1": abstained}, "repeat_2": {"c1": selected}},
+        repeat_labels=("repeat_1", "repeat_2"),
+        expected_cases=1,
+    )
+
+    assert report["metrics"]["gate_agreement"] == 0.0
+    assert report["metrics"]["winner_agreement"] == 0.0
+    assert report["metrics"]["no_match_to_selected_case_count"] == 1
+    assert report["gate_drift_case_ids"] == ["c1"]
+    assert report["working_method_passed"] is False

@@ -16,8 +16,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT = (
-    "sparse_supported_rows_omission_is_unknown"
+    "rule_blind_sparse_positive_evidence_v1"
 )
+LEGACY_SUFFICIENCY_SUPPORT_CONTRACT = "sparse_supported_rows_omission_is_unknown"
 EXPECTED_SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
 EXPECTED_SUFFICIENCY_SUPPORT_MARGIN = 1
 
@@ -526,6 +527,21 @@ def build_report(
                 for row in by_arm["a4"].values()
             )
         ),
+        "a4_evidence_gate_decoupled": (
+            "a4" not in by_arm
+            or not any(
+                row.get("sufficiency_evidence_gate_decoupled") is not None
+                for row in by_arm["a4"].values()
+            )
+            or all(
+                row.get("sufficiency_evidence_gate_decoupled") is True
+                and int(
+                    row.get("sufficiency_mechanical_resolution_count", 0) or 0
+                )
+                >= 1
+                for row in by_arm["a4"].values()
+            )
+        ),
         "a4_support_surface_complete": (
             "a4" not in by_arm
             or not any(
@@ -615,8 +631,8 @@ def build_report(
             "selected_locator_accounting": "every selected locator has exactly one terminal outcome: inspected or one explicit release category",
             "released_unexecuted_rate": "selected locators released at finalization, retirement, or resolution revision divided by all selected locators",
             "matched_pre_treatment_responses": "WP6 replays A2-clean into A3 until scoped resolution is persisted; WP8 replays A3 into A4 until the first scoped set is exposed; all later calls remain live",
-            "sufficiency_transaction": "A4 records an explicit assessment before select/defer/no_match; structural validity checks ordering, visible bindings, and verdict-transition consistency but does not constrain endpoint values",
-            "sufficiency_support_surface": "A4 records sparse evidence-bound supported rows; omitted in-scope rows are mechanically unknown, and a unique supported-count leader with margin at least one is sufficient",
+            "sufficiency_transaction": "A4 records one rule-blind evidence declaration; Runtime separately computes the gate and mechanically commits select/no_match. Structural validity checks one-to-one ordering and digest linkage without constraining endpoint values",
+            "sufficiency_support_surface": "A4 records only directly evidenced supported candidate-constraint pairs; omitted in-scope candidates are mechanically unknown, while aggregation policy remains hidden from the evidence-elicitation call",
             "bound_visual_clue_recall": "fraction of gold clue intervals overlapped by an executed occurrence-bound visual window",
             "budget_symmetry_passed": "configured semantic-round budgets are present, internally consistent, and equal across arms; realized semantic rounds remain a treatment cost endpoint",
         },
@@ -641,6 +657,10 @@ def build_report(
                 for row in by_arm.get(arm, {}).values()
             ),
             "a4_sufficiency_transactions_valid": "a4" in by_arm,
+            "a4_evidence_gate_decoupled": any(
+                row.get("sufficiency_evidence_gate_decoupled") is not None
+                for row in by_arm.get("a4", {}).values()
+            ),
             "a4_support_surface_complete": any(
                 row.get("sufficiency_support_complete") is not None
                 for row in by_arm.get("a4", {}).values()
@@ -1962,30 +1982,39 @@ def _accepted_resolution_ops(
             or row.get("occurrence_ops_accepted") is False
         ):
             continue
-        for operation in tuple(row.get("occurrence_ops", ()) or ()):
-            if not isinstance(operation, Mapping):
-                continue
-            op = str(operation.get("op", operation.get("type", "")) or "").casefold()
-            if op not in {"select", "no_match", "defer"}:
-                continue
-            accepted.append(
-                {
-                    "op": op,
-                    "set_id": str(
-                        operation.get(
-                            "set_id", operation.get("locator_attempt_id", "")
-                        )
-                        or ""
-                    ),
-                    "occurrence_id": str(operation.get("occurrence_id", "") or ""),
-                }
-            )
+        for key in ("occurrence_ops", "runtime_occurrence_ops"):
+            for operation in tuple(row.get(key, ()) or ()):
+                if not isinstance(operation, Mapping):
+                    continue
+                op = str(
+                    operation.get("op", operation.get("type", "")) or ""
+                ).casefold()
+                if op not in {"select", "no_match", "defer"}:
+                    continue
+                accepted.append(
+                    {
+                        "op": op,
+                        "set_id": str(
+                            operation.get(
+                                "set_id", operation.get("locator_attempt_id", "")
+                            )
+                            or ""
+                        ),
+                        "occurrence_id": str(
+                            operation.get("occurrence_id", "") or ""
+                        ),
+                    }
+                )
     return tuple(accepted)
 
 
 def _sufficiency_transaction_metrics(
     trace: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    if any(
+        row.get("type") == "occurrence_evidence_declaration" for row in trace
+    ):
+        return _decoupled_evidence_gate_metrics(trace)
     events = tuple(
         row
         for row in trace
@@ -2137,9 +2166,176 @@ def _sufficiency_transaction_metrics(
     }
 
 
+def _decoupled_evidence_gate_metrics(
+    trace: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    evidence_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_evidence_declaration"
+    )
+    gate_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_sufficiency_gate_decision"
+    )
+    resolution_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_gate_resolution_committed"
+    )
+    evidence_op_count = sum(
+        str(operation.get("op", operation.get("type", "")) or "").casefold()
+        == "declare_occurrence_evidence"
+        for decision in trace
+        if decision.get("type") == "reasoner_decision"
+        and decision.get("occurrence_ops_accepted") is not False
+        for operation in tuple(decision.get("occurrence_ops", ()) or ())
+        if isinstance(operation, Mapping)
+    )
+    runtime_terminal_count = sum(
+        str(operation.get("op", operation.get("type", "")) or "").casefold()
+        in {"select", "no_match"}
+        for decision in trace
+        if decision.get("type") == "reasoner_decision"
+        and decision.get("occurrence_ops_accepted") is not False
+        for operation in tuple(decision.get("runtime_occurrence_ops", ()) or ())
+        if isinstance(operation, Mapping)
+    )
+
+    def position(row: Mapping[str, Any]) -> tuple[int, int, str]:
+        return (
+            int(row.get("round", 0) or 0),
+            int(row.get("occurrence_op_index", 0) or 0),
+            str(row.get("set_id", "") or ""),
+        )
+
+    evidence_by_position = {position(row): row for row in evidence_events}
+    gate_by_position = {position(row): row for row in gate_events}
+    resolution_by_position = {position(row): row for row in resolution_events}
+    positions = set(evidence_by_position) | set(gate_by_position) | set(
+        resolution_by_position
+    )
+    ordering_failures = 0
+    transition_failures = 0
+    for event_position in positions:
+        evidence = evidence_by_position.get(event_position)
+        gate = gate_by_position.get(event_position)
+        resolution = resolution_by_position.get(event_position)
+        if evidence is None or gate is None or resolution is None:
+            ordering_failures += 1
+            continue
+        if str(evidence.get("evidence_report_digest", "") or "") != str(
+            gate.get("evidence_report_digest", "") or ""
+        ):
+            ordering_failures += 1
+        expected_op = "select" if gate.get("verdict") == "sufficient" else "no_match"
+        actual_op = str(
+            resolution.get("op", resolution.get("type", "")) or ""
+        ).casefold()
+        if actual_op != expected_op:
+            transition_failures += 1
+        if expected_op == "select" and str(
+            resolution.get("occurrence_id", "") or ""
+        ) != str(gate.get("winner_occurrence_id", "") or ""):
+            transition_failures += 1
+
+    shape_failures = sum(
+        not bool(event.get("rule_blind"))
+        or bool(event.get("model_verdict_present"))
+        or int(event.get("candidate_count", 0) or 0) < 1
+        or not tuple(event.get("constraints", ()) or ())
+        for event in evidence_events
+    ) + sum(
+        event.get("decision_owner") != "runtime"
+        or bool(event.get("model_verdict_present"))
+        or str(event.get("verdict", "")) not in {"sufficient", "insufficient"}
+        for event in gate_events
+    )
+    counts_match = (
+        len(evidence_events)
+        == len(gate_events)
+        == len(resolution_events)
+        == evidence_op_count
+        == runtime_terminal_count
+    )
+    support_complete_values = [
+        bool(event.get("support_complete")) for event in evidence_events
+    ]
+    aggregation_values = [
+        _sufficiency_aggregation_event_valid(event) for event in gate_events
+    ]
+    final_evidence = evidence_events[-1] if evidence_events else {}
+    final_gate = gate_events[-1] if gate_events else {}
+    applicable = bool(evidence_events or gate_events or evidence_op_count)
+    return {
+        "sufficiency_activation_event_count": sum(
+            row.get("type") == "occurrence_sufficiency_activated" for row in trace
+        ),
+        "sufficiency_decision_event_count": len(gate_events),
+        "sufficiency_assessment_op_count": evidence_op_count,
+        "sufficiency_terminal_op_count": runtime_terminal_count,
+        "sufficiency_event_shape_failure_count": shape_failures,
+        "sufficiency_ordering_failure_count": ordering_failures,
+        "sufficiency_verdict_transition_failure_count": transition_failures,
+        "sufficiency_transaction_valid": (
+            counts_match
+            and shape_failures == 0
+            and ordering_failures == 0
+            and transition_failures == 0
+            if applicable
+            else None
+        ),
+        "sufficiency_verdict_normalization_count": 0,
+        "sufficiency_implicit_unknown_support_count": sum(
+            int(event.get("implicit_unknown_support_count", 0) or 0)
+            for event in evidence_events
+        ),
+        "sufficiency_incomplete_support_retry_count": 0,
+        "sufficiency_support_complete": (
+            all(support_complete_values) if support_complete_values else None
+        ),
+        "sufficiency_aggregation_valid": (
+            all(aggregation_values) if aggregation_values else None
+        ),
+        "sufficiency_support_contract": final_evidence.get("support_contract"),
+        "sufficiency_aggregation_rule": final_gate.get("aggregation_rule"),
+        "sufficiency_minimum_support_margin": final_gate.get(
+            "minimum_support_margin"
+        ),
+        "sufficiency_final_verdict": final_gate.get("verdict"),
+        "sufficiency_constraint_count": (
+            len(tuple(final_evidence.get("constraints", ()) or ()))
+            if final_evidence
+            else None
+        ),
+        "sufficiency_sufficient_candidate_count": (
+            len(tuple(final_gate.get("sufficient_occurrence_ids", ()) or ()))
+            if final_gate
+            else None
+        ),
+        "sufficiency_scope_candidate_count": (
+            len(tuple(final_evidence.get("scope_occurrence_ids", ()) or ()))
+            if final_evidence
+            else None
+        ),
+        "sufficiency_out_of_scope_candidate_count": (
+            len(tuple(final_evidence.get("out_of_scope_occurrence_ids", ()) or ()))
+            if final_evidence
+            else None
+        ),
+        "sufficiency_evidence_gate_decoupled": True,
+        "sufficiency_mechanical_resolution_count": len(resolution_events),
+    }
+
+
 def _sufficiency_aggregation_event_valid(event: Mapping[str, Any]) -> bool:
     if (
-        event.get("support_contract") != EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT
+        event.get("support_contract")
+        not in {
+            EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT,
+            LEGACY_SUFFICIENCY_SUPPORT_CONTRACT,
+        }
         or event.get("aggregation_rule") != EXPECTED_SUFFICIENCY_AGGREGATION_RULE
         or int(event.get("minimum_support_margin", 0) or 0)
         != EXPECTED_SUFFICIENCY_SUPPORT_MARGIN
@@ -2434,7 +2630,8 @@ def _accepted_occurrence_op(
         and any(
             str(operation.get("op", operation.get("type", "")) or "").casefold()
             == expected
-            for operation in tuple(row.get("occurrence_ops", ()) or ())
+            for key in ("occurrence_ops", "runtime_occurrence_ops")
+            for operation in tuple(row.get(key, ()) or ())
             if isinstance(operation, Mapping)
         )
         for row in trace
@@ -2457,7 +2654,8 @@ def _selected_locator_pairs(
         for row in trace
         if row.get("type") == "reasoner_decision"
         and row.get("occurrence_ops_accepted") is not False
-        for operation in tuple(row.get("occurrence_ops", ()) or ())
+        for key in ("occurrence_ops", "runtime_occurrence_ops")
+        for operation in tuple(row.get(key, ()) or ())
         if isinstance(operation, Mapping)
         and str(
             operation.get("op", operation.get("type", "")) or ""

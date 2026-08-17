@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -68,26 +69,25 @@ def _packet() -> dict:
 
 
 def _sufficiency_op(*, verdict: str, supported_id: str = "occ_1") -> dict:
-    support = []
+    supported_candidates = []
     for occurrence_id, passage_id in (("occ_1", "p1"), ("occ_2", "p2")):
-        supported = occurrence_id == supported_id
-        support.append(
+        if occurrence_id != supported_id:
+            continue
+        supported_candidates.append(
             {
                 "occurrence_id": occurrence_id,
-                "status": "supported" if supported else "unknown",
-                "evidence_passage_ids": [passage_id] if supported else [],
+                "evidence_passage_ids": [passage_id],
             }
         )
     return {
-        "op": "assess_sufficiency",
+        "op": "declare_occurrence_evidence",
         "set_id": "attempt_sufficiency",
-        "verdict": verdict,
-        "constraints_checked": [
+        "constraints": [
             {
                 "constraint_id": "target_identity",
                 "constraint_type": "identity",
                 "description": "the occurrence depicts the question target",
-                "support": support,
+                "supported_candidates": supported_candidates,
             }
         ],
     }
@@ -669,7 +669,7 @@ def test_a4_requires_constraint_sufficiency_before_selection() -> None:
         "occurrence_sufficiency_assessment_required"
     )
 
-    committed = state.apply_ops(
+    coupled = state.apply_ops(
         (
             _sufficiency_op(verdict="sufficient"),
             {
@@ -679,13 +679,36 @@ def test_a4_requires_constraint_sufficiency_before_selection() -> None:
             },
         )
     )
+    assert coupled["accepted"] is False
+    assert coupled["errors"][0]["code"] == (
+        "occurrence_evidence_transaction_must_be_isolated"
+    )
+
+    committed = state.apply_ops((_sufficiency_op(verdict="sufficient"),))
     assert committed["accepted"] is True
     assert [row["op"] for row in committed["applied"]] == [
-        "assess_sufficiency",
-        "select",
+        "declare_occurrence_evidence"
+    ]
+    assert committed["runtime_occurrence_ops"] == [
+        {
+            "op": "select",
+            "set_id": "attempt_sufficiency",
+            "source": "runtime_sufficiency_gate",
+            "occurrence_id": "occ_1",
+        }
     ]
     assert state.selected_occurrence_ids == ("occ_1",)
     assert state.to_dict()["active_sufficiency"]["verdict"] == "sufficient"
+    assert state.to_dict()["active_evidence_report"]["rule_blind"] is True
+    reasoner_view = state.to_reasoner_dict()
+    encoded_reasoner_view = json.dumps(reasoner_view, sort_keys=True)
+    assert "active_evidence_report" not in reasoner_view
+    assert "active_sufficiency" not in reasoner_view
+    assert "evidence_report" not in encoded_reasoner_view
+    assert "support_count_by_occurrence" not in encoded_reasoner_view
+    assert "minimum_support_margin" not in encoded_reasoner_view
+    assert reasoner_view["active_resolution"] == "selected"
+    assert reasoner_view["selected_occurrence_ids"] == ["occ_1"]
 
 
 def test_a4_insufficient_candidates_can_only_defer_or_no_match() -> None:
@@ -705,38 +728,12 @@ def test_a4_insufficient_candidates_can_only_defer_or_no_match() -> None:
         return value
 
     insufficient = _sufficiency_op(verdict="insufficient", supported_id="")
-    rejected = state().apply_ops(
-        (
-            insufficient,
-            {
-                "op": "select",
-                "set_id": "attempt_sufficiency",
-                "occurrence_id": "occ_1",
-            },
-        )
-    )
-    assert rejected["accepted"] is False
-    assert rejected["errors"][0]["code"] == (
-        "occurrence_sufficiency_forbids_selection"
-    )
-
-    deferred = state()
-    assert deferred.apply_ops(
-        (
-            insufficient,
-            {"op": "defer", "set_id": "attempt_sufficiency"},
-        )
-    )["accepted"] is True
-    assert deferred.search_required is True
-
     no_match = state()
-    assert no_match.apply_ops(
-        (
-            insufficient,
-            {"op": "no_match", "set_id": "attempt_sufficiency"},
-        )
-    )["accepted"] is True
+    result = no_match.apply_ops((insufficient,))
+    assert result["accepted"] is True
+    assert result["runtime_occurrence_ops"][0]["op"] == "no_match"
     assert no_match.resolution_committed is True
+    assert no_match.selected_occurrence_ids == ()
 
 
 def test_a4_supported_constraint_must_bind_visible_candidate_passage() -> None:
@@ -753,7 +750,7 @@ def test_a4_supported_constraint_must_bind_visible_candidate_passage() -> None:
         )
     )
     assessment = _sufficiency_op(verdict="sufficient")
-    assessment["constraints_checked"][0]["support"][0][
+    assessment["constraints"][0]["supported_candidates"][0][
         "evidence_passage_ids"
     ] = ["foreign"]
 
@@ -761,7 +758,40 @@ def test_a4_supported_constraint_must_bind_visible_candidate_passage() -> None:
 
     assert result["accepted"] is False
     assert result["errors"][0]["code"] == (
-        "occurrence_sufficiency_evidence_not_visible"
+        "occurrence_evidence_passage_not_visible"
+    )
+
+
+def test_a4_evidence_contract_rejects_gate_and_status_fields() -> None:
+    def state() -> OccurrenceResolutionStateV2:
+        value = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+        value.sync_sets(
+            (
+                {
+                    "attempt_id": "attempt_sufficiency",
+                    "candidates": [
+                        {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                        {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                    ],
+                },
+            )
+        )
+        return value
+
+    verdict = _sufficiency_op(verdict="sufficient")
+    verdict["verdict"] = "sufficient"
+    rejected_verdict = state().apply_ops((verdict,))
+    assert rejected_verdict["accepted"] is False
+    assert rejected_verdict["errors"][0]["code"] == (
+        "occurrence_evidence_forbidden_gate_field"
+    )
+
+    status = _sufficiency_op(verdict="sufficient")
+    status["constraints"][0]["supported_candidates"][0]["status"] = "supported"
+    rejected_status = state().apply_ops((status,))
+    assert rejected_status["accepted"] is False
+    assert rejected_status["errors"][0]["code"] == (
+        "occurrence_evidence_support_field_invalid"
     )
 
 
@@ -779,50 +809,40 @@ def test_a4_normalizes_omitted_support_to_unknown() -> None:
         )
     )
     assessment = _sufficiency_op(verdict="insufficient")
-    assessment["constraints_checked"][0]["constraint_type"] = "action"
-    assessment["constraints_checked"][0]["support"] = [
-        assessment["constraints_checked"][0]["support"][0]
-    ]
-    assessment["constraints_checked"].append(
+    assessment["constraints"][0]["constraint_type"] = "action"
+    assessment["constraints"].append(
         {
             "constraint_id": "target_action",
             "constraint_type": "action",
             "description": "the occurrence depicts the target action",
-            "support": [dict(assessment["constraints_checked"][0]["support"][0])],
+            "supported_candidates": [
+                dict(assessment["constraints"][0]["supported_candidates"][0])
+            ],
         }
     )
 
-    accepted = state.apply_ops(
-        (
-            assessment,
-            {
-                "op": "select",
-                "set_id": "attempt_sufficiency",
-                "occurrence_id": "occ_1",
-            },
-        )
-    )
+    accepted = state.apply_ops((assessment,))
 
     assert accepted["accepted"] is True
     normalized = accepted["applied"][0]
-    assert normalized["declared_verdict"] == "insufficient"
-    assert normalized["verdict"] == "sufficient"
-    assert normalized["verdict_normalized"] is True
     assert normalized["implicit_unknown_support_count"] == 2
     assert normalized["support_complete"] is True
     assert normalized["support_contract"] == (
-        "sparse_supported_rows_omission_is_unknown"
+        "rule_blind_sparse_positive_evidence_v1"
     )
-    assert normalized["aggregation_rule"] == "unique_supported_count_margin"
-    assert normalized["minimum_support_margin"] == 1
-    assert normalized["support_count_by_occurrence"] == {"occ_1": 2, "occ_2": 0}
+    assert normalized["rule_blind"] is True
+    assert normalized["model_verdict_present"] is False
+    assert "verdict" not in normalized
+    assert "aggregation_rule" not in normalized
     assert normalized["scope_occurrence_ids"] == ["occ_1", "occ_2"]
     assert normalized["out_of_scope_occurrence_ids"] == []
-    assert normalized["constraints_checked"][0]["support"][1] == {
-        "occurrence_id": "occ_2",
-        "status": "unknown",
-        "evidence_passage_ids": [],
-    }
+    assert normalized["constraints"][0]["implicit_unknown_occurrence_ids"] == [
+        "occ_2"
+    ]
+    gate = accepted["gate_decision"]
+    assert gate["decision_owner"] == "runtime"
+    assert gate["support_count_by_occurrence"] == {"occ_1": 2, "occ_2": 0}
+    assert gate["verdict"] == "sufficient"
 
 
 def test_a4_unique_supported_count_tie_is_insufficient() -> None:
@@ -839,26 +859,22 @@ def test_a4_unique_supported_count_tie_is_insufficient() -> None:
         )
     )
     assessment = _sufficiency_op(verdict="sufficient")
-    assessment["constraints_checked"][0]["support"][1] = {
+    assessment["constraints"][0]["supported_candidates"].append(
+        {
         "occurrence_id": "occ_2",
-        "status": "supported",
         "evidence_passage_ids": ["p2"],
-    }
-
-    result = state.apply_ops(
-        (
-            assessment,
-            {"op": "no_match", "set_id": "attempt_sufficiency"},
-        )
+        }
     )
 
+    result = state.apply_ops((assessment,))
+
     assert result["accepted"] is True
-    normalized = result["applied"][0]
-    assert normalized["verdict"] == "insufficient"
-    assert normalized["verdict_normalized"] is True
-    assert normalized["sufficient_occurrence_ids"] == []
-    assert normalized["best_support_count"] == 1
-    assert normalized["runner_up_support_count"] == 1
+    gate = result["gate_decision"]
+    assert gate["verdict"] == "insufficient"
+    assert gate["sufficient_occurrence_ids"] == []
+    assert gate["best_support_count"] == 1
+    assert gate["runner_up_support_count"] == 1
+    assert result["runtime_occurrence_ops"][0]["op"] == "no_match"
 
 
 def test_a4_sufficiency_scope_is_top_five_and_out_of_scope_is_not_selectable() -> None:
@@ -892,57 +908,44 @@ def test_a4_sufficiency_scope_is_top_five_and_out_of_scope_is_not_selectable() -
         "occ_7",
     ]
 
-    support = [
+    supported_candidates = [
         {
-            "occurrence_id": f"occ_{index}",
-            "status": "supported" if index == 1 else "unknown",
-            "evidence_passage_ids": ["p1"] if index == 1 else [],
+            "occurrence_id": "occ_1",
+            "evidence_passage_ids": ["p1"],
         }
-        for index in range(1, 6)
     ]
     assessment = {
-        "op": "assess_sufficiency",
+        "op": "declare_occurrence_evidence",
         "set_id": "attempt_sufficiency",
-        "verdict": "sufficient",
-        "constraints_checked": [
+        "constraints": [
             {
                 "constraint_id": "identity",
                 "constraint_type": "identity",
                 "description": "question target",
-                "support": support,
+                "supported_candidates": supported_candidates,
             }
         ],
     }
+    out_of_scope = {**assessment}
+    out_of_scope["constraints"] = [dict(assessment["constraints"][0])]
+    out_of_scope["constraints"][0]["supported_candidates"] = [
+        {"occurrence_id": "occ_6", "evidence_passage_ids": ["p6"]}
+    ]
     rejected = state.apply_ops(
-        (
-            assessment,
-            {
-                "op": "select",
-                "set_id": "attempt_sufficiency",
-                "occurrence_id": "occ_6",
-            },
-        )
+        (out_of_scope,)
     )
     assert rejected["accepted"] is False
     assert rejected["errors"][0]["code"] == (
-        "occurrence_sufficiency_candidate_not_supported"
+        "occurrence_evidence_support_candidate_invalid"
     )
 
-    accepted = state.apply_ops(
-        (
-            assessment,
-            {
-                "op": "select",
-                "set_id": "attempt_sufficiency",
-                "occurrence_id": "occ_1",
-            },
-        )
-    )
+    accepted = state.apply_ops((assessment,))
     assert accepted["accepted"] is True
     assert accepted["applied"][0]["out_of_scope_occurrence_ids"] == [
         "occ_6",
         "occ_7",
     ]
+    assert accepted["runtime_occurrence_ops"][0]["occurrence_id"] == "occ_1"
 
 
 def test_a3_requires_selected_locator_binding_before_answer() -> None:
@@ -1102,17 +1105,16 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
             },
         }
     )
-    assert (
-        "Retrieval rank or semantic similarity alone is not sufficient"
-        in sufficiency_prompt
-    )
+    assert "isolated declare_occurrence_evidence" in sufficiency_prompt
     assert "question-critical constraints" in sufficiency_prompt
-    assert "assess_sufficiency" in sufficiency_prompt
+    assert "declare_occurrence_evidence" in sufficiency_prompt
     assert "evidence_passage_ids" in sufficiency_prompt
     assert "sufficiency_scope_occurrence_ids" in sufficiency_prompt
-    assert "Omit unsupported, partial, unknown" in sufficiency_prompt
-    assert "unique highest count" in sufficiency_prompt
-    assert "omitted in-scope rows are mechanically" in sufficiency_prompt
+    assert "Omit every candidate without direct visible support" in sufficiency_prompt
+    assert "Do not output a verdict" in sufficiency_prompt
+    assert "unique highest count" not in sufficiency_prompt
+    assert "runner-up" not in sufficiency_prompt
+    assert "margin" not in sufficiency_prompt
 
     actionable_prompt = _frozen_reasoner_prompt(
         {

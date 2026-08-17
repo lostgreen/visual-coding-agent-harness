@@ -454,55 +454,23 @@ def test_occurrence_retry_feedback_rejects_contradictory_gate_state() -> None:
     ]
 
 
-def test_a4_retry_feedback_uses_persisted_insufficient_verdict() -> None:
-    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
-    state.sync_sets(
-        (
-            {
-                "attempt_id": "attempt_sufficiency",
-                "candidates": [
-                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
-                ],
-            },
-        )
-    )
-    assert state.apply_ops(
-        (
-            {
-                "op": "assess_sufficiency",
-                "set_id": "attempt_sufficiency",
-                "verdict": "insufficient",
-                "constraints_checked": [
-                    {
-                        "constraint_id": "identity",
-                        "constraint_type": "identity",
-                        "description": "target identity",
-                        "support": [
-                            {
-                                "occurrence_id": "occ_1",
-                                "status": "unknown",
-                                "evidence_passage_ids": [],
-                            }
-                        ],
-                    }
-                ],
-            },
-        )
-    )["accepted"] is True
-
+def test_a4_retry_feedback_keeps_evidence_and_gate_decoupled() -> None:
     feedback = _control_retry_feedback(
-        ({"code": "occurrence_sufficiency_already_assessed"},),
+        ({"code": "occurrence_evidence_transaction_must_be_isolated"},),
         revision=2,
         previous_feedback={},
-        occurrence_state=state,
         force_finalize=True,
     )
 
-    assert "Do not answer, reassess, select, or defer" in feedback["instruction"]
-    assert "exactly one no_match" in feedback["instruction"]
+    instruction = feedback["instruction"]
+    assert "exactly one isolated declare_occurrence_evidence" in instruction
+    assert "select, defer, or declare a verdict" in instruction
+    assert "performs the gate decision" in instruction
+    assert "runner-up" not in instruction
+    assert "margin" not in instruction
 
 
-def test_a4_finalization_retry_forbids_defer() -> None:
+def test_a4_finalization_retry_does_not_request_resolution_operation() -> None:
     feedback = _control_retry_feedback(
         ({"code": "occurrence_sufficiency_resolution_required"},),
         revision=2,
@@ -510,8 +478,9 @@ def test_a4_finalization_retry_forbids_defer() -> None:
         force_finalize=True,
     )
 
-    assert "select or no_match" in feedback["instruction"]
-    assert "Do not use defer during finalization" in feedback["instruction"]
+    assert "declare_occurrence_evidence" in feedback["instruction"]
+    assert "Runtime validates and persists" in feedback["instruction"]
+    assert "runner-up" not in feedback["instruction"]
 
 
 def test_a4_retry_explains_sparse_support_contract() -> None:
@@ -523,10 +492,11 @@ def test_a4_retry_explains_sparse_support_contract() -> None:
     )
 
     instruction = feedback["instruction"]
-    assert "Report a supported row only" in instruction
-    assert "normalizes omissions to unknown" in instruction
-    assert "supported-constraint count leads the runner-up" in instruction
-    assert "select or no_match" in instruction
+    assert "supported_candidates" in instruction
+    assert "omit every other candidate" in instruction
+    assert "declare a verdict" in instruction
+    assert "supported-constraint count" not in instruction
+    assert "runner-up" not in instruction
 
 
 def test_occurrence_locator_terminal_outcomes_are_explicit_and_exclusive() -> None:
@@ -1148,33 +1118,21 @@ def test_a4_orders_sufficiency_selection_locator_and_answer(
                 action="update_workspace",
                 occurrence_ops=(
                     {
-                        "op": "assess_sufficiency",
+                        "op": "declare_occurrence_evidence",
                         "set_id": set_id,
-                        "verdict": "sufficient",
-                        "constraints_checked": [
+                        "constraints": [
                             {
                                 "constraint_id": "target_identity",
                                 "constraint_type": "identity",
                                 "description": "candidate depicts the target",
-                                "support": [
-                                    {
-                                        "occurrence_id": "occ_1",
-                                        "status": "unknown",
-                                        "evidence_passage_ids": [],
-                                    },
+                                "supported_candidates": [
                                     {
                                         "occurrence_id": "occ_2",
-                                        "status": "supported",
                                         "evidence_passage_ids": ["p2"],
                                     },
                                 ],
                             }
                         ],
-                    },
-                    {
-                        "op": "select",
-                        "set_id": set_id,
-                        "occurrence_id": "occ_2",
                     },
                 ),
             ),
@@ -1207,23 +1165,41 @@ def test_a4_orders_sufficiency_selection_locator_and_answer(
     decisions = [
         row for row in result.trace if row.get("type") == "reasoner_decision"
     ]
-    sufficiency = [
+    evidence = [
         row
         for row in result.trace
-        if row.get("type") == "occurrence_sufficiency_decision"
+        if row.get("type") == "occurrence_evidence_declaration"
     ]
-    assert len(sufficiency) == 1
-    assert sufficiency[0]["verdict"] == "sufficient"
-    assert sufficiency[0]["sufficient_occurrence_ids"] == ["occ_2"]
-    assert sufficiency[0]["support_contract"] == (
-        "sparse_supported_rows_omission_is_unknown"
+    gates = [
+        row
+        for row in result.trace
+        if row.get("type") == "occurrence_sufficiency_gate_decision"
+    ]
+    resolutions = [
+        row
+        for row in result.trace
+        if row.get("type") == "occurrence_gate_resolution_committed"
+    ]
+    assert len(evidence) == len(gates) == len(resolutions) == 1
+    assert evidence[0]["rule_blind"] is True
+    assert evidence[0]["model_verdict_present"] is False
+    assert gates[0]["verdict"] == "sufficient"
+    assert gates[0]["sufficient_occurrence_ids"] == ["occ_2"]
+    assert gates[0]["support_contract"] == (
+        "rule_blind_sparse_positive_evidence_v1"
     )
-    assert sufficiency[0]["aggregation_rule"] == "unique_supported_count_margin"
-    assert sufficiency[0]["support_count_by_occurrence"] == {
+    assert gates[0]["aggregation_rule"] == "unique_supported_count_margin"
+    assert gates[0]["support_count_by_occurrence"] == {
         "occ_1": 0,
         "occ_2": 1,
     }
+    assert gates[0]["evidence_report_digest"] == evidence[0][
+        "evidence_report_digest"
+    ]
+    assert resolutions[0]["op"] == "select"
+    assert resolutions[0]["occurrence_id"] == "occ_2"
     assert decisions[1]["occurrence_selection_committed"] is True
+    assert decisions[1]["runtime_occurrence_ops"][0]["op"] == "select"
     assert decisions[2]["action"] == "investigate"
     assert decisions[3]["action"] == "answer"
     assert result.answer_present is True

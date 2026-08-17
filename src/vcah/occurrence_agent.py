@@ -8,9 +8,11 @@ from typing import Any, Mapping, Sequence
 from vcah.caption_schema import stable_digest
 from vcah.occurrence_sufficiency import (
     DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT,
+    OccurrenceEvidenceReport,
     OccurrenceSufficiencyDecision,
     SUFFICIENCY_OPERATION,
-    validate_sufficiency_operation,
+    aggregate_occurrence_evidence,
+    validate_evidence_operation,
 )
 
 
@@ -223,6 +225,7 @@ class OccurrenceSetStateV2:
     selected_occurrence_ids: tuple[str, ...] = ()
     resolution: str = "unresolved"
     lifecycle: str = "active"
+    evidence_report: OccurrenceEvidenceReport | None = None
     sufficiency: OccurrenceSufficiencyDecision | None = None
     revision: int = 0
 
@@ -256,6 +259,7 @@ class OccurrenceSetStateV2:
                 normalized[occurrence_id] = dict(raw_candidate)
         changed = target != self.semantic_target or normalized != self.candidates
         if changed:
+            self.evidence_report = None
             self.sufficiency = None
         self.semantic_target = target
         self.candidates = normalized
@@ -298,6 +302,11 @@ class OccurrenceSetStateV2:
             ],
             "viable_occurrence_ids": list(self.viable_occurrence_ids),
             "selected_occurrence_ids": list(self.selected_occurrence_ids),
+            "evidence_report": (
+                self.evidence_report.to_dict()
+                if self.evidence_report is not None
+                else None
+            ),
             "sufficiency": (
                 self.sufficiency.to_dict() if self.sufficiency is not None else None
             ),
@@ -445,6 +454,22 @@ class OccurrenceResolutionStateV2:
     def validate_ops(
         self, operations: Sequence[Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
+        operation_names = tuple(
+            str(operation.get("op", operation.get("type", "")) or "")
+            .strip()
+            .casefold()
+            for operation in operations
+            if isinstance(operation, Mapping)
+        )
+        if SUFFICIENCY_OPERATION in operation_names and len(operation_names) != 1:
+            return [
+                {
+                    "code": "occurrence_evidence_transaction_must_be_isolated",
+                    "occurrence_op_index": operation_names.index(
+                        SUFFICIENCY_OPERATION
+                    ),
+                }
+            ]
         shadow = self._clone()
         allow_resolution_transaction = not shadow.resolution_committed
         errors: list[dict[str, Any]] = []
@@ -469,6 +494,9 @@ class OccurrenceResolutionStateV2:
             return {"accepted": False, "errors": errors, "applied": []}
         allow_resolution_transaction = not self.resolution_committed
         applied: list[dict[str, Any]] = []
+        runtime_occurrence_ops: list[dict[str, Any]] = []
+        evidence_report: dict[str, Any] | None = None
+        gate_decision: dict[str, Any] | None = None
         for index, operation in enumerate(normalized):
             error = self._apply_one(
                 operation,
@@ -481,13 +509,36 @@ class OccurrenceResolutionStateV2:
             ).strip().casefold()
             if operation_name == SUFFICIENCY_OPERATION:
                 active = self.active_set
-                assert active is not None and active.sufficiency is not None
-                applied.append(active.sufficiency.to_operation())
+                assert (
+                    active is not None
+                    and active.evidence_report is not None
+                    and active.sufficiency is not None
+                )
+                evidence_report = active.evidence_report.to_dict()
+                gate_decision = active.sufficiency.to_dict()
+                applied.append(active.evidence_report.to_operation())
+                runtime_op = {
+                    "op": active.sufficiency.resolution_op,
+                    "set_id": active.set_id,
+                    "source": "runtime_sufficiency_gate",
+                }
+                if active.sufficiency.winner_occurrence_id:
+                    runtime_op["occurrence_id"] = (
+                        active.sufficiency.winner_occurrence_id
+                    )
+                runtime_occurrence_ops.append(runtime_op)
             else:
                 applied.append(_normalized_scoped_occurrence_op(operation))
         if applied:
             self.revision += 1
-        return {"accepted": True, "errors": [], "applied": applied}
+        return {
+            "accepted": True,
+            "errors": [],
+            "applied": applied,
+            "runtime_occurrence_ops": runtime_occurrence_ops,
+            "evidence_report": evidence_report,
+            "gate_decision": gate_decision,
+        }
 
     def active_locators(self) -> tuple[dict[str, Any], ...]:
         occurrence_set = self.active_set
@@ -552,6 +603,11 @@ class OccurrenceResolutionStateV2:
             "sufficiency_out_of_scope_occurrence_ids": list(
                 self.sufficiency_out_of_scope_occurrence_ids
             ),
+            "active_evidence_report": (
+                active.evidence_report.to_dict()
+                if active is not None and active.evidence_report is not None
+                else None
+            ),
             "active_sufficiency": (
                 active.sufficiency.to_dict()
                 if active is not None and active.sufficiency is not None
@@ -562,6 +618,16 @@ class OccurrenceResolutionStateV2:
             "retired_locators": list(self.retired_locators()),
             "sets": [occurrence_set.to_dict() for occurrence_set in self.sets.values()],
         }
+
+    def to_reasoner_dict(self) -> dict[str, Any]:
+        """Expose lifecycle state without leaking evidence or gate internals."""
+        payload = self.to_dict()
+        payload.pop("active_evidence_report", None)
+        payload.pop("active_sufficiency", None)
+        for occurrence_set in payload["sets"]:
+            occurrence_set.pop("evidence_report", None)
+            occurrence_set.pop("sufficiency", None)
+        return payload
 
     def save(self, path: Path) -> None:
         target = Path(path)
@@ -587,6 +653,7 @@ class OccurrenceResolutionStateV2:
                     selected_occurrence_ids=value.selected_occurrence_ids,
                     resolution=value.resolution,
                     lifecycle=value.lifecycle,
+                    evidence_report=value.evidence_report,
                     sufficiency=value.sufficiency,
                     revision=value.revision,
                 )
@@ -656,7 +723,10 @@ class OccurrenceResolutionStateV2:
                     "occurrence_op_index": index,
                     "set_id": set_id,
                 }
-            if occurrence_set.sufficiency is not None:
+            if (
+                occurrence_set.evidence_report is not None
+                or occurrence_set.sufficiency is not None
+            ):
                 return {
                     "code": "occurrence_sufficiency_already_assessed",
                     "occurrence_op_index": index,
@@ -668,7 +738,7 @@ class OccurrenceResolutionStateV2:
                         occurrence_set.sufficiency.sufficient_occurrence_ids
                     ),
                 }
-            decision, errors = validate_sufficiency_operation(
+            report, errors = validate_evidence_operation(
                 operation,
                 set_id=set_id,
                 candidates=occurrence_set.candidates,
@@ -680,10 +750,22 @@ class OccurrenceResolutionStateV2:
             )
             if errors:
                 return errors[0]
-            assert decision is not None
+            assert report is not None
+            decision = aggregate_occurrence_evidence(report)
+            occurrence_set.evidence_report = report
             occurrence_set.sufficiency = decision
-            if occurrence_set.resolution == "deferred":
-                occurrence_set.resolution = "unresolved"
+            for candidate_id, status in tuple(occurrence_set.states.items()):
+                if status == "selected":
+                    occurrence_set.states[candidate_id] = "active"
+            occurrence_set.selected_occurrence_ids = ()
+            if decision.winner_occurrence_id:
+                occurrence_set.states[decision.winner_occurrence_id] = "selected"
+                occurrence_set.selected_occurrence_ids = (
+                    decision.winner_occurrence_id,
+                )
+                occurrence_set.resolution = "selected"
+            else:
+                occurrence_set.resolution = "no_match"
             occurrence_set.revision += 1
             return None
         if op in {"defer", "no_match"}:
@@ -790,6 +872,7 @@ class OccurrenceResolutionStateV2:
             occurrence_set.selected_occurrence_ids = tuple(selected)
             occurrence_set.resolution = "selected"
         elif op == "eliminate":
+            occurrence_set.evidence_report = None
             occurrence_set.sufficiency = None
             occurrence_set.states[occurrence_id] = "eliminated"
             occurrence_set.selected_occurrence_ids = tuple(
@@ -798,6 +881,7 @@ class OccurrenceResolutionStateV2:
             if not occurrence_set.selected_occurrence_ids:
                 occurrence_set.resolution = "unresolved"
         elif op == "reopen":
+            occurrence_set.evidence_report = None
             occurrence_set.sufficiency = None
             occurrence_set.states[occurrence_id] = "active"
             occurrence_set.selected_occurrence_ids = tuple(
@@ -806,6 +890,7 @@ class OccurrenceResolutionStateV2:
             occurrence_set.resolution = "unresolved"
         else:
             if op == "keep":
+                occurrence_set.evidence_report = None
                 occurrence_set.sufficiency = None
             if current != "selected":
                 occurrence_set.states[occurrence_id] = "active"

@@ -2096,24 +2096,24 @@ def _occurrence_resolution_prompt_rule(
         sufficiency_rule = ""
         if state.get("sufficiency_enabled"):
             sufficiency_rule = (
-                "Retrieval rank or semantic similarity alone is not sufficient for selection. A candidate becomes "
-                "selectable only if it satisfies the question-critical constraints. Before select, defer, or no_match, "
-                "place one assess_sufficiency operation first in the same occurrence_ops transaction. Derive one to six "
-                "concise critical constraints from the question using only identity, event, relation, temporal, state, "
-                "attribute, object, location, order, or outcome types. Report a supported row only when one or more visible "
-                "evidence_passage_ids from that candidate directly support the constraint. Omit unsupported, partial, unknown, "
-                "or contradicted rows; Runtime normalizes every omission to unknown, which contributes no positive support. "
-                "Candidates listed in sufficiency_out_of_scope_occurrence_ids need no rows and cannot be selected from this "
-                "assessment. Runtime derives verdict sufficient only when one in-scope candidate has a unique highest count "
-                "of supported constraints and leads the runner-up by at least one; select only that candidate. Otherwise use "
-                "verdict insufficient followed by "
-                "defer for refined search or no_match. Runtime checks structure and visible foreign keys only; the Reasoner "
-                "remains solely responsible for defining and judging the constraints. "
+                "Before resolution, submit exactly one isolated declare_occurrence_evidence operation. Derive one to six "
+                "concise question-critical constraints using only action, identity, event, relation, temporal, state, "
+                "attribute, object, location, order, or outcome types. For each constraint, list a candidate under "
+                "supported_candidates only when one or more visible evidence_passage_ids directly support that candidate. "
+                "Omit every candidate without direct visible support. Candidates listed in "
+                "sufficiency_out_of_scope_occurrence_ids need no evidence rows. Do not output a verdict and do not select, "
+                "defer, or use no_match in the evidence transaction. Runtime validates and persists the evidence report, "
+                "then performs the gate decision and scoped resolution separately. "
+            )
+        if state.get("sufficiency_enabled"):
+            return protocol + (
+                "is one Caption locator attempt for one semantic target. "
+                + sufficiency_rule
+                + "The evidence report is locator-only and never answer support.\n"
             )
         return protocol + (
             "is one Caption locator attempt for one semantic target. "
-            + sufficiency_rule
-            + "Never compare, eliminate, or select candidates "
+            "Never compare, eliminate, or select candidates "
             "across different sets. Use top-level occurrence_ops with an explicit set_id. Candidate operations are "
             '[{"op":"keep|eliminate|select|reopen","set_id":"attempt_...",'
             '"occurrence_id":"occ_..."}]. '
@@ -2299,9 +2299,9 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         if occurrence_state_version == "OccurrenceResolutionStateV2":
             if occurrence_sufficiency_required:
                 action_rule = (
-                    "Do not answer in this decision. Investigation is closed. First assess question-critical sufficiency, "
-                    "then in the same occurrence_ops transaction either select only mechanically supported candidates or "
-                    "commit no_match after an insufficient verdict. A separate answer decision will follow."
+                    "Do not answer in this decision. Investigation is closed. Return only an isolated rule-blind evidence "
+                    "declaration for the active set. Runtime will persist it and commit the scoped resolution mechanically; "
+                    "a separate actionability or answer decision will follow."
                 )
             elif occurrence_sufficiency_verdict == "sufficient":
                 action_rule = (
@@ -2327,9 +2327,9 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         if occurrence_state_version == "OccurrenceResolutionStateV2":
             if occurrence_sufficiency_required:
                 action_rule = (
-                    "Do not answer while the active occurrence set is unresolved. Assess question-critical constraints "
-                    "before any select, defer, or no_match; the assessment and resolution may be one ordered occurrence_ops "
-                    "transaction. Investigate first only when the visible locator evidence cannot support that assessment."
+                    "Do not answer while the active occurrence set is unresolved. Return only a rule-blind evidence "
+                    "declaration for the active set, with no verdict or resolution operation. Investigate first only when "
+                    "the visible locator evidence cannot support that declaration."
                 )
             elif occurrence_sufficiency_verdict == "sufficient":
                 action_rule = (
@@ -2367,18 +2367,16 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     if occurrence_state_version == "OccurrenceResolutionStateV2":
         if occurrence_sufficiency_enabled:
             occurrence_selection_schema = (
-                'Sufficiency resolution schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
-                '"occurrence_ops":[{"op":"assess_sufficiency","set_id":"attempt_visible_id",'
-                '"verdict":"sufficient|insufficient","constraints_checked":[{"constraint_id":"identity",'
+                'Evidence declaration schema: {"action":"update_workspace","answer":"","workspace_ops":[],'
+                '"occurrence_ops":[{"op":"declare_occurrence_evidence","set_id":"attempt_visible_id",'
+                '"constraints":[{"constraint_id":"identity",'
                 '"constraint_type":"identity","description":"question-critical requirement",'
-                '"support":[{"occurrence_id":"occ_visible_id","status":"supported",'
-                '"evidence_passage_ids":["visible_passage_id"]}]}]},{"op":"select|defer|no_match",'
-                '"set_id":"attempt_visible_id","occurrence_id":"occ_visible_id only for select"}]}. '
+                '"supported_candidates":[{"occurrence_id":"occ_visible_id",'
+                '"evidence_passage_ids":["visible_passage_id"]}]}]}]}. '
                 'Constraint types are action, identity, event, relation, temporal, state, attribute, object, location, '
-                'order, or outcome. Include only directly evidenced supported rows; omitted in-scope rows are mechanically '
-                'unknown and add no support. sufficiency_out_of_scope_occurrence_ids need no rows and are not selectable. '
-                'Runtime requires a unique supported-count leader with margin at least one; finish '
-                'finalization with select or no_match, never defer.\n'
+                'order, or outcome. Include only directly evidenced supported candidates; omit all others. '
+                'sufficiency_out_of_scope_occurrence_ids need no rows. Do not include verdict, select, defer, or no_match; '
+                'Runtime owns the later gate and resolution.\n'
             )
         else:
             occurrence_selection_schema = (
