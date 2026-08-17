@@ -51,6 +51,7 @@ MAX_CONSTRAINT_DESCRIPTION_CHARS = 240
 MAX_EVIDENCE_PASSAGES = 3
 DEFAULT_SUFFICIENCY_CANDIDATE_LIMIT = 5
 EVIDENCE_SUPPORT_CONTRACT = "rule_blind_sparse_positive_evidence_v1"
+SIGNED_EVIDENCE_SHADOW_CONTRACT = "rule_blind_sparse_signed_evidence_shadow_v1"
 SUFFICIENCY_SUPPORT_CONTRACT = EVIDENCE_SUPPORT_CONTRACT
 SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
 MIN_SUFFICIENCY_SUPPORT_MARGIN = 1
@@ -74,7 +75,13 @@ _EVIDENCE_OPERATION_FIELDS = frozenset(
     {"op", "type", "set_id", "locator_attempt_id", "constraints"}
 )
 _EVIDENCE_CONSTRAINT_FIELDS = frozenset(
-    {"constraint_id", "constraint_type", "description", "supported_candidates"}
+    {
+        "constraint_id",
+        "constraint_type",
+        "description",
+        "supported_candidates",
+        "contradicted_candidates",
+    }
 )
 _EVIDENCE_SUPPORT_FIELDS = frozenset(
     {"occurrence_id", "evidence_passage_ids"}
@@ -117,6 +124,20 @@ class OccurrenceEvidenceDeclaration:
                         )
                         if isinstance(row, Mapping)
                     ],
+                    "contradicted_candidates": [
+                        {
+                            "occurrence_id": str(
+                                row.get("occurrence_id", "") or ""
+                            ),
+                            "evidence_passage_ids": list(
+                                row.get("evidence_passage_ids", ()) or ()
+                            ),
+                        }
+                        for row in tuple(
+                            constraint.get("contradicted_candidates", ()) or ()
+                        )
+                        if isinstance(row, Mapping)
+                    ],
                 }
                 for constraint in self.constraints
             ],
@@ -128,13 +149,14 @@ class OccurrenceEvidenceReport:
     set_id: str
     constraints: tuple[dict[str, Any], ...]
     implicit_unknown_support_count: int
+    implicit_unknown_signed_evidence_count: int
     scope_occurrence_ids: tuple[str, ...]
     out_of_scope_occurrence_ids: tuple[str, ...]
     validation_warnings: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "OccurrenceEvidenceReportV1",
+            "schema_version": "OccurrenceEvidenceReportV2",
             "set_id": self.set_id,
             "constraints": [
                 {
@@ -145,10 +167,19 @@ class OccurrenceEvidenceReport:
                             constraint.get("supported_candidates", ()) or ()
                         )
                     ],
+                    "contradicted_candidates": [
+                        dict(row)
+                        for row in tuple(
+                            constraint.get("contradicted_candidates", ()) or ()
+                        )
+                    ],
                 }
                 for constraint in self.constraints
             ],
             "implicit_unknown_support_count": self.implicit_unknown_support_count,
+            "implicit_unknown_signed_evidence_count": (
+                self.implicit_unknown_signed_evidence_count
+            ),
             "scope_occurrence_ids": list(self.scope_occurrence_ids),
             "out_of_scope_occurrence_ids": list(
                 self.out_of_scope_occurrence_ids
@@ -161,8 +192,16 @@ class OccurrenceEvidenceReport:
                 == "occurrence_evidence_support_out_of_scope_dropped"
                 for warning in self.validation_warnings
             ),
+            "dropped_out_of_scope_contradiction_count": sum(
+                str(warning.get("code", "") or "")
+                == "occurrence_evidence_contradiction_out_of_scope_dropped"
+                for warning in self.validation_warnings
+            ),
             "support_complete": True,
             "support_contract": EVIDENCE_SUPPORT_CONTRACT,
+            "signed_evidence_contract": SIGNED_EVIDENCE_SHADOW_CONTRACT,
+            "signed_evidence_shadow": True,
+            "contradiction_affects_gate": False,
             "rule_blind": True,
             "model_verdict_present": False,
         }
@@ -353,6 +392,8 @@ def validate_evidence_operation(
         if not isinstance(raw_rows, Sequence) or isinstance(raw_rows, (str, bytes)):
             raw_rows = ()
         supported_rows: list[dict[str, Any]] = []
+        contradicted_rows: list[dict[str, Any]] = []
+        supported_occurrence_ids: set[str] = set()
         seen_occurrence_ids: set[str] = set()
         for support_index, raw_row in enumerate(raw_rows):
             if not isinstance(raw_row, Mapping):
@@ -455,12 +496,125 @@ def validate_evidence_operation(
                     "evidence_passage_ids": list(evidence_ids),
                 }
             )
+            supported_occurrence_ids.add(occurrence_id)
+        raw_contradicted_rows = raw_constraint.get("contradicted_candidates")
+        if not isinstance(raw_contradicted_rows, Sequence) or isinstance(
+            raw_contradicted_rows, (str, bytes)
+        ):
+            raw_contradicted_rows = ()
+        for contradiction_index, raw_row in enumerate(raw_contradicted_rows):
+            if not isinstance(raw_row, Mapping):
+                errors.append(
+                    _error(
+                        "occurrence_evidence_contradiction_must_be_object",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        contradiction_index=contradiction_index,
+                    )
+                )
+                continue
+            occurrence_id = str(raw_row.get("occurrence_id", "") or "").strip()
+            unexpected_contradiction_fields = sorted(
+                set(raw_row) - _EVIDENCE_SUPPORT_FIELDS
+            )
+            if unexpected_contradiction_fields:
+                errors.append(
+                    _error(
+                        "occurrence_evidence_contradiction_field_invalid",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        contradiction_index=contradiction_index,
+                        unexpected_fields=unexpected_contradiction_fields,
+                    )
+                )
+            if occurrence_id in seen_occurrence_ids:
+                errors.append(
+                    _error(
+                        "occurrence_evidence_signed_candidate_conflict",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            if occurrence_id in out_of_scope_set:
+                warnings.append(
+                    _error(
+                        "occurrence_evidence_contradiction_out_of_scope_dropped",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        contradiction_index=contradiction_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            if occurrence_id not in viable_set:
+                errors.append(
+                    _error(
+                        "occurrence_evidence_contradiction_candidate_invalid",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        contradiction_index=contradiction_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            seen_occurrence_ids.add(occurrence_id)
+            evidence_ids = _normalized_strings(
+                raw_row.get("evidence_passage_ids"), limit=MAX_EVIDENCE_PASSAGES
+            )
+            visible_passage_ids = {
+                str(value)
+                for value in tuple(
+                    candidates.get(occurrence_id, {}).get("passage_ids", ()) or ()
+                )
+                if str(value)
+            }
+            if any(value not in visible_passage_ids for value in evidence_ids):
+                errors.append(
+                    _error(
+                        "occurrence_evidence_contradiction_passage_not_visible",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            if not evidence_ids:
+                errors.append(
+                    _error(
+                        "occurrence_evidence_contradiction_requires_passage",
+                        operation_index,
+                        set_id=set_id,
+                        constraint_index=constraint_index,
+                        occurrence_id=occurrence_id,
+                    )
+                )
+                continue
+            contradicted_rows.append(
+                {
+                    "occurrence_id": occurrence_id,
+                    "evidence_passage_ids": list(evidence_ids),
+                }
+            )
         normalized_constraints.append(
             {
                 "constraint_id": constraint_id,
                 "constraint_type": constraint_type,
                 "description": description,
                 "supported_candidates": supported_rows,
+                "contradicted_candidates": contradicted_rows,
+                "implicit_unknown_support_occurrence_ids": [
+                    occurrence_id
+                    for occurrence_id in viable_ids
+                    if occurrence_id not in supported_occurrence_ids
+                ],
                 "implicit_unknown_occurrence_ids": [
                     occurrence_id
                     for occurrence_id in viable_ids
@@ -476,6 +630,17 @@ def validate_evidence_operation(
             set_id=set_id,
             constraints=tuple(normalized_constraints),
             implicit_unknown_support_count=sum(
+                len(
+                    tuple(
+                        row.get(
+                            "implicit_unknown_support_occurrence_ids", ()
+                        )
+                        or ()
+                    )
+                )
+                for row in normalized_constraints
+            ),
+            implicit_unknown_signed_evidence_count=sum(
                 len(tuple(row.get("implicit_unknown_occurrence_ids", ()) or ()))
                 for row in normalized_constraints
             ),

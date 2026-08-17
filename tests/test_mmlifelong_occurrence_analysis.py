@@ -1212,6 +1212,102 @@ def test_decoupled_evidence_gate_audit_requires_digest_linked_mechanical_resolut
     assert invalid["ordering_failure_count"] == 1
 
 
+def test_signed_evidence_audit_proves_contradiction_is_shadow_only() -> None:
+    evidence = {
+        "type": "occurrence_evidence_declaration",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set_1",
+        "candidate_count": 2,
+        "rule_blind": True,
+        "model_verdict_present": False,
+        "evidence_report_digest": "signed-digest",
+        "support_complete": True,
+        "support_contract": "rule_blind_sparse_positive_evidence_v1",
+        "signed_evidence_contract": (
+            "rule_blind_sparse_signed_evidence_shadow_v1"
+        ),
+        "signed_evidence_shadow": True,
+        "contradiction_affects_gate": False,
+        "scope_occurrence_ids": ["occ_1", "occ_2"],
+        "out_of_scope_occurrence_ids": [],
+        "implicit_unknown_support_count": 0,
+        "implicit_unknown_signed_evidence_count": 0,
+        "constraints": [
+            {
+                "constraint_id": "identity",
+                "constraint_type": "identity",
+                "description": "target identity",
+                "supported_candidates": [
+                    {
+                        "occurrence_id": "occ_1",
+                        "evidence_passage_ids": ["p1"],
+                    }
+                ],
+                "contradicted_candidates": [
+                    {
+                        "occurrence_id": "occ_2",
+                        "evidence_passage_ids": ["p2"],
+                    }
+                ],
+                "implicit_unknown_occurrence_ids": [],
+            }
+        ],
+    }
+    gate = {
+        "type": "occurrence_sufficiency_gate_decision",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set_1",
+        "verdict": "sufficient",
+        "winner_occurrence_id": "occ_1",
+        "sufficient_occurrence_ids": ["occ_1"],
+        "support_contract": "rule_blind_sparse_positive_evidence_v1",
+        "aggregation_rule": "unique_supported_count_margin",
+        "minimum_support_margin": 1,
+        "support_count_by_occurrence": {"occ_1": 1, "occ_2": 0},
+        "best_support_count": 1,
+        "runner_up_support_count": 0,
+        "decision_owner": "runtime",
+        "model_verdict_present": False,
+        "evidence_report_digest": "signed-digest",
+    }
+    resolution = {
+        "type": "occurrence_gate_resolution_committed",
+        "round": 2,
+        "occurrence_op_index": 0,
+        "set_id": "set_1",
+        "op": "select",
+        "occurrence_id": "occ_1",
+    }
+    decision = {
+        "type": "reasoner_decision",
+        "round": 2,
+        "occurrence_ops_accepted": True,
+        "occurrence_ops": [
+            {"op": "declare_occurrence_evidence", "set_id": "set_1"}
+        ],
+        "runtime_occurrence_ops": [resolution],
+    }
+
+    audit = AUDIT._sufficiency_transaction_audit(
+        (decision,), (evidence, gate, resolution, decision)
+    )
+
+    assert audit["signed_evidence_shadow_event_count"] == 1
+    assert audit["signed_evidence_contradicted_row_count"] == 1
+    assert audit["signed_evidence_shadow_failure_count"] == 0
+
+    bad_gate = {
+        **gate,
+        "support_count_by_occurrence": {"occ_1": 1, "occ_2": 1},
+    }
+    invalid = AUDIT._sufficiency_transaction_audit(
+        (decision,), (evidence, bad_gate, resolution, decision)
+    )
+    assert invalid["signed_evidence_shadow_failure_count"] == 1
+
+
 def test_evidence_protocol_reliability_tracks_scope_first_pass_and_alias() -> None:
     trace = (
         {"type": "occurrence_sufficiency_activated", "round": 1},

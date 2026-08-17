@@ -878,6 +878,86 @@ def test_a4_evidence_declaration_report_roundtrip_is_validator_legal() -> None:
     assert roundtrip.to_dict() == report.to_dict()
 
 
+def test_a4_signed_evidence_is_shadow_only_and_omission_is_unknown() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                    {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                ],
+            },
+        )
+    )
+    declaration = _sufficiency_op(verdict="sufficient")
+    declaration["constraints"].append(
+        {
+            "constraint_id": "target_event",
+            "constraint_type": "event",
+            "description": "the occurrence contains the target event",
+            "supported_candidates": [],
+            "contradicted_candidates": [
+                {
+                    "occurrence_id": "occ_1",
+                    "evidence_passage_ids": ["p1"],
+                }
+            ],
+        }
+    )
+
+    result = state.apply_ops((declaration,))
+
+    assert result["accepted"] is True
+    report = result["evidence_report"]
+    assert report["schema_version"] == "OccurrenceEvidenceReportV2"
+    assert report["signed_evidence_contract"] == (
+        "rule_blind_sparse_signed_evidence_shadow_v1"
+    )
+    assert report["signed_evidence_shadow"] is True
+    assert report["contradiction_affects_gate"] is False
+    assert report["constraints"][1]["contradicted_candidates"][0][
+        "occurrence_id"
+    ] == "occ_1"
+    assert report["constraints"][1]["implicit_unknown_occurrence_ids"] == [
+        "occ_2"
+    ]
+    assert report["implicit_unknown_support_count"] == 3
+    assert report["implicit_unknown_signed_evidence_count"] == 2
+    assert result["gate_decision"]["support_count_by_occurrence"] == {
+        "occ_1": 1,
+        "occ_2": 0,
+    }
+    assert result["gate_decision"]["winner_occurrence_id"] == "occ_1"
+
+
+def test_a4_signed_evidence_rejects_same_candidate_in_both_polarities() -> None:
+    state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
+    state.sync_sets(
+        (
+            {
+                "attempt_id": "attempt_sufficiency",
+                "candidates": [
+                    {"occurrence_id": "occ_1", "passage_ids": ["p1"]},
+                    {"occurrence_id": "occ_2", "passage_ids": ["p2"]},
+                ],
+            },
+        )
+    )
+    declaration = _sufficiency_op(verdict="sufficient")
+    declaration["constraints"][0]["contradicted_candidates"] = [
+        {"occurrence_id": "occ_1", "evidence_passage_ids": ["p1"]}
+    ]
+
+    result = state.apply_ops((declaration,))
+
+    assert result["accepted"] is False
+    assert result["errors"][0]["code"] == (
+        "occurrence_evidence_signed_candidate_conflict"
+    )
+
+
 def test_a4_evidence_validation_returns_all_deterministic_errors() -> None:
     state = OccurrenceResolutionStateV2(sufficiency_enabled=True)
     state.sync_sets(
@@ -1229,7 +1309,10 @@ def test_a2_clean_and_a3_prompt_activate_only_after_state_exposure() -> None:
     assert "evidence_scope" in sufficiency_prompt
     assert "sufficiency_scope_occurrence_ids" not in sufficiency_prompt
     assert "sufficiency_out_of_scope_occurrence_ids" not in sufficiency_prompt
-    assert "Omit every candidate without direct visible support" in sufficiency_prompt
+    assert "contradicted_candidates" in sufficiency_prompt
+    assert "omit every candidate lacking direct positive or negative evidence" in (
+        sufficiency_prompt
+    )
     assert "Do not output a verdict" in sufficiency_prompt
     assert "unique highest count" not in sufficiency_prompt
     assert "runner-up" not in sufficiency_prompt

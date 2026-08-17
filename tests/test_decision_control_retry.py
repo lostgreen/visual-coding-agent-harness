@@ -493,7 +493,8 @@ def test_a4_retry_explains_sparse_support_contract() -> None:
 
     instruction = feedback["instruction"]
     assert "supported_candidates" in instruction
-    assert "omit every other candidate" in instruction
+    assert "contradicted_candidates" in instruction
+    assert "omit candidates with neither kind of direct evidence" in instruction
     assert "declare a verdict" in instruction
     assert "supported-constraint count" not in instruction
     assert "runner-up" not in instruction

@@ -1302,6 +1302,41 @@ def _expanded_sufficiency_events(
     trace: Sequence[Mapping[str, Any]],
     candidate_sets: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> tuple[dict[str, Any], ...]:
+    evidence_events = tuple(
+        row
+        for row in trace
+        if row.get("type") == "occurrence_evidence_declaration"
+    )
+    if evidence_events:
+        expanded_signed: list[dict[str, Any]] = []
+        for event in evidence_events:
+            set_id = str(event.get("set_id", "") or "")
+            scope_ids = tuple(
+                str(value)
+                for value in tuple(event.get("scope_occurrence_ids", ()) or ())
+                if str(value)
+            )
+            candidate_ids = {
+                str(candidate.get("occurrence_id", "") or "")
+                for candidate in tuple(candidate_sets.get(set_id, ()) or ())
+                if isinstance(candidate, Mapping)
+            }
+            if not scope_ids or not set(scope_ids) <= candidate_ids:
+                raise ValueError(
+                    f"missing signed-evidence candidate metadata for set {set_id}"
+                )
+            normalized = _normalize_signed_constraints(
+                event.get("constraints", ()), scope_ids=scope_ids
+            )
+            expanded_signed.append(
+                {
+                    **dict(event),
+                    "constraints_checked": normalized,
+                    "reconstructed_from_evidence_declaration": True,
+                }
+            )
+        return tuple(expanded_signed)
+
     compact_events = {
         (
             int(row.get("round", 0) or 0),
@@ -1444,6 +1479,69 @@ def _expanded_sufficiency_events(
             f"expanded={len(expanded)}, compact={len(compact_events)}"
         )
     return tuple(expanded)
+
+
+def _normalize_signed_constraints(
+    raw_constraints: Any, *, scope_ids: Sequence[str]
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    scope = tuple(dict.fromkeys(str(value) for value in scope_ids if str(value)))
+    for raw_constraint in tuple(raw_constraints or ()):
+        if not isinstance(raw_constraint, Mapping):
+            continue
+        supported = {
+            str(row.get("occurrence_id", "") or ""): dict(row)
+            for row in tuple(raw_constraint.get("supported_candidates", ()) or ())
+            if isinstance(row, Mapping)
+            and str(row.get("occurrence_id", "") or "") in scope
+        }
+        contradicted = {
+            str(row.get("occurrence_id", "") or ""): dict(row)
+            for row in tuple(raw_constraint.get("contradicted_candidates", ()) or ())
+            if isinstance(row, Mapping)
+            and str(row.get("occurrence_id", "") or "") in scope
+        }
+        conflict = set(supported) & set(contradicted)
+        if conflict:
+            raise ValueError(
+                "signed-evidence polarity conflict: " + ",".join(sorted(conflict))
+            )
+        support_rows: list[dict[str, Any]] = []
+        implicit_ids: list[str] = []
+        for occurrence_id in scope:
+            if occurrence_id in supported:
+                support_rows.append(
+                    {
+                        **supported[occurrence_id],
+                        "occurrence_id": occurrence_id,
+                        "status": "supported",
+                    }
+                )
+            elif occurrence_id in contradicted:
+                support_rows.append(
+                    {
+                        **contradicted[occurrence_id],
+                        "occurrence_id": occurrence_id,
+                        "status": "contradicted",
+                    }
+                )
+            else:
+                implicit_ids.append(occurrence_id)
+                support_rows.append(
+                    {
+                        "occurrence_id": occurrence_id,
+                        "status": "unknown",
+                        "evidence_passage_ids": [],
+                    }
+                )
+        normalized.append(
+            {
+                **dict(raw_constraint),
+                "support": support_rows,
+                "implicit_unknown_occurrence_ids": implicit_ids,
+            }
+        )
+    return normalized
 
 
 def _normalize_raw_constraints(

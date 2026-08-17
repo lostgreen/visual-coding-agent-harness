@@ -1384,6 +1384,12 @@ class VirtualVideoMultiRoundDriver:
                                 report.get("implicit_unknown_support_count", 0)
                                 or 0
                             ),
+                            "implicit_unknown_signed_evidence_count": int(
+                                report.get(
+                                    "implicit_unknown_signed_evidence_count", 0
+                                )
+                                or 0
+                            ),
                             "support_complete": bool(
                                 report.get("support_complete")
                             ),
@@ -1395,6 +1401,15 @@ class VirtualVideoMultiRoundDriver:
                             ),
                             "support_contract": str(
                                 report.get("support_contract", "") or ""
+                            ),
+                            "signed_evidence_contract": str(
+                                report.get("signed_evidence_contract", "") or ""
+                            ),
+                            "signed_evidence_shadow": bool(
+                                report.get("signed_evidence_shadow")
+                            ),
+                            "contradiction_affects_gate": bool(
+                                report.get("contradiction_affects_gate")
                             ),
                             "rule_blind": bool(report.get("rule_blind")),
                             "model_verdict_present": bool(
@@ -1413,6 +1428,13 @@ class VirtualVideoMultiRoundDriver:
                             "dropped_out_of_scope_support_count": int(
                                 report.get(
                                     "dropped_out_of_scope_support_count", 0
+                                )
+                                or 0
+                            ),
+                            "dropped_out_of_scope_contradiction_count": int(
+                                report.get(
+                                    "dropped_out_of_scope_contradiction_count",
+                                    0,
                                 )
                                 or 0
                             ),
@@ -3231,7 +3253,7 @@ def _control_retry_feedback(
             )
         else:
             repair_rules.append(
-                "Do not answer, select, defer, or declare a verdict. Submit exactly one isolated declare_occurrence_evidence operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. For each constraint, include supported_candidates only when visible evidence_passage_ids directly support that candidate; omit every other candidate. Runtime validates and persists this evidence report, then performs the gate decision and scoped resolution mechanically."
+                "Do not answer, select, defer, or declare a verdict. Submit exactly one isolated declare_occurrence_evidence operation for the active set. Use one to six constraints of allowed type action, identity, event, relation, temporal, state, attribute, object, location, order, or outcome. For each constraint, include supported_candidates only when visible evidence_passage_ids directly support that candidate, and contradicted_candidates only when visible evidence directly contradicts it. Never place one candidate under both polarities for the same constraint; omit candidates with neither kind of direct evidence. Runtime validates and persists this evidence report, then performs the gate decision and scoped resolution mechanically."
             )
     if "occurrence_search_required" in codes:
         repair_rules.append(

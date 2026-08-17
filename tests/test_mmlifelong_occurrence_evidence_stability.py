@@ -295,3 +295,65 @@ def test_error_attribution_separates_shared_and_repeat_only_false_commits() -> N
     }
     assert result["per_case"]["shared"]["candidate_present"] is False
     assert result["per_case"]["correct"]["candidate_present"] is True
+
+
+def test_signed_evidence_reports_row_candidate_and_constraint_stability() -> None:
+    base = _case(
+        supported={("set_1", "identity", "occ_1")},
+        winner="occ_1",
+        gate="sufficient",
+    )
+    left = {
+        **base,
+        "signed_evidence_valid": True,
+        "contradicted_rows": {("set_1", "identity", "occ_2")},
+        "strict_contradicted_rows": {
+            ("set_1", "identity", "target", "occ_2", ("p2",))
+        },
+        "contradicted_candidates": {("set_1", "occ_2")},
+        "contradicted_constraints": {("set_1", "identity")},
+    }
+    right = {
+        **base,
+        "signed_evidence_valid": True,
+        "contradicted_rows": {
+            ("set_1", "identity", "occ_2"),
+            ("set_1", "event", "occ_2"),
+        },
+        "strict_contradicted_rows": {
+            ("set_1", "identity", "target", "occ_2", ("p2",)),
+            ("set_1", "event", "action", "occ_2", ("p2",)),
+        },
+        "contradicted_candidates": {("set_1", "occ_2")},
+        "contradicted_constraints": {
+            ("set_1", "identity"),
+            ("set_1", "event"),
+        },
+    }
+    empty = {
+        **base,
+        "signed_evidence_valid": True,
+        "contradicted_rows": set(),
+        "strict_contradicted_rows": set(),
+        "contradicted_candidates": set(),
+        "contradicted_constraints": set(),
+    }
+
+    report = STABILITY.build_stability_report(
+        {
+            "repeat_1": {"c1": left, "c2": empty},
+            "repeat_2": {"c1": right, "c2": empty},
+        },
+        repeat_labels=("repeat_1", "repeat_2"),
+        expected_cases=2,
+        require_signed_evidence_shadow=True,
+    )
+
+    assert report["validity"]["signed_evidence_valid_pair_count"] == 2
+    assert report["metric_denominators"]["contradiction_active_stability"] == 1
+    assert report["metrics"]["contradicted_row_jaccard_macro"] == 0.5
+    assert report["metrics"]["strict_contradicted_row_jaccard_macro"] == 0.5
+    assert report["metrics"]["candidate_contradiction_agreement_macro"] == 1.0
+    assert report["metrics"]["constraint_contradiction_agreement_macro"] == 0.5
+    assert report["metrics"]["first_repeat_contradiction_activation_rate"] == 0.5
+    assert report["metrics"]["second_repeat_contradiction_activation_rate"] == 0.5

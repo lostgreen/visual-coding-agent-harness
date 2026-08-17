@@ -75,6 +75,7 @@ def build_stability_report(
         str, Mapping[str, Mapping[str, Any]]
     ] | None = None,
     baseline_supported_row_agreement: float | None = None,
+    require_signed_evidence_shadow: bool = False,
 ) -> dict[str, Any]:
     if len(repeat_labels) != 2:
         raise ValueError("exactly two independent repeat labels are required")
@@ -105,10 +106,24 @@ def build_stability_report(
         structural_pair_valid = bool(
             first.get("full_structural_valid")
             and second.get("full_structural_valid")
+            and (
+                not require_signed_evidence_shadow
+                or (
+                    first.get("signed_evidence_valid")
+                    and second.get("signed_evidence_valid")
+                )
+            )
         )
         working_method_pair_valid = bool(
             first.get("working_method_valid")
             and second.get("working_method_valid")
+            and (
+                not require_signed_evidence_shadow
+                or (
+                    first.get("signed_evidence_valid")
+                    and second.get("signed_evidence_valid")
+                )
+            )
         )
         row: dict[str, Any] = {
             "evidence_pair_valid": evidence_pair_valid,
@@ -125,6 +140,16 @@ def build_stability_report(
             ),
             "second_mechanical_gate_valid": bool(
                 second.get("mechanical_gate_valid")
+            ),
+            "signed_evidence_pair_valid": bool(
+                first.get("signed_evidence_valid")
+                and second.get("signed_evidence_valid")
+            ),
+            "first_contradicted_row_count": len(
+                first.get("contradicted_rows", set()) or set()
+            ),
+            "second_contradicted_row_count": len(
+                second.get("contradicted_rows", set()) or set()
             ),
             "first_answer_present": bool(first.get("answer_present")),
             "second_answer_present": bool(second.get("answer_present")),
@@ -168,6 +193,42 @@ def build_stability_report(
                     ),
                     "winner_agrees": first["winner"] == second["winner"],
                     "gate_agrees": first["gate"] == second["gate"],
+                    "contradicted_row_jaccard": (
+                        _jaccard(
+                            first["contradicted_rows"],
+                            second["contradicted_rows"],
+                        )
+                        if first.get("signed_evidence_valid")
+                        and second.get("signed_evidence_valid")
+                        else None
+                    ),
+                    "strict_contradicted_row_jaccard": (
+                        _jaccard(
+                            first["strict_contradicted_rows"],
+                            second["strict_contradicted_rows"],
+                        )
+                        if first.get("signed_evidence_valid")
+                        and second.get("signed_evidence_valid")
+                        else None
+                    ),
+                    "candidate_contradiction_jaccard": (
+                        _jaccard(
+                            first["contradicted_candidates"],
+                            second["contradicted_candidates"],
+                        )
+                        if first.get("signed_evidence_valid")
+                        and second.get("signed_evidence_valid")
+                        else None
+                    ),
+                    "constraint_contradiction_jaccard": (
+                        _jaccard(
+                            first["contradicted_constraints"],
+                            second["contradicted_constraints"],
+                        )
+                        if first.get("signed_evidence_valid")
+                        and second.get("signed_evidence_valid")
+                        else None
+                    ),
                 }
             )
         else:
@@ -179,12 +240,25 @@ def build_stability_report(
                     "support_count_mae": None,
                     "winner_agrees": None,
                     "gate_agrees": None,
+                    "contradicted_row_jaccard": None,
+                    "strict_contradicted_row_jaccard": None,
+                    "candidate_contradiction_jaccard": None,
+                    "constraint_contradiction_jaccard": None,
                 }
             )
         per_case[case_id] = row
 
     evidence_rows = tuple(
         row for row in per_case.values() if row["evidence_pair_valid"]
+    )
+    signed_rows = tuple(
+        row for row in evidence_rows if row["signed_evidence_pair_valid"]
+    )
+    contradiction_active_rows = tuple(
+        row
+        for row in signed_rows
+        if row["first_contradicted_row_count"] > 0
+        or row["second_contradicted_row_count"] > 0
     )
     supported_row_agreement = _mean_metric(
         evidence_rows, "supported_row_jaccard"
@@ -285,6 +359,8 @@ def build_stability_report(
         "evidence_valid_pair_count": evidence_valid_pair_count,
         "structural_valid_pair_count": structural_valid_pair_count,
         "working_method_valid_pair_count": working_method_valid_pair_count,
+        "signed_evidence_valid_pair_count": len(signed_rows),
+        "signed_evidence_required": require_signed_evidence_shadow,
         "structural_invalid_pair_count": (
             len(aligned_ids) - structural_valid_pair_count
         ),
@@ -327,7 +403,8 @@ def build_stability_report(
             "expected_cases": int(expected_cases),
             "supported_row_key": "set_id + constraint_type + occurrence_id",
             "aggregation_policy_hidden_from_reasoner": True,
-            "signed_evidence_enabled": False,
+            "signed_evidence_enabled": require_signed_evidence_shadow,
+            "contradiction_affects_gate": False,
         },
         "source_case_counts": {label: len(runs[label]) for label in repeat_labels},
         "aligned_case_count": len(aligned_ids),
@@ -335,6 +412,8 @@ def build_stability_report(
         "metric_denominators": {
             "evidence_stability": evidence_valid_pair_count,
             "working_method": working_method_valid_pair_count,
+            "signed_evidence_stability": len(signed_rows),
+            "contradiction_active_stability": len(contradiction_active_rows),
         },
         "metrics": {
             "supported_row_jaccard_macro": supported_row_agreement,
@@ -349,6 +428,24 @@ def build_stability_report(
             ),
             "winner_agreement": winner_agreement,
             "gate_agreement": gate_agreement,
+            "contradicted_row_jaccard_macro": _mean_metric(
+                contradiction_active_rows, "contradicted_row_jaccard"
+            ),
+            "strict_contradicted_row_jaccard_macro": _mean_metric(
+                contradiction_active_rows, "strict_contradicted_row_jaccard"
+            ),
+            "candidate_contradiction_agreement_macro": _mean_metric(
+                contradiction_active_rows, "candidate_contradiction_jaccard"
+            ),
+            "constraint_contradiction_agreement_macro": _mean_metric(
+                contradiction_active_rows, "constraint_contradiction_jaccard"
+            ),
+            "first_repeat_contradiction_activation_rate": _mean_values(
+                [row["first_contradicted_row_count"] > 0 for row in signed_rows]
+            ),
+            "second_repeat_contradiction_activation_rate": _mean_values(
+                [row["second_contradicted_row_count"] > 0 for row in signed_rows]
+            ),
             "gate_drift_case_count": sum(
                 row["gate_agrees"] is False for row in per_case.values()
             ),
@@ -794,6 +891,12 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     supported_rows: set[tuple[str, str, str]] = set()
     strict_rows: set[tuple[str, str, str, str, tuple[str, ...]]] = set()
     candidate_passage_rows: set[tuple[str, str, str]] = set()
+    contradicted_rows: set[tuple[str, str, str]] = set()
+    strict_contradicted_rows: set[
+        tuple[str, str, str, str, tuple[str, ...]]
+    ] = set()
+    contradicted_candidates: set[tuple[str, str]] = set()
+    contradicted_constraints: set[tuple[str, str]] = set()
     if evidence_events:
         for event in evidence_events:
             set_id = str(event.get("set_id", "") or "")
@@ -820,6 +923,32 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                     candidate_passage_rows.update(
                         (set_id, occurrence_id, passage_id) for passage_id in passages
                     )
+                for row in tuple(
+                    constraint.get("contradicted_candidates", ()) or ()
+                ):
+                    if not isinstance(row, Mapping):
+                        continue
+                    occurrence_id = str(row.get("occurrence_id", "") or "")
+                    passages = tuple(
+                        sorted(
+                            str(value)
+                            for value in row.get("evidence_passage_ids", ()) or ()
+                        )
+                    )
+                    contradicted_rows.add(
+                        (set_id, constraint_type, occurrence_id)
+                    )
+                    strict_contradicted_rows.add(
+                        (
+                            set_id,
+                            constraint_type,
+                            description,
+                            occurrence_id,
+                            passages,
+                        )
+                    )
+                    contradicted_candidates.add((set_id, occurrence_id))
+                    contradicted_constraints.add((set_id, constraint_type))
     else:
         accepted_assessment_count = 0
         for decision in trace:
@@ -937,6 +1066,10 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "supported_rows": supported_rows,
         "strict_supported_rows": strict_rows,
         "candidate_passage_rows": candidate_passage_rows,
+        "contradicted_rows": contradicted_rows,
+        "strict_contradicted_rows": strict_contradicted_rows,
+        "contradicted_candidates": contradicted_candidates,
+        "contradicted_constraints": contradicted_constraints,
         "support_counts": (
             {str(key): int(value) for key, value in support_counts.items()}
             if isinstance(support_counts, Mapping)
@@ -959,6 +1092,10 @@ def _extract_case(trace: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "evidence_declaration_valid": evidence_declaration_valid,
         "mechanical_gate_valid": mechanical_gate_valid,
         "mechanical_resolution_valid": mechanical_resolution_valid,
+        "signed_evidence_valid": bool(
+            evidence_events
+            and all(_signed_evidence_event_valid(row) for row in evidence_events)
+        ),
         "transaction_structural_valid": bool(
             evidence_declaration_valid
             and mechanical_gate_valid
@@ -1003,6 +1140,68 @@ def _evidence_event_valid(event: Mapping[str, Any]) -> bool:
             constraint.get("supported_candidates", ()) or ()
         )
         if isinstance(candidate, Mapping)
+    )
+
+
+def _signed_evidence_event_valid(event: Mapping[str, Any]) -> bool:
+    scope = tuple(str(value) for value in event.get("scope_occurrence_ids", ()) or ())
+    scope_set = set(scope)
+    constraints = tuple(
+        row
+        for row in tuple(event.get("constraints", ()) or ())
+        if isinstance(row, Mapping)
+    )
+    if not (
+        event.get("signed_evidence_contract")
+        == "rule_blind_sparse_signed_evidence_shadow_v1"
+        and event.get("signed_evidence_shadow") is True
+        and event.get("contradiction_affects_gate") is False
+        and constraints
+    ):
+        return False
+    implicit_count = 0
+    for constraint in constraints:
+        if not {
+            "supported_candidates",
+            "contradicted_candidates",
+        }.issubset(constraint):
+            return False
+        supported = tuple(
+            row
+            for row in tuple(constraint.get("supported_candidates", ()) or ())
+            if isinstance(row, Mapping)
+        )
+        contradicted = tuple(
+            row
+            for row in tuple(constraint.get("contradicted_candidates", ()) or ())
+            if isinstance(row, Mapping)
+        )
+        supported_ids = {
+            str(row.get("occurrence_id", "") or "") for row in supported
+        }
+        contradicted_ids = {
+            str(row.get("occurrence_id", "") or "") for row in contradicted
+        }
+        if (
+            supported_ids & contradicted_ids
+            or not (supported_ids | contradicted_ids) <= scope_set
+            or any(
+                not tuple(row.get("evidence_passage_ids", ()) or ())
+                for row in (*supported, *contradicted)
+            )
+        ):
+            return False
+        implicit_ids = {
+            str(value)
+            for value in tuple(
+                constraint.get("implicit_unknown_occurrence_ids", ()) or ()
+            )
+        }
+        if implicit_ids != scope_set - supported_ids - contradicted_ids:
+            return False
+        implicit_count += len(implicit_ids)
+    return implicit_count == int(
+        event.get("implicit_unknown_signed_evidence_count", -1) or 0
     )
 
 
@@ -1130,6 +1329,28 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{_format_metric(support['stable_supported_rate'])} |"
         )
     lines.append("")
+    if report["protocol"].get("signed_evidence_enabled"):
+        signed_n = report["metric_denominators"]["signed_evidence_stability"]
+        active_n = report["metric_denominators"][
+            "contradiction_active_stability"
+        ]
+        lines.extend(
+            [
+                "## WP11 Signed-Evidence Shadow",
+                "",
+                f"Signed-valid pairs: {signed_n}; contradiction-active pairs: {active_n}. Empty-empty pairs are excluded from Jaccard metrics.",
+                "",
+                "| Metric | Value |",
+                "|---|---:|",
+                f"| Contradicted-row Jaccard | {_format_metric(metrics['contradicted_row_jaccard_macro'])} |",
+                f"| Strict contradicted-row Jaccard | {_format_metric(metrics['strict_contradicted_row_jaccard_macro'])} |",
+                f"| Candidate contradiction agreement | {_format_metric(metrics['candidate_contradiction_agreement_macro'])} |",
+                f"| Constraint contradiction agreement | {_format_metric(metrics['constraint_contradiction_agreement_macro'])} |",
+                f"| First-repeat contradiction activation | {_format_metric(metrics['first_repeat_contradiction_activation_rate'])} |",
+                f"| Second-repeat contradiction activation | {_format_metric(metrics['second_repeat_contradiction_activation_rate'])} |",
+                "",
+            ]
+        )
     for label, run in report["scope_size_diagnostic"]["by_run"].items():
         lines.extend(
             [
@@ -1200,6 +1421,7 @@ def _parse_args() -> argparse.Namespace:
         metavar=("LABEL", "REPORT_JSON"),
     )
     parser.add_argument("--baseline-report", type=Path)
+    parser.add_argument("--require-signed-evidence-shadow", action="store_true")
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
     return parser.parse_args()
@@ -1232,6 +1454,7 @@ def main() -> int:
         baseline_supported_row_agreement=(
             float(baseline) if isinstance(baseline, (int, float)) else None
         ),
+        require_signed_evidence_shadow=args.require_signed_evidence_shadow,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(

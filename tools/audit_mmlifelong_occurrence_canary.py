@@ -14,6 +14,9 @@ SCOPED_ARMS = {"a2-clean", "a3", "a4"}
 EXPECTED_SUFFICIENCY_SUPPORT_CONTRACT = (
     "rule_blind_sparse_positive_evidence_v1"
 )
+EXPECTED_SIGNED_EVIDENCE_SHADOW_CONTRACT = (
+    "rule_blind_sparse_signed_evidence_shadow_v1"
+)
 LEGACY_SUFFICIENCY_SUPPORT_CONTRACT = "sparse_supported_rows_omission_is_unknown"
 EXPECTED_SUFFICIENCY_AGGREGATION_RULE = "unique_supported_count_margin"
 EXPECTED_SUFFICIENCY_SUPPORT_MARGIN = 1
@@ -63,11 +66,20 @@ EXPECTED_LIFECYCLE_RETRY_CODES = {
     "occurrence_evidence_support_candidate_invalid",
     "occurrence_evidence_passage_not_visible",
     "occurrence_evidence_support_requires_passage",
+    "occurrence_evidence_contradiction_must_be_object",
+    "occurrence_evidence_contradiction_field_invalid",
+    "occurrence_evidence_signed_candidate_conflict",
+    "occurrence_evidence_contradiction_candidate_invalid",
+    "occurrence_evidence_contradiction_passage_not_visible",
+    "occurrence_evidence_contradiction_requires_passage",
 }
 
 
 def audit_roots(
-    bindings: Mapping[str, Path], *, expected_cases: int
+    bindings: Mapping[str, Path],
+    *,
+    expected_cases: int,
+    require_signed_evidence_shadow: bool = False,
 ) -> dict[str, Any]:
     per_arm: dict[str, dict[str, Any]] = {}
     case_sets: dict[str, set[str]] = {}
@@ -548,6 +560,44 @@ def audit_roots(
                 row["sufficiency_audit"].get("evidence_gate_decoupled") is True
                 for row in cases
             ),
+            "signed_evidence_shadow_case_count": sum(
+                int(
+                    row["sufficiency_audit"].get(
+                        "signed_evidence_shadow_event_count", 0
+                    )
+                    or 0
+                )
+                > 0
+                for row in cases
+            ),
+            "signed_evidence_shadow_event_count": sum(
+                int(
+                    row["sufficiency_audit"].get(
+                        "signed_evidence_shadow_event_count", 0
+                    )
+                    or 0
+                )
+                for row in cases
+            ),
+            "signed_evidence_shadow_failure_case_count": sum(
+                int(
+                    row["sufficiency_audit"].get(
+                        "signed_evidence_shadow_failure_count", 0
+                    )
+                    or 0
+                )
+                > 0
+                for row in cases
+            ),
+            "signed_evidence_contradicted_row_count": sum(
+                int(
+                    row["sufficiency_audit"].get(
+                        "signed_evidence_contradicted_row_count", 0
+                    )
+                    or 0
+                )
+                for row in cases
+            ),
             "mechanical_sufficiency_resolution_count": sum(
                 int(
                     row["sufficiency_audit"].get(
@@ -936,6 +986,18 @@ def audit_roots(
                 >= int(expected_cases)
             )
         ),
+        "a4_signed_evidence_shadow_valid": (
+            not require_signed_evidence_shadow
+            or (
+                "a4" in per_arm
+                and per_arm["a4"]["signed_evidence_shadow_case_count"]
+                == int(expected_cases)
+                and per_arm["a4"][
+                    "signed_evidence_shadow_failure_case_count"
+                ]
+                == 0
+            )
+        ),
         "a4_evidence_scope_single_surface": (
             "a4" not in per_arm
             or (
@@ -1016,7 +1078,7 @@ def audit_roots(
         == 0,
     }
     return {
-        "schema_version": "MMLifelongOccurrenceCanaryAuditV5",
+        "schema_version": "MMLifelongOccurrenceCanaryAuditV6",
         "per_arm": per_arm,
         "check_applicability": {
             "actionable_selected_locators_accounted": any(
@@ -1031,6 +1093,9 @@ def audit_roots(
             "a4_sufficiency_transactions_valid": "a4" in per_arm,
             "a4_evidence_scope_single_surface": "a4" in per_arm,
             "a4_evidence_first_pass_reliable": "a4" in per_arm,
+            "a4_signed_evidence_shadow_valid": (
+                require_signed_evidence_shadow and "a4" in per_arm
+            ),
             "a4_predictions_answer_bearing": "a4" in per_arm,
             "a4_sparse_support_aggregation_valid": bool(
                 "a4" in per_arm
@@ -1232,6 +1297,9 @@ def _sufficiency_transaction_audit(
             for row in trace
             if row.get("type") == "decision_schema_error"
         ),
+        "signed_evidence_shadow_event_count": 0,
+        "signed_evidence_shadow_failure_count": 0,
+        "signed_evidence_contradicted_row_count": 0,
     }
 
 
@@ -1404,6 +1472,19 @@ def _decoupled_evidence_gate_audit(
         )
         for row in evidence_events
     )
+    signed_events = tuple(
+        row for row in evidence_events if row.get("signed_evidence_shadow") is True
+    )
+    signed_shadow_failure_count = sum(
+        not _signed_evidence_shadow_event_valid(row) for row in signed_events
+    )
+    signed_shadow_failure_count += sum(
+        evidence.get("signed_evidence_shadow") is True
+        and gate is not None
+        and not _gate_uses_positive_support_only(evidence, gate)
+        for position, evidence in evidence_by_position.items()
+        for gate in (gate_by_position.get(position),)
+    )
     event_count_mismatch = not (
         len(evidence_events)
         == len(gate_events)
@@ -1436,7 +1517,101 @@ def _decoupled_evidence_gate_audit(
         "incomplete_support_retry_count": 0,
         "evidence_gate_decoupled": True,
         "mechanical_resolution_count": len(resolution_events),
+        "signed_evidence_shadow_event_count": len(signed_events),
+        "signed_evidence_shadow_failure_count": signed_shadow_failure_count,
+        "signed_evidence_contradicted_row_count": sum(
+            len(tuple(constraint.get("contradicted_candidates", ()) or ()))
+            for event in signed_events
+            for constraint in tuple(event.get("constraints", ()) or ())
+            if isinstance(constraint, Mapping)
+        ),
     }
+
+
+def _signed_evidence_shadow_event_valid(event: Mapping[str, Any]) -> bool:
+    scope = tuple(str(value) for value in event.get("scope_occurrence_ids", ()) or ())
+    scope_set = set(scope)
+    constraints = tuple(
+        row
+        for row in tuple(event.get("constraints", ()) or ())
+        if isinstance(row, Mapping)
+    )
+    if not (
+        event.get("signed_evidence_contract")
+        == EXPECTED_SIGNED_EVIDENCE_SHADOW_CONTRACT
+        and event.get("signed_evidence_shadow") is True
+        and event.get("contradiction_affects_gate") is False
+        and constraints
+    ):
+        return False
+    implicit_count = 0
+    for constraint in constraints:
+        if not {
+            "supported_candidates",
+            "contradicted_candidates",
+        }.issubset(constraint):
+            return False
+        supported = tuple(
+            row
+            for row in tuple(constraint.get("supported_candidates", ()) or ())
+            if isinstance(row, Mapping)
+        )
+        contradicted = tuple(
+            row
+            for row in tuple(constraint.get("contradicted_candidates", ()) or ())
+            if isinstance(row, Mapping)
+        )
+        supported_ids = {
+            str(row.get("occurrence_id", "") or "") for row in supported
+        }
+        contradicted_ids = {
+            str(row.get("occurrence_id", "") or "") for row in contradicted
+        }
+        if (
+            supported_ids & contradicted_ids
+            or not (supported_ids | contradicted_ids) <= scope_set
+            or any(
+                not tuple(row.get("evidence_passage_ids", ()) or ())
+                for row in (*supported, *contradicted)
+            )
+        ):
+            return False
+        implicit_ids = set(
+            str(value)
+            for value in tuple(
+                constraint.get("implicit_unknown_occurrence_ids", ()) or ()
+            )
+        )
+        if implicit_ids != scope_set - supported_ids - contradicted_ids:
+            return False
+        implicit_count += len(implicit_ids)
+    return implicit_count == int(
+        event.get("implicit_unknown_signed_evidence_count", -1) or 0
+    )
+
+
+def _gate_uses_positive_support_only(
+    evidence: Mapping[str, Any], gate: Mapping[str, Any]
+) -> bool:
+    scope = tuple(str(value) for value in evidence.get("scope_occurrence_ids", ()) or ())
+    counts = {occurrence_id: 0 for occurrence_id in scope}
+    for constraint in tuple(evidence.get("constraints", ()) or ()):
+        if not isinstance(constraint, Mapping):
+            continue
+        for row in tuple(constraint.get("supported_candidates", ()) or ()):
+            if not isinstance(row, Mapping):
+                continue
+            occurrence_id = str(row.get("occurrence_id", "") or "")
+            if occurrence_id in counts:
+                counts[occurrence_id] += 1
+    raw_gate_counts = gate.get("support_count_by_occurrence", {})
+    if not isinstance(raw_gate_counts, Mapping):
+        return False
+    try:
+        gate_counts = {str(key): int(value) for key, value in raw_gate_counts.items()}
+    except (TypeError, ValueError):
+        return False
+    return gate_counts == counts
 
 
 def _event_position(row: Mapping[str, Any]) -> tuple[int, int, str]:
@@ -1858,10 +2033,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--arm-root", action="append", nargs=2, metavar=("ARM", "ROOT"), required=True)
     parser.add_argument("--expected-cases", type=int, required=True)
+    parser.add_argument("--require-signed-evidence-shadow", action="store_true")
     parser.add_argument("--output-json", required=True)
     args = parser.parse_args()
     bindings = {arm: Path(root) for arm, root in args.arm_root}
-    report = audit_roots(bindings, expected_cases=args.expected_cases)
+    report = audit_roots(
+        bindings,
+        expected_cases=args.expected_cases,
+        require_signed_evidence_shadow=args.require_signed_evidence_shadow,
+    )
     output = Path(args.output_json)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

@@ -2162,7 +2162,9 @@ def _occurrence_resolution_prompt_rule(
                 "concise question-critical constraints using only action, identity, event, relation, temporal, state, "
                 "attribute, object, location, order, or outcome types. For each constraint, list a candidate under "
                 "supported_candidates only when one or more visible evidence_passage_ids directly support that candidate. "
-                "Omit every candidate without direct visible support. evidence_scope.candidates is the complete legal "
+                "List it under contradicted_candidates only when visible evidence_passage_ids directly contradict that "
+                "constraint for the candidate. Never list one candidate under both polarities for the same constraint; "
+                "omit every candidate lacking direct positive or negative evidence. evidence_scope.candidates is the complete legal "
                 "declaration surface; additional_candidate_count is informational and exposes no additional IDs. Do not output a verdict and do not select, "
                 "defer, or use no_match in the evidence transaction. Runtime validates and persists the evidence report, "
                 "then performs the gate decision and scoped resolution separately. "
@@ -2434,9 +2436,12 @@ def _frozen_reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
                 '"constraints":[{"constraint_id":"identity",'
                 '"constraint_type":"identity","description":"question-critical requirement",'
                 '"supported_candidates":[{"occurrence_id":"occ_visible_id",'
-                '"evidence_passage_ids":["visible_passage_id"]}]}]}]}. '
+                '"evidence_passage_ids":["visible_passage_id"]}],'
+                '"contradicted_candidates":[{"occurrence_id":"occ_other_visible_id",'
+                '"evidence_passage_ids":["other_visible_passage_id"]}]}]}]}. '
                 'Constraint types are action, identity, event, relation, temporal, state, attribute, object, location, '
-                'order, or outcome. Include only directly evidenced supported candidates; omit all others. '
+                'order, or outcome. Include only directly evidenced supported or contradicted candidates; omit all others '
+                'and never list the same candidate under both polarities for one constraint. '
                 'Use only IDs in evidence_scope.candidates; additional_candidate_count exposes no additional IDs. Do not include verdict, select, defer, or no_match; '
                 'Runtime owns the later gate and resolution.\n'
             )

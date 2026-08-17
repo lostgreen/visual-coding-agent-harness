@@ -92,7 +92,6 @@ def test_blocker_decomposition_distinguishes_implicit_and_mixed() -> None:
 
     classified = DIAGNOSIS.classify_candidate_blockers(event)
     assert classified == {"gold": "implicit_unknown", "other": "mixed"}
-
     diagnosis = DIAGNOSIS.build_blocker_diagnosis(
         ({"case_id": "c1", "events": (event,)},)
     )
@@ -101,6 +100,74 @@ def test_blocker_decomposition_distinguishes_implicit_and_mixed() -> None:
     assert diagnosis["decision_class_counts"]["mixed"] == 1
     assert diagnosis["candidate_implicit_unknown_primary_rate"] == 0.5
 
+
+def test_signed_evidence_declaration_reconstructs_gold_and_non_gold_rows() -> None:
+    case_id = "signed"
+    set_id = "set-signed"
+    gold_id = f"{case_id}-gold"
+    other_id = f"{case_id}-other"
+    candidates = (
+        {"occurrence_id": gold_id, "time_range": [10, 20], "rank": 1},
+        {"occurrence_id": other_id, "time_range": [40, 50], "rank": 2},
+    )
+    trace = (
+        {
+            "type": "occurrence_evidence_declaration",
+            "round": 2,
+            "set_id": set_id,
+            "scope_occurrence_ids": [gold_id, other_id],
+            "constraints": [
+                {
+                    "constraint_id": "identity",
+                    "constraint_type": "identity",
+                    "description": "target identity",
+                    "supported_candidates": [
+                        {
+                            "occurrence_id": gold_id,
+                            "evidence_passage_ids": ["p1"],
+                        }
+                    ],
+                    "contradicted_candidates": [
+                        {
+                            "occurrence_id": other_id,
+                            "evidence_passage_ids": ["p2"],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    events = DIAGNOSIS._expanded_sufficiency_events(
+        trace, {set_id: candidates}
+    )
+    report = DIAGNOSIS.build_signed_evidence_diagnostic(
+        (
+            {
+                "case_id": case_id,
+                "events": events,
+                "candidate_sets": {set_id: candidates},
+                "clues": ((12.0, 18.0),),
+            },
+        ),
+        bootstrap_samples=100,
+        seed=7,
+    )
+
+    assert events[0]["constraints_checked"][0]["support"] == [
+        {
+            "occurrence_id": gold_id,
+            "evidence_passage_ids": ["p1"],
+            "status": "supported",
+        },
+        {
+            "occurrence_id": other_id,
+            "evidence_passage_ids": ["p2"],
+            "status": "contradicted",
+        },
+    ]
+    assert report["overall"]["gold"]["contradicted_rate"] == 0.0
+    assert report["overall"]["non_gold"]["contradicted_rate"] == 1.0
 
 def test_expanded_events_reconstruct_and_validate_implicit_rows() -> None:
     compact = {
