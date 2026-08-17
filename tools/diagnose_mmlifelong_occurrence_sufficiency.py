@@ -1126,6 +1126,7 @@ def build_diagnosis(
     cases: Sequence[Mapping[str, Any]],
     *,
     selection_rows: Sequence[Mapping[str, Any]] = (),
+    winner_selection_rows: Sequence[Mapping[str, Any]] | None = None,
     expected_cases: int | None = None,
     bootstrap_samples: int = 10_000,
     seed: int = 20260816,
@@ -1144,12 +1145,15 @@ def build_diagnosis(
         cases,
         observed_selection_rows=selection_rows,
     )
-    a4_selection_rows = tuple(
-        row for row in selection_rows if str(row.get("arm", "") or "") == "a4"
+    geometry_selection_rows = (
+        selection_rows if winner_selection_rows is None else winner_selection_rows
+    )
+    a4_geometry_rows = tuple(
+        row for row in geometry_selection_rows if str(row.get("arm", "") or "") == "a4"
     )
     error_geometry = (
-        build_r5_error_geometry(cases, selection_rows=a4_selection_rows)
-        if a4_selection_rows
+        build_r5_error_geometry(cases, selection_rows=a4_geometry_rows)
+        if a4_geometry_rows
         else {
             "applicable": False,
             "reason": "no A4 selection rows were supplied",
@@ -1165,6 +1169,9 @@ def build_diagnosis(
         seed=seed,
     )
     winner_guard = build_winner_guard_potential(error_geometry)
+    winner_guard["winner_source"] = (
+        "diagnostic_run" if winner_selection_rows is None else "external_frozen_control"
+    )
     target_achievable = bool(aggregation_sweep["target_achievable"])
     recommendation = (
         "PROCEED_WITH_OFFLINE_SELECTED_AGGREGATION_RULE"
@@ -2221,6 +2228,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", required=True)
     parser.add_argument("--control-run-root")
+    parser.add_argument("--winner-run-root")
     parser.add_argument("--evaluation-record-root", required=True)
     parser.add_argument("--expected-cases", type=int)
     parser.add_argument("--bootstrap-samples", type=int, default=10_000)
@@ -2238,9 +2246,18 @@ def main() -> None:
     selection_rows = _load_selection_rows(
         selection_roots, evaluation_record_root=evaluation_root
     )
+    winner_selection_rows = (
+        _load_selection_rows(
+            (Path(args.winner_run_root),),
+            evaluation_record_root=evaluation_root,
+        )
+        if args.winner_run_root
+        else None
+    )
     report = build_diagnosis(
         cases,
         selection_rows=selection_rows,
+        winner_selection_rows=winner_selection_rows,
         expected_cases=args.expected_cases,
         bootstrap_samples=args.bootstrap_samples,
         seed=args.seed,

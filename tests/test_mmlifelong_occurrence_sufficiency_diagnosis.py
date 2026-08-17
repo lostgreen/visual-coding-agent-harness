@@ -611,6 +611,55 @@ def test_winner_guard_potential_uses_frozen_qualification_thresholds() -> None:
     assert result["hard_veto_qualified_on_this_repeat"] is True
 
 
+def test_diagnosis_can_freeze_winner_rows_separately_from_signed_decisions() -> None:
+    case = _case(
+        "frozen",
+        "set-frozen",
+        _event(
+            "set-frozen",
+            [
+                _constraint(
+                    "identity",
+                    {
+                        "frozen-gold": "contradicted",
+                        "frozen-other": "unknown",
+                    },
+                )
+            ],
+        ),
+    )
+    case["clues"] = ((80.0, 90.0),)
+    signed_rows = (
+        {
+            "arm": "a4",
+            "case_id": "frozen",
+            "final_resolution": "no_match",
+            "selected_occurrence_ids": [],
+        },
+    )
+    frozen_rows = (
+        {
+            "arm": "a4",
+            "case_id": "frozen",
+            "final_resolution": "selected",
+            "selected_occurrence_ids": ["frozen-gold"],
+        },
+    )
+
+    result = DIAGNOSIS.build_diagnosis(
+        (case,),
+        selection_rows=signed_rows,
+        winner_selection_rows=frozen_rows,
+        expected_cases=1,
+        bootstrap_samples=10,
+    )
+
+    d7 = result["d7_winner_guard_potential"]
+    assert d7["winner_source"] == "external_frozen_control"
+    assert d7["false_commit_winner_count"] == 1
+    assert d7["false_winner_contradicted_count"] == 1
+
+
 def test_aggregation_rule_sweep_replays_r0_and_finds_referent_working_point() -> None:
     present_gold = "present-gold"
     present_other = "present-other"
