@@ -578,10 +578,13 @@ def test_row_audit_reconnects_validated_claims_to_frozen_winners() -> None:
     discrimination = report["winner_discrimination"]
     assert report["complete"] is True
     assert discrimination["validated_discrimination_established"] is True
+    assert discrimination["validated_repeat_stability"]["agreement_count"] == 4
+    assert discrimination["validated_repeat_stability"]["cohen_kappa"] == 1.0
     for repeat in discrimination["per_repeat"].values():
         assert repeat["validated"]["false_hit_count"] == 2
         assert repeat["validated"]["candidate_present_hit_count"] == 0
         assert repeat["validated"]["false_candidate_gap"] == 1.0
+        assert repeat["validated"]["false_strict_gap"] == 1.0
 
 
 def test_blind_row_judge_uses_one_item_without_persisting_prose(tmp_path: Path) -> None:

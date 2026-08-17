@@ -407,6 +407,16 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{_fmt_ci(unique.get('case_cluster_bootstrap', {}).get('ci95', ()))} |"
         )
     discrimination = report["winner_discrimination"]
+    if not discrimination.get("available"):
+        lines.extend(
+            [
+                "",
+                "## Post-Unblind Winner Discrimination",
+                "",
+                "Winner metadata unavailable; no discrimination result was computed.",
+            ]
+        )
+        return "\n".join(lines) + "\n"
     lines.extend(
         [
             "",
@@ -418,8 +428,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 "**. Raw and validated endpoint values were not validity gates."
             ),
             "",
-            "| Repeat | Signal | False winner | Candidate-present winner | Strict-correct winner | False-candidate gap (95%) |",
-            "|---|---|---:|---:|---:|---:|",
+            "| Repeat | Signal | False winner | Candidate-present winner | Strict-correct winner | False-candidate gap (95%) | False-strict gap (95%) |",
+            "|---|---|---:|---:|---:|---:|---:|",
         ]
     )
     for repeat_label, repeat in discrimination["per_repeat"].items():
@@ -432,8 +442,22 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"{row['candidate_present_count']} | "
                 f"{row['strict_correct_hit_count']}/{row['strict_correct_count']} | "
                 f"{_fmt(row['false_candidate_gap'])} "
-                f"{_fmt_ci(row['false_candidate_gap_bootstrap']['ci95'])} |"
+                f"{_fmt_ci(row['false_candidate_gap_bootstrap']['ci95'])} | "
+                f"{_fmt(row['false_strict_gap'])} "
+                f"{_fmt_ci(row['false_strict_gap_bootstrap']['ci95'])} |"
             )
+    stability = discrimination["validated_repeat_stability"]
+    lines.extend(
+        [
+            "",
+            (
+                "Validated winner-flag repeat agreement: "
+                f"{stability['agreement_count']}/{stability['case_count']} "
+                f"({_fmt(stability['agreement_rate'])}), "
+                f"Cohen's kappa {_fmt(stability['cohen_kappa'])}."
+            ),
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -625,6 +649,8 @@ def _winner_discrimination_report(
         )
     )
     per_repeat: dict[str, Any] = {}
+    raw_hits_by_repeat: dict[str, set[str]] = {}
+    validated_hits_by_repeat: dict[str, set[str]] = {}
     for repeat_index, repeat_label in enumerate(repeat_labels):
         repeat_rows = [
             row
@@ -639,6 +665,8 @@ def _winner_discrimination_report(
             if str(row.get("audit_item_id", "") or "") in judgments
             and judgments[str(row["audit_item_id"])]["verdict"] == "true_contradiction"
         }
+        raw_hits_by_repeat[repeat_label] = raw_hits
+        validated_hits_by_repeat[repeat_label] = validated_hits
         per_repeat[repeat_label] = {
             "raw": _winner_signal_metrics(
                 raw_hits,
@@ -658,15 +686,24 @@ def _winner_discrimination_report(
             ),
         }
     primary_complete = len(judgments) == len(key_rows)
-    lower_bounds = [
+    candidate_lower_bounds = [
         row["validated"]["false_candidate_gap_bootstrap"]["ci95"][0]
+        for row in per_repeat.values()
+    ]
+    strict_lower_bounds = [
+        row["validated"]["false_strict_gap_bootstrap"]["ci95"][0]
         for row in per_repeat.values()
     ]
     established = bool(
         primary_complete
-        and lower_bounds
-        and all(value is not None and value > 0 for value in lower_bounds)
+        and candidate_lower_bounds
+        and strict_lower_bounds
+        and all(
+            value is not None and value > 0
+            for value in (*candidate_lower_bounds, *strict_lower_bounds)
+        )
     )
+    scored_ids = tuple((*false_ids, *candidate_ids))
     return {
         "available": True,
         "complete": primary_complete,
@@ -674,6 +711,12 @@ def _winner_discrimination_report(
         "candidate_present_winner_count": len(candidate_ids),
         "strict_correct_winner_count": len(strict_ids),
         "per_repeat": per_repeat,
+        "raw_repeat_stability": _binary_repeat_stability(
+            raw_hits_by_repeat, case_ids=scored_ids
+        ),
+        "validated_repeat_stability": _binary_repeat_stability(
+            validated_hits_by_repeat, case_ids=scored_ids
+        ),
         "validated_discrimination_established": established,
         "conclusion": (
             "VALIDATED_WINNER_DISCRIMINATION_ESTABLISHED"
@@ -697,6 +740,7 @@ def _winner_signal_metrics(
     strict_hits = sum(case_id in hit_ids for case_id in strict_ids)
     false_rate = false_hits / len(false_ids) if false_ids else None
     candidate_rate = candidate_hits / len(candidate_ids) if candidate_ids else None
+    strict_rate = strict_hits / len(strict_ids) if strict_ids else None
     return {
         "false_count": len(false_ids),
         "false_hit_count": false_hits,
@@ -710,7 +754,7 @@ def _winner_signal_metrics(
         ),
         "strict_correct_count": len(strict_ids),
         "strict_correct_hit_count": strict_hits,
-        "strict_correct_rate": strict_hits / len(strict_ids) if strict_ids else None,
+        "strict_correct_rate": strict_rate,
         "strict_correct_rate_wilson95": _wilson_interval(strict_hits, len(strict_ids)),
         "false_candidate_gap": (
             false_rate - candidate_rate
@@ -724,6 +768,48 @@ def _winner_signal_metrics(
             samples=samples,
             seed=seed,
         ),
+        "false_strict_gap": (
+            false_rate - strict_rate
+            if false_rate is not None and strict_rate is not None
+            else None
+        ),
+        "false_strict_gap_bootstrap": _winner_gap_bootstrap(
+            hit_ids,
+            false_ids=false_ids,
+            candidate_ids=strict_ids,
+            samples=samples,
+            seed=seed + 43,
+        ),
+    }
+
+
+def _binary_repeat_stability(
+    hits_by_repeat: Mapping[str, set[str]], *, case_ids: Sequence[str]
+) -> dict[str, Any]:
+    labels = tuple(sorted(hits_by_repeat))
+    if len(labels) != 2:
+        return {
+            "available": False,
+            "case_count": len(case_ids),
+            "agreement_count": 0,
+            "agreement_rate": None,
+            "cohen_kappa": None,
+        }
+    pairs = [
+        (
+            "hit" if case_id in hits_by_repeat[labels[0]] else "clear",
+            "hit" if case_id in hits_by_repeat[labels[1]] else "clear",
+        )
+        for case_id in case_ids
+    ]
+    agreements = sum(left == right for left, right in pairs)
+    return {
+        "available": True,
+        "case_count": len(case_ids),
+        "agreement_count": agreements,
+        "agreement_rate": agreements / len(pairs) if pairs else None,
+        "agreement_wilson95": _wilson_interval(agreements, len(pairs)),
+        "cohen_kappa": _cohen_kappa(pairs),
     }
 
 
