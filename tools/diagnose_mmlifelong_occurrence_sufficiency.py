@@ -1429,7 +1429,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"{qualification['baseline_false_commit_count']} false commits and "
                 "at most "
                 f"{qualification['allowed_correct_blocks']}/"
-                f"{qualification['baseline_correct_commit_count']} correct commits. "
+                f"{qualification['baseline_correct_commit_count']} candidate-present commits. "
                 "Repeat result: **"
                 f"{_pass_fail(d7['hard_veto_qualified_on_this_repeat'])}**."
             ),

@@ -146,6 +146,14 @@ def build_report(
                 ),
             }
         )
+    actual_models = sorted(
+        {
+            str(row.get("actual_model", "") or "")
+            for repeat in repeats.values()
+            for row in repeat.values()
+            if str(row.get("actual_model", "") or "")
+        }
+    )
     return {
         "schema_version": "MMLifelongOccurrenceNegativeSidecarAnalysisV1",
         "repeat_labels": list(labels),
@@ -166,6 +174,7 @@ def build_report(
             "structural_only": structural_only,
         },
         "structural_gates": gates,
+        "actual_models": actual_models,
         "per_repeat": per_repeat,
         "stability": stability,
         "case_rows": case_rows,
@@ -185,6 +194,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"Structural gates: **{'PASS' if report['structural_gates']['passed'] else 'FAIL'}**. "
             "Endpoint values were not structural gates."
         ),
+        f"Model: {', '.join(report['actual_models']) or 'unknown'}.",
         "",
         "| Repeat | False-winner coverage | Positive-commit collateral | Strict-correct collision | Identity false blocks | Event false blocks |",
         "|---|---:|---:|---:|---:|---:|",
@@ -202,6 +212,34 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{row['false_winner_contradiction_by_type'].get('event', 0)} |"
         )
     stability = report["stability"]
+    constraint_types = sorted(
+        {
+            constraint_type
+            for label in labels
+            for key in (
+                "false_winner_contradiction_by_type",
+                "positive_winner_contradiction_by_type",
+            )
+            for constraint_type in report["per_repeat"][label][key]
+        }
+    )
+    lines.extend(
+        [
+            "",
+            "## Winner contradiction by constraint type",
+            "",
+            f"| Type | {labels[0]} false | {labels[0]} positive | {labels[1]} false | {labels[1]} positive |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for constraint_type in constraint_types:
+        lines.append(
+            f"| {constraint_type} | "
+            f"{report['per_repeat'][labels[0]]['false_winner_contradiction_by_type'].get(constraint_type, 0)} | "
+            f"{report['per_repeat'][labels[0]]['positive_winner_contradiction_by_type'].get(constraint_type, 0)} | "
+            f"{report['per_repeat'][labels[1]]['false_winner_contradiction_by_type'].get(constraint_type, 0)} | "
+            f"{report['per_repeat'][labels[1]]['positive_winner_contradiction_by_type'].get(constraint_type, 0)} |"
+        )
     lines.extend(
         [
             "",
@@ -220,6 +258,11 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"{stability['winner_flag_case_count']} "
                 f"({_fmt(stability['winner_flag_agreement_rate'])}); exact="
                 f"{stability['winner_flag_exact_agreement']}."
+            ),
+            (
+                "False/positive winner-flag agreement: "
+                f"{_fmt(stability['false_winner_flag_agreement_rate'])} / "
+                f"{_fmt(stability['positive_winner_flag_agreement_rate'])}."
             ),
             "",
             "## Frozen winner cases",
