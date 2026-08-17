@@ -641,7 +641,9 @@ def test_diagnosis_can_freeze_winner_rows_separately_from_signed_decisions() -> 
         {
             "arm": "a4",
             "case_id": "frozen",
+            "candidate_recall_resolved_set": False,
             "final_resolution": "selected",
+            "osa_strict": False,
             "selected_occurrence_ids": ["frozen-gold"],
         },
     )

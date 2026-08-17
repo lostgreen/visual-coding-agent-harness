@@ -713,10 +713,14 @@ def build_r5_error_geometry(
             for candidate in candidates
         }
         gold_ids = set(snapshot.get("gold_occurrence_ids", ()) or ())
-        candidate_present = bool(gold_ids)
+        candidate_present = bool(
+            selection.get("candidate_recall_resolved_set", bool(gold_ids))
+        )
         final_resolution = str(selection.get("final_resolution", "") or "")
         selected_candidate_gold = (
-            selected_id in gold_ids if selected_id is not None else None
+            bool(selection.get("osa_strict", selected_id in gold_ids))
+            if selected_id is not None
+            else None
         )
         selected_statuses = tuple(by_id.get(selected_id, {}).get("statuses", ()) or ())
         selected_contradictions = tuple(
