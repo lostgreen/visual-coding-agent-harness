@@ -155,3 +155,43 @@ def test_stability_excludes_missing_events_from_mechanism_denominators() -> None
     assert report["per_case"]["missing"]["supported_row_jaccard"] is None
     assert report["structural_reliability_passed"] is False
     assert report["working_method_passed"] is False
+
+
+def test_scope_size_diagnostic_stratifies_gate_errors_without_changing_r5() -> None:
+    runs = {
+        "repeat_1": {
+            "absent": {
+                "support_counts": {"occ_1": 1},
+                "gate": "sufficient",
+            },
+            "present": {
+                "support_counts": {"occ_1": 2, "occ_2": 1},
+                "gate": "sufficient",
+            },
+        }
+    }
+    performance_cases = {
+        "repeat_1": {
+            "absent": {"false_commit": True, "false_abstention": None},
+            "present": {"false_commit": None, "false_abstention": False},
+        }
+    }
+
+    diagnostic = STABILITY.build_scope_size_diagnostic(
+        runs,
+        repeat_labels=("repeat_1",),
+        performance_cases=performance_cases,
+    )
+
+    size_one = diagnostic["by_run"]["repeat_1"]["by_scope_size"]["1"]
+    assert size_one["n"] == 1
+    assert size_one["false_commit_rate"] == 1.0
+    assert size_one["mean_best_support_count"] == 1.0
+    assert size_one["mean_winner_margin"] == 1.0
+
+    size_two = diagnostic["by_run"]["repeat_1"]["by_scope_size"]["2"]
+    assert size_two["n"] == 1
+    assert size_two["commit_recall"] == 1.0
+    assert size_two["mean_total_support_count"] == 3.0
+    assert size_two["mean_winner_margin"] == 1.0
+    assert diagnostic["aggregation_changed"] is False

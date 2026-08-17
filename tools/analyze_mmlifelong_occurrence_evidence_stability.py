@@ -71,6 +71,9 @@ def build_stability_report(
     repeat_labels: Sequence[str],
     expected_cases: int,
     performance: Mapping[str, Mapping[str, Any]] | None = None,
+    performance_cases: Mapping[
+        str, Mapping[str, Mapping[str, Any]]
+    ] | None = None,
     baseline_supported_row_agreement: float | None = None,
 ) -> dict[str, Any]:
     if len(repeat_labels) != 2:
@@ -369,6 +372,11 @@ def build_stability_report(
         },
         "stability_criteria": stability_criteria,
         "performance_by_run": performance_by_run,
+        "scope_size_diagnostic": build_scope_size_diagnostic(
+            runs,
+            repeat_labels=repeat_labels,
+            performance_cases=performance_cases or {},
+        ),
         "performance_criteria": performance_criteria,
         "stability_passed": stability_passed,
         "structural_reliability_passed": structural_reliability_passed,
@@ -399,6 +407,92 @@ def build_stability_report(
             if not row["working_method_pair_valid"]
         ],
         "per_case": per_case,
+    }
+
+
+def build_scope_size_diagnostic(
+    runs: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    *,
+    repeat_labels: Sequence[str],
+    performance_cases: Mapping[str, Mapping[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    by_run: dict[str, dict[str, Any]] = {}
+    for label in repeat_labels:
+        run = runs.get(label, {})
+        case_metrics = performance_cases.get(label, {})
+        strata: dict[str, Any] = {}
+        for scope_size in range(1, 6):
+            rows: list[dict[str, Any]] = []
+            for case_id, evidence in run.items():
+                counts = {
+                    str(key): int(value)
+                    for key, value in dict(
+                        evidence.get("support_counts", {}) or {}
+                    ).items()
+                }
+                if len(counts) != scope_size:
+                    continue
+                ordered = sorted(counts.values(), reverse=True)
+                best = ordered[0] if ordered else 0
+                runner_up = ordered[1] if len(ordered) > 1 else 0
+                performance = case_metrics.get(case_id, {})
+                false_commit = performance.get("false_commit")
+                false_abstention = performance.get("false_abstention")
+                rows.append(
+                    {
+                        "false_commit": (
+                            bool(false_commit)
+                            if isinstance(false_commit, bool)
+                            else None
+                        ),
+                        "commit": (
+                            not bool(false_abstention)
+                            if isinstance(false_abstention, bool)
+                            else None
+                        ),
+                        "selected": evidence.get("gate") == "sufficient",
+                        "total_support_count": sum(counts.values()),
+                        "best_support_count": best,
+                        "winner_margin": best - runner_up,
+                    }
+                )
+            absent = [
+                row["false_commit"]
+                for row in rows
+                if row["false_commit"] is not None
+            ]
+            present = [
+                row["commit"] for row in rows if row["commit"] is not None
+            ]
+            strata[str(scope_size)] = {
+                "n": len(rows),
+                "candidate_absent_n": len(absent),
+                "candidate_present_n": len(present),
+                "false_commit_rate": _mean_values(absent),
+                "commit_recall": _mean_values(present),
+                "selected_rate": _mean_values(
+                    [row["selected"] for row in rows]
+                ),
+                "mean_total_support_count": _mean_values(
+                    [row["total_support_count"] for row in rows]
+                ),
+                "mean_best_support_count": _mean_values(
+                    [row["best_support_count"] for row in rows]
+                ),
+                "mean_winner_margin": _mean_values(
+                    [row["winner_margin"] for row in rows]
+                ),
+            }
+        by_run[label] = {
+            "case_count": len(run),
+            "performance_case_count": len(case_metrics),
+            "by_scope_size": strata,
+        }
+    return {
+        "diagnostic_only": True,
+        "aggregation_changed": False,
+        "scope_sizes": [1, 2, 3, 4, 5],
+        "by_run": by_run,
     }
 
 
@@ -706,6 +800,21 @@ def _load_performance(report_path: Path) -> Mapping[str, Any]:
     }
 
 
+def _load_performance_cases(
+    report_path: Path,
+) -> Mapping[str, Mapping[str, Any]]:
+    report = _read_json(report_path)
+    cases = report.get("cases", {})
+    if not isinstance(cases, Mapping):
+        return {}
+    return {
+        str(case_id): dict(arms.get("a4", {}))
+        for case_id, arms in cases.items()
+        if isinstance(arms, Mapping)
+        and isinstance(arms.get("a4"), Mapping)
+    }
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     metrics = report["metrics"]
     validity = report["validity"]
@@ -727,6 +836,24 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"Structural reliability passed: `{report['structural_reliability_passed']}`. Stability passed: `{report['stability_passed']}`. Performance guardrails passed in both repeats: `{report['performance_guardrails_passed']}`. Working method passed: `{report['working_method_passed']}`.",
         "",
     ]
+    for label, run in report["scope_size_diagnostic"]["by_run"].items():
+        lines.extend(
+            [
+                f"## Scope-Size Diagnostic: {label}",
+                "",
+                "| Scope | n | Absent n | False commit | Present n | Commit recall | Best support | Winner margin |",
+                "|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for scope_size, row in run["by_scope_size"].items():
+            lines.append(
+                f"| {scope_size} | {row['n']} | {row['candidate_absent_n']} | "
+                f"{_format_metric(row['false_commit_rate'])} | "
+                f"{row['candidate_present_n']} | {_format_metric(row['commit_recall'])} | "
+                f"{_format_metric(row['mean_best_support_count'])} | "
+                f"{_format_metric(row['mean_winner_margin'])} |"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -734,6 +861,11 @@ def _mean_metric(
     rows: Sequence[Mapping[str, Any]], key: str
 ) -> float | None:
     values = [row.get(key) for row in rows]
+    numeric = [float(value) for value in values if isinstance(value, (int, float))]
+    return mean(numeric) if numeric else None
+
+
+def _mean_values(values: Sequence[Any]) -> float | None:
     numeric = [float(value) for value in values if isinstance(value, (int, float))]
     return mean(numeric) if numeric else None
 
@@ -778,9 +910,14 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     runs = {label: collect_run(Path(root)) for label, root in args.run}
+    performance_reports = tuple(args.performance_report or ())
     performance = {
         label: _load_performance(Path(path))
-        for label, path in tuple(args.performance_report or ())
+        for label, path in performance_reports
+    }
+    performance_cases = {
+        label: _load_performance_cases(Path(path))
+        for label, path in performance_reports
     }
     baseline = None
     if args.baseline_report:
@@ -793,6 +930,7 @@ def main() -> int:
         repeat_labels=tuple(args.repeat_label),
         expected_cases=args.expected_cases,
         performance=performance,
+        performance_cases=performance_cases,
         baseline_supported_row_agreement=(
             float(baseline) if isinstance(baseline, (int, float)) else None
         ),
