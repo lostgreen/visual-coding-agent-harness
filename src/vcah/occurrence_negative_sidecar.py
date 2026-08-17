@@ -200,7 +200,13 @@ def load_negative_sidecar_snapshot(
             f"{case_id}: no frozen evidence declaration"
         )
     decisions = tuple(
-        row for row in trace if row.get("type") == "occurrence_sufficiency_decision"
+        row
+        for row in trace
+        if row.get("type")
+        in {
+            "occurrence_sufficiency_gate_decision",
+            "occurrence_sufficiency_decision",
+        }
     )
     if not decisions:
         raise NegativeSidecarScopeMismatchError(

@@ -111,7 +111,7 @@ def _snapshot(tmp_path: Path):
                     ],
                 },
                 {
-                    "type": "occurrence_sufficiency_decision",
+                    "type": "occurrence_sufficiency_gate_decision",
                     "set_id": "set-1",
                 },
             ]
@@ -268,7 +268,11 @@ def test_snapshot_requires_decision_and_records_packet_fallback(tmp_path: Path) 
     runtime["trace"] = [
         row
         for row in runtime["trace"]
-        if row["type"] != "occurrence_sufficiency_decision"
+        if row["type"]
+        not in {
+            "occurrence_sufficiency_gate_decision",
+            "occurrence_sufficiency_decision",
+        }
     ]
     _write_json(runtime_path, runtime)
     with pytest.raises(NegativeSidecarScopeMismatchError, match="no frozen sufficiency"):
@@ -278,7 +282,7 @@ def test_snapshot_requires_decision_and_records_packet_fallback(tmp_path: Path) 
         )
 
     runtime["trace"].append(
-        {"type": "occurrence_sufficiency_decision", "set_id": "set-1"}
+        {"type": "occurrence_sufficiency_gate_decision", "set_id": "set-1"}
     )
     _write_json(runtime_path, runtime)
     fixture_path = tmp_path / "fixtures" / "cases" / "case-1.json"
