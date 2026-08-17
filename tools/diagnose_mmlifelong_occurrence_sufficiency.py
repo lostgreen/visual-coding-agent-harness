@@ -833,11 +833,18 @@ def build_winner_guard_potential(
         row for row in false_rows if row.get("outcome") == "false_commit"
     )
     correct_commit_rows = tuple(error_geometry.get("correct_commit_rows", ()) or ())
+    resolver_error_rows = tuple(
+        row for row in false_rows if row.get("outcome") == "resolver_error"
+    )
+    positive_commit_rows = (*correct_commit_rows, *resolver_error_rows)
     false_winners_contradicted = sum(
         bool(row.get("winner_contradicted")) for row in false_commit_rows
     )
     correct_winners_contradicted = sum(
         bool(row.get("winner_contradicted")) for row in correct_commit_rows
+    )
+    positive_winners_contradicted = sum(
+        bool(row.get("winner_contradicted")) for row in positive_commit_rows
     )
 
     maximum_false_commits = int(
@@ -870,13 +877,13 @@ def build_winner_guard_potential(
                     row.get("winner_contradiction_passage_ids", ()) or ()
                 ),
             }
-            for row in (*false_commit_rows, *correct_commit_rows)
+            for row in (*false_commit_rows, *positive_commit_rows)
         ),
         key=lambda row: row["case_id"],
     )
     qualified = (
         false_winners_contradicted >= required_false_blocks
-        and correct_winners_contradicted <= allowed_correct_blocks
+        and positive_winners_contradicted <= allowed_correct_blocks
     )
     return {
         "applicable": bool(false_commit_rows or correct_commit_rows),
@@ -890,6 +897,11 @@ def build_winner_guard_potential(
         "correct_winner_contradicted_count": correct_winners_contradicted,
         "correct_winner_contradiction_rate": _ratio(
             correct_winners_contradicted, len(correct_commit_rows)
+        ),
+        "positive_commit_winner_count": len(positive_commit_rows),
+        "positive_winner_contradicted_count": positive_winners_contradicted,
+        "positive_winner_contradiction_rate": _ratio(
+            positive_winners_contradicted, len(positive_commit_rows)
         ),
         "frozen_qualification": {
             "negative_case_count": WP10_1_NEGATIVE_CASE_COUNT,
@@ -1401,8 +1413,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             (
                 "False-winner contradiction coverage: "
                 f"{_fraction(d7['false_winner_contradicted_count'], d7['false_commit_winner_count'])} "
-                f"({_fmt(d7['false_winner_contradiction_coverage'])}); correct-winner "
-                "collateral: "
+                f"({_fmt(d7['false_winner_contradiction_coverage'])}); candidate-present "
+                "commit collateral: "
+                f"{_fraction(d7['positive_winner_contradicted_count'], d7['positive_commit_winner_count'])} "
+                f"({_fmt(d7['positive_winner_contradiction_rate'])})."
+            ),
+            (
+                "Strict-correct winner contradiction: "
                 f"{_fraction(d7['correct_winner_contradicted_count'], d7['correct_commit_winner_count'])} "
                 f"({_fmt(d7['correct_winner_contradiction_rate'])})."
             ),

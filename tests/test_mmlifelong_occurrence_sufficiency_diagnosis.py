@@ -592,12 +592,20 @@ def test_winner_guard_potential_uses_frozen_qualification_thresholds() -> None:
             "winner_contradiction_constraint_types": [],
             "winner_contradiction_passage_ids": [],
         }
-        for index in range(8)
+        for index in range(7)
     ]
+    resolver_row = {
+        "case_id": "positive-resolver",
+        "outcome": "resolver_error",
+        "selected_occurrence_id": "positive-resolver-winner",
+        "winner_contradicted": False,
+        "winner_contradiction_constraint_types": [],
+        "winner_contradiction_passage_ids": [],
+    }
 
     result = DIAGNOSIS.build_winner_guard_potential(
         {
-            "error_rows": false_rows,
+            "error_rows": [*false_rows, resolver_row],
             "correct_commit_rows": correct_rows,
         }
     )
@@ -606,6 +614,8 @@ def test_winner_guard_potential_uses_frozen_qualification_thresholds() -> None:
     assert result["false_winner_contradiction_coverage"] == 5 / 12
     assert result["correct_winner_contradicted_count"] == 0
     assert result["correct_winner_contradiction_rate"] == 0.0
+    assert result["positive_commit_winner_count"] == 8
+    assert result["positive_winner_contradicted_count"] == 0
     assert result["frozen_qualification"]["required_false_blocks"] == 5
     assert result["frozen_qualification"]["allowed_correct_blocks"] == 0
     assert result["hard_veto_qualified_on_this_repeat"] is True
