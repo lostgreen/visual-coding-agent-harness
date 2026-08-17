@@ -24,6 +24,18 @@ assert SPEC and SPEC.loader
 ANALYZER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ANALYZER)
 
+AUDIT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "audit_mmlifelong_occurrence_negative_sidecar.py"
+)
+AUDIT_SPEC = importlib.util.spec_from_file_location(
+    "negative_sidecar_audit", AUDIT_PATH
+)
+assert AUDIT_SPEC and AUDIT_SPEC.loader
+AUDIT = importlib.util.module_from_spec(AUDIT_SPEC)
+AUDIT_SPEC.loader.exec_module(AUDIT)
+
 
 def _write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +183,23 @@ def test_negative_output_validation_is_scope_and_passage_bound(tmp_path: Path) -
     assert not rows
     assert "negative_sidecar_top_level_field_invalid" in errors
     assert "negative_sidecar_passage_not_visible" in errors
+
+
+def test_input_audit_reconstructs_without_model_calls(tmp_path: Path) -> None:
+    _snapshot(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    _write_json(manifest_path, {"cases": [{"case_id": "case-1"}]})
+
+    report = AUDIT.build_audit(
+        positive_run_root=tmp_path / "run",
+        replay_fixture_root=tmp_path / "fixtures",
+        case_manifest=manifest_path,
+        expected_cases=1,
+    )
+
+    assert report["structural_gate_passed"] is True
+    assert report["successful_snapshot_count"] == 1
+    assert report["model_calls_used"] is False
 
 
 def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
