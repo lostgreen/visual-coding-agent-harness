@@ -34,6 +34,11 @@ def build_report(
     *,
     frozen_rows: Sequence[Mapping[str, Any]],
     expected_cases: int,
+    expected_false_commits: int = EXPECTED_FALSE_COMMITS,
+    expected_positive_commits: int = EXPECTED_POSITIVE_COMMITS,
+    required_false_blocks: int = REQUIRED_FALSE_BLOCKS,
+    allowed_positive_blocks: int = ALLOWED_POSITIVE_BLOCKS,
+    structural_only: bool = False,
 ) -> dict[str, Any]:
     if len(repeats) != 2:
         raise ValueError("exactly two sidecar repeats are required")
@@ -72,8 +77,8 @@ def build_report(
 
     gates = _structural_gates(repeats, aligned_ids=aligned_ids)
     gates["checks"]["frozen_denominators_match"] = bool(
-        len(false_ids) == EXPECTED_FALSE_COMMITS
-        and len(positive_ids) == EXPECTED_POSITIVE_COMMITS
+        len(false_ids) == int(expected_false_commits)
+        and len(positive_ids) == int(expected_positive_commits)
     )
     gates["passed"] = all(gates["checks"].values())
     normalized = {
@@ -102,15 +107,17 @@ def build_report(
         positive_ids=positive_ids,
     )
     coverage_passed = all(
-        row["false_winner_contradicted_count"] >= REQUIRED_FALSE_BLOCKS
+        row["false_winner_contradicted_count"] >= int(required_false_blocks)
         for row in per_repeat.values()
     )
     collateral_passed = all(
-        row["positive_winner_contradicted_count"] <= ALLOWED_POSITIVE_BLOCKS
+        row["positive_winner_contradicted_count"] <= int(allowed_positive_blocks)
         for row in per_repeat.values()
     )
     stable = bool(stability["winner_flag_exact_agreement"])
-    if coverage_passed and collateral_passed and stable:
+    if structural_only:
+        decision = "STRUCTURAL_CANARY_ONLY"
+    elif coverage_passed and collateral_passed and stable:
         decision = "QUALIFIES_FOR_HARD_GUARD_EXPERIMENT"
     elif coverage_passed and not collateral_passed:
         decision = "CONTRADICTION_AS_PENDING_EVIDENCE_TRIGGER_ONLY"
@@ -148,13 +155,14 @@ def build_report(
             "strict_correct_commit_count": len(strict_correct_ids),
         },
         "qualification": {
-            "required_false_blocks": REQUIRED_FALSE_BLOCKS,
-            "expected_false_commits": EXPECTED_FALSE_COMMITS,
-            "allowed_positive_blocks": ALLOWED_POSITIVE_BLOCKS,
-            "expected_positive_commits": EXPECTED_POSITIVE_COMMITS,
+            "required_false_blocks": int(required_false_blocks),
+            "expected_false_commits": int(expected_false_commits),
+            "allowed_positive_blocks": int(allowed_positive_blocks),
+            "expected_positive_commits": int(expected_positive_commits),
             "coverage_passed": coverage_passed,
             "collateral_passed": collateral_passed,
             "exact_winner_flag_stability_passed": stable,
+            "structural_only": structural_only,
         },
         "structural_gates": gates,
         "per_repeat": per_repeat,
@@ -230,8 +238,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Hard-guard qualification is frozen at at least 5/12 false blocks, "
-            "0/8 candidate-present collateral in both repeats, and exact winner-flag stability.",
+            "Hard-guard qualification uses the declared false-block, collateral, "
+            "and winner-flag stability thresholds. Structural-only runs do not make "
+            "a mechanism decision.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -533,6 +542,19 @@ def main() -> None:
     parser.add_argument("--frozen-run-root", required=True)
     parser.add_argument("--evaluation-record-root", required=True)
     parser.add_argument("--expected-cases", type=int, required=True)
+    parser.add_argument(
+        "--expected-false-commits", type=int, default=EXPECTED_FALSE_COMMITS
+    )
+    parser.add_argument(
+        "--expected-positive-commits", type=int, default=EXPECTED_POSITIVE_COMMITS
+    )
+    parser.add_argument(
+        "--required-false-blocks", type=int, default=REQUIRED_FALSE_BLOCKS
+    )
+    parser.add_argument(
+        "--allowed-positive-blocks", type=int, default=ALLOWED_POSITIVE_BLOCKS
+    )
+    parser.add_argument("--structural-only", action="store_true")
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-md", required=True)
     args = parser.parse_args()
@@ -545,6 +567,11 @@ def main() -> None:
         repeats,
         frozen_rows=frozen_rows,
         expected_cases=args.expected_cases,
+        expected_false_commits=args.expected_false_commits,
+        expected_positive_commits=args.expected_positive_commits,
+        required_false_blocks=args.required_false_blocks,
+        allowed_positive_blocks=args.allowed_positive_blocks,
+        structural_only=args.structural_only,
     )
     _write_json(Path(args.output_json), report)
     Path(args.output_md).write_text(render_markdown(report), encoding="utf-8")

@@ -263,3 +263,14 @@ def test_two_repeat_analysis_qualifies_only_at_frozen_working_point() -> None:
     assert report["per_repeat"]["r1"]["positive_winner_contradicted_count"] == 0
     assert report["stability"]["winner_flag_exact_agreement"] is True
     assert report["decision"] == "QUALIFIES_FOR_HARD_GUARD_EXPERIMENT"
+
+    canary = ANALYZER.build_report(
+        repeats,
+        frozen_rows=frozen_rows,
+        expected_cases=20,
+        expected_false_commits=12,
+        expected_positive_commits=8,
+        structural_only=True,
+    )
+    assert canary["structural_gates"]["passed"] is True
+    assert canary["decision"] == "STRUCTURAL_CANARY_ONLY"
