@@ -7,6 +7,7 @@ import argparse
 from collections import Counter, defaultdict
 import importlib.util
 import json
+from math import ceil
 from pathlib import Path
 import random
 from statistics import mean
@@ -41,6 +42,14 @@ STRONG_BOOTSTRAP_POSITIVE_PROBABILITY = 0.90
 TOP_K_RETENTION_THRESHOLD = 0.95
 TARGET_MIN_RECALL = 0.70
 TARGET_MAX_FALSE_COMMIT = 0.20
+
+# Frozen from the clean WP10.1 control before winner-level signed analysis.
+WP10_1_NEGATIVE_CASE_COUNT = 26
+WP10_1_FALSE_COMMIT_COUNT = 12
+WP10_1_POSITIVE_CASE_COUNT = 13
+WP10_1_CORRECT_COMMIT_COUNT = 8
+WP11_HARD_GUARD_MAX_FALSE_COMMIT_RATE = 0.30
+WP11_HARD_GUARD_MIN_COMMIT_RECALL = 0.60
 
 
 def load_diagnostic_cases(
@@ -605,9 +614,7 @@ def build_aggregation_rule_sweep(
 
     r0 = next(row for row in variants if row["rule_id"] == "R0")
     observed_a4 = tuple(
-        row
-        for row in observed_selection_rows
-        if str(row.get("arm", "") or "") == "a4"
+        row for row in observed_selection_rows if str(row.get("arm", "") or "") == "a4"
     )
     observed_metrics = _selection_metrics(observed_a4) if observed_a4 else None
     parity_fields = ("case_count", "tp", "fp", "fn", "tn")
@@ -687,9 +694,7 @@ def build_r5_error_geometry(
             ),
         )
         best_count = (
-            int(candidates[0].get("supported_count", 0) or 0)
-            if candidates
-            else 0
+            int(candidates[0].get("supported_count", 0) or 0) if candidates else 0
         )
         runner_up_count = (
             int(candidates[1].get("supported_count", 0) or 0)
@@ -712,6 +717,12 @@ def build_r5_error_geometry(
         final_resolution = str(selection.get("final_resolution", "") or "")
         selected_candidate_gold = (
             selected_id in gold_ids if selected_id is not None else None
+        )
+        selected_statuses = tuple(by_id.get(selected_id, {}).get("statuses", ()) or ())
+        selected_contradictions = tuple(
+            row
+            for row in selected_statuses
+            if str(row.get("status", "") or "") == "contradicted"
         )
         if not candidate_present and final_resolution == "selected":
             outcome = "false_commit"
@@ -759,6 +770,24 @@ def build_r5_error_geometry(
                 ),
                 "candidate_count": len(candidates),
                 "selected_candidate_gold": selected_candidate_gold,
+                "selected_occurrence_id": selected_id,
+                "winner_contradicted": bool(selected_contradictions),
+                "winner_contradiction_constraint_types": sorted(
+                    {
+                        str(row.get("constraint_type", "unknown") or "unknown")
+                        for row in selected_contradictions
+                    }
+                ),
+                "winner_contradiction_passage_ids": sorted(
+                    {
+                        str(passage_id)
+                        for row in selected_contradictions
+                        for passage_id in tuple(
+                            row.get("evidence_passage_ids", ()) or ()
+                        )
+                        if str(passage_id)
+                    }
+                ),
                 "gold_supported_count_max": max(gold_counts) if gold_counts else None,
                 "selected_supported_count": (
                     int(by_id[selected_id].get("supported_count", 0) or 0)
@@ -788,6 +817,90 @@ def build_r5_error_geometry(
         "correct_commit_rows": [
             row for row in rows if row["outcome"] == "correct_commit"
         ],
+    }
+
+
+def build_winner_guard_potential(
+    error_geometry: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Test whether winner contradictions meet the frozen hard-veto bar."""
+    false_rows = tuple(error_geometry.get("error_rows", ()) or ())
+    false_commit_rows = tuple(
+        row for row in false_rows if row.get("outcome") == "false_commit"
+    )
+    correct_commit_rows = tuple(error_geometry.get("correct_commit_rows", ()) or ())
+    false_winners_contradicted = sum(
+        bool(row.get("winner_contradicted")) for row in false_commit_rows
+    )
+    correct_winners_contradicted = sum(
+        bool(row.get("winner_contradicted")) for row in correct_commit_rows
+    )
+
+    maximum_false_commits = int(
+        WP10_1_NEGATIVE_CASE_COUNT * WP11_HARD_GUARD_MAX_FALSE_COMMIT_RATE
+    )
+    required_false_blocks = max(0, WP10_1_FALSE_COMMIT_COUNT - maximum_false_commits)
+    minimum_correct_commits = ceil(
+        WP10_1_POSITIVE_CASE_COUNT * WP11_HARD_GUARD_MIN_COMMIT_RECALL
+    )
+    allowed_correct_blocks = max(
+        0, WP10_1_CORRECT_COMMIT_COUNT - minimum_correct_commits
+    )
+
+    rows = sorted(
+        (
+            {
+                "case_id": str(row.get("case_id", "") or ""),
+                "candidate_status": (
+                    "candidate_absent"
+                    if row.get("outcome") == "false_commit"
+                    else "candidate_present"
+                ),
+                "commit_outcome": str(row.get("outcome", "") or ""),
+                "r5_winner": row.get("selected_occurrence_id"),
+                "winner_contradicted": bool(row.get("winner_contradicted")),
+                "constraint_types": tuple(
+                    row.get("winner_contradiction_constraint_types", ()) or ()
+                ),
+                "passage_ids": tuple(
+                    row.get("winner_contradiction_passage_ids", ()) or ()
+                ),
+            }
+            for row in (*false_commit_rows, *correct_commit_rows)
+        ),
+        key=lambda row: row["case_id"],
+    )
+    qualified = (
+        false_winners_contradicted >= required_false_blocks
+        and correct_winners_contradicted <= allowed_correct_blocks
+    )
+    return {
+        "applicable": bool(false_commit_rows or correct_commit_rows),
+        "unit": "final_r5_winner_per_commit_case",
+        "false_commit_winner_count": len(false_commit_rows),
+        "false_winner_contradicted_count": false_winners_contradicted,
+        "false_winner_contradiction_coverage": _ratio(
+            false_winners_contradicted, len(false_commit_rows)
+        ),
+        "correct_commit_winner_count": len(correct_commit_rows),
+        "correct_winner_contradicted_count": correct_winners_contradicted,
+        "correct_winner_contradiction_rate": _ratio(
+            correct_winners_contradicted, len(correct_commit_rows)
+        ),
+        "frozen_qualification": {
+            "negative_case_count": WP10_1_NEGATIVE_CASE_COUNT,
+            "baseline_false_commit_count": WP10_1_FALSE_COMMIT_COUNT,
+            "maximum_false_commit_rate": WP11_HARD_GUARD_MAX_FALSE_COMMIT_RATE,
+            "maximum_false_commits": maximum_false_commits,
+            "required_false_blocks": required_false_blocks,
+            "positive_case_count": WP10_1_POSITIVE_CASE_COUNT,
+            "baseline_correct_commit_count": WP10_1_CORRECT_COMMIT_COUNT,
+            "minimum_commit_recall": WP11_HARD_GUARD_MIN_COMMIT_RECALL,
+            "minimum_correct_commits": minimum_correct_commits,
+            "allowed_correct_blocks": allowed_correct_blocks,
+        },
+        "hard_veto_qualified_on_this_repeat": qualified,
+        "case_rows": rows,
     }
 
 
@@ -850,7 +963,14 @@ def _final_sufficiency_snapshot(case: Mapping[str, Any]) -> dict[str, Any]:
                     "constraint_type": str(
                         constraint.get("constraint_type", "unknown") or "unknown"
                     ).casefold(),
-                    "status": str(match.get("status", "unknown") or "unknown").casefold(),
+                    "status": str(
+                        match.get("status", "unknown") or "unknown"
+                    ).casefold(),
+                    "evidence_passage_ids": tuple(
+                        str(value)
+                        for value in tuple(match.get("evidence_passage_ids", ()) or ())
+                        if str(value)
+                    ),
                 }
             )
         supported_count = sum(row["status"] == "supported" for row in statuses)
@@ -866,8 +986,7 @@ def _final_sufficiency_snapshot(case: Mapping[str, Any]) -> dict[str, Any]:
         )
     clues = tuple(case.get("clues", ()) or ())
     metadata_by_id = {
-        str(candidate.get("occurrence_id", "") or ""): candidate
-        for candidate in ranked
+        str(candidate.get("occurrence_id", "") or ""): candidate for candidate in ranked
     }
     gold_ids = {
         occurrence_id
@@ -958,9 +1077,7 @@ def _comparative_winner(
     )
     best = int(ordered[0].get("supported_count", 0) or 0)
     runner_up = (
-        int(ordered[1].get("supported_count", 0) or 0)
-        if len(ordered) > 1
-        else 0
+        int(ordered[1].get("supported_count", 0) or 0) if len(ordered) > 1 else 0
     )
     if best <= 0 or best - runner_up < 1:
         return None
@@ -1028,9 +1145,7 @@ def build_diagnosis(
         observed_selection_rows=selection_rows,
     )
     a4_selection_rows = tuple(
-        row
-        for row in selection_rows
-        if str(row.get("arm", "") or "") == "a4"
+        row for row in selection_rows if str(row.get("arm", "") or "") == "a4"
     )
     error_geometry = (
         build_r5_error_geometry(cases, selection_rows=a4_selection_rows)
@@ -1049,6 +1164,7 @@ def build_diagnosis(
         bootstrap_samples=bootstrap_samples,
         seed=seed,
     )
+    winner_guard = build_winner_guard_potential(error_geometry)
     target_achievable = bool(aggregation_sweep["target_achievable"])
     recommendation = (
         "PROCEED_WITH_OFFLINE_SELECTED_AGGREGATION_RULE"
@@ -1056,7 +1172,7 @@ def build_diagnosis(
         else "REPRESENTATION_INSUFFICIENT_FOR_TARGET_WORKING_POINT"
     )
     return {
-        "schema_version": "OccurrenceSufficiencyOfflineDiagnosisV3",
+        "schema_version": "OccurrenceSufficiencyOfflineDiagnosisV4",
         "case_count": len(cases),
         "bootstrap_samples": bootstrap_samples,
         "seed": seed,
@@ -1066,6 +1182,7 @@ def build_diagnosis(
         "d4_aggregation_rule_sweep": aggregation_sweep,
         "d5_r5_error_geometry": error_geometry,
         "d6_signed_evidence_diagnostic": signed_evidence,
+        "d7_winner_guard_potential": winner_guard,
         "selection_diagnostics": selection_diagnostics,
         "recommendation": {
             "decision": recommendation,
@@ -1087,6 +1204,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     d4 = report["d4_aggregation_rule_sweep"]
     d5 = report["d5_r5_error_geometry"]
     d6 = report["d6_signed_evidence_diagnostic"]
+    d7 = report["d7_winner_guard_potential"]
     recommendation = report["recommendation"]
     lines = [
         "# WP8 Sufficiency Offline Diagnosis",
@@ -1263,6 +1381,43 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{_fmt(row['non_gold']['contradicted_rate'])} | "
             f"{_fmt(row['non_gold_minus_gold_gap'])} |"
         )
+    qualification = d7["frozen_qualification"]
+    lines.extend(
+        [
+            "",
+            "## D7: Winner-level hard-guard potential",
+            "",
+            (
+                "False-winner contradiction coverage: "
+                f"{_fraction(d7['false_winner_contradicted_count'], d7['false_commit_winner_count'])} "
+                f"({_fmt(d7['false_winner_contradiction_coverage'])}); correct-winner "
+                "collateral: "
+                f"{_fraction(d7['correct_winner_contradicted_count'], d7['correct_commit_winner_count'])} "
+                f"({_fmt(d7['correct_winner_contradiction_rate'])})."
+            ),
+            (
+                "Frozen hard-veto requirement: block at least "
+                f"{qualification['required_false_blocks']}/"
+                f"{qualification['baseline_false_commit_count']} false commits and "
+                "at most "
+                f"{qualification['allowed_correct_blocks']}/"
+                f"{qualification['baseline_correct_commit_count']} correct commits. "
+                "Repeat result: **"
+                f"{_pass_fail(d7['hard_veto_qualified_on_this_repeat'])}**."
+            ),
+            "",
+            "| Case | Status | Outcome | R5 winner | Contradicted | Constraint types | Passage IDs |",
+            "|---|---|---|---|---|---|---|",
+        ]
+    )
+    for row in d7["case_rows"]:
+        lines.append(
+            f"| {row['case_id']} | {row['candidate_status']} | "
+            f"{row['commit_outcome']} | {row['r5_winner']} | "
+            f"{row['winner_contradicted']} | "
+            f"{', '.join(row['constraint_types']) or '-'} | "
+            f"{', '.join(row['passage_ids']) or '-'} |"
+        )
     lines.extend(
         [
             "",
@@ -1303,9 +1458,7 @@ def _expanded_sufficiency_events(
     candidate_sets: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> tuple[dict[str, Any], ...]:
     evidence_events = tuple(
-        row
-        for row in trace
-        if row.get("type") == "occurrence_evidence_declaration"
+        row for row in trace if row.get("type") == "occurrence_evidence_declaration"
     )
     if evidence_events:
         expanded_signed: list[dict[str, Any]] = []
@@ -1419,9 +1572,7 @@ def _expanded_sufficiency_events(
                     )
                     best = ranked_counts[0][1] if ranked_counts else 0
                     runner_up = ranked_counts[1][1] if len(ranked_counts) > 1 else 0
-                    minimum_margin = int(
-                        compact.get("minimum_support_margin", 1) or 1
-                    )
+                    minimum_margin = int(compact.get("minimum_support_margin", 1) or 1)
                     sufficient_ids = (
                         (ranked_counts[0][0],)
                         if ranked_counts
@@ -1434,8 +1585,7 @@ def _expanded_sufficiency_events(
                         occurrence_id
                         for occurrence_id in scope_ids
                         if normalized_constraints
-                        and support_counts[occurrence_id]
-                        == len(normalized_constraints)
+                        and support_counts[occurrence_id] == len(normalized_constraints)
                     )
                 implicit_count = sum(
                     len(
@@ -1817,18 +1967,12 @@ def _case_cluster_bootstrap_rate_gap(
     gaps: list[float] = []
     for _ in range(samples):
         sampled = [rng.choice(case_ids) for _ in case_ids]
-        left_hits = sum(
-            int(case_counts[case_id][left_success]) for case_id in sampled
-        )
-        left_count = sum(
-            int(case_counts[case_id][left_total]) for case_id in sampled
-        )
+        left_hits = sum(int(case_counts[case_id][left_success]) for case_id in sampled)
+        left_count = sum(int(case_counts[case_id][left_total]) for case_id in sampled)
         right_hits = sum(
             int(case_counts[case_id][right_success]) for case_id in sampled
         )
-        right_count = sum(
-            int(case_counts[case_id][right_total]) for case_id in sampled
-        )
+        right_count = sum(int(case_counts[case_id][right_total]) for case_id in sampled)
         if not left_count or not right_count:
             continue
         gaps.append(left_hits / left_count - right_hits / right_count)

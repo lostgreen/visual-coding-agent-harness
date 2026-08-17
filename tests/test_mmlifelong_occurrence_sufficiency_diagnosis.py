@@ -138,9 +138,7 @@ def test_signed_evidence_declaration_reconstructs_gold_and_non_gold_rows() -> No
         },
     )
 
-    events = DIAGNOSIS._expanded_sufficiency_events(
-        trace, {set_id: candidates}
-    )
+    events = DIAGNOSIS._expanded_sufficiency_events(trace, {set_id: candidates})
     report = DIAGNOSIS.build_signed_evidence_diagnostic(
         (
             {
@@ -168,6 +166,7 @@ def test_signed_evidence_declaration_reconstructs_gold_and_non_gold_rows() -> No
     ]
     assert report["overall"]["gold"]["contradicted_rate"] == 0.0
     assert report["overall"]["non_gold"]["contradicted_rate"] == 1.0
+
 
 def test_expanded_events_reconstruct_and_validate_implicit_rows() -> None:
     compact = {
@@ -561,13 +560,55 @@ def test_r5_error_geometry_separates_weak_tie_and_zero_cases() -> None:
         "false_abstention": 2,
         "false_commit": 1,
     }
-    assert result["geometry_by_outcome"]["false_commit"] == {
-        "weak_unique_leader": 1
-    }
+    assert result["geometry_by_outcome"]["false_commit"] == {"weak_unique_leader": 1}
     assert result["geometry_by_outcome"]["false_abstention"] == {
         "all_zero": 1,
         "positive_tie": 1,
     }
+
+
+def test_winner_guard_potential_uses_frozen_qualification_thresholds() -> None:
+    false_rows = [
+        {
+            "case_id": f"negative-{index:02d}",
+            "outcome": "false_commit",
+            "selected_occurrence_id": f"negative-{index:02d}-winner",
+            "winner_contradicted": index < 5,
+            "winner_contradiction_constraint_types": (
+                ["identity"] if index < 5 else []
+            ),
+            "winner_contradiction_passage_ids": (
+                [f"passage-{index:02d}"] if index < 5 else []
+            ),
+        }
+        for index in range(12)
+    ]
+    correct_rows = [
+        {
+            "case_id": f"positive-{index:02d}",
+            "outcome": "correct_commit",
+            "selected_occurrence_id": f"positive-{index:02d}-winner",
+            "winner_contradicted": False,
+            "winner_contradiction_constraint_types": [],
+            "winner_contradiction_passage_ids": [],
+        }
+        for index in range(8)
+    ]
+
+    result = DIAGNOSIS.build_winner_guard_potential(
+        {
+            "error_rows": false_rows,
+            "correct_commit_rows": correct_rows,
+        }
+    )
+
+    assert result["false_winner_contradicted_count"] == 5
+    assert result["false_winner_contradiction_coverage"] == 5 / 12
+    assert result["correct_winner_contradicted_count"] == 0
+    assert result["correct_winner_contradiction_rate"] == 0.0
+    assert result["frozen_qualification"]["required_false_blocks"] == 5
+    assert result["frozen_qualification"]["allowed_correct_blocks"] == 0
+    assert result["hard_veto_qualified_on_this_repeat"] is True
 
 
 def test_aggregation_rule_sweep_replays_r0_and_finds_referent_working_point() -> None:
