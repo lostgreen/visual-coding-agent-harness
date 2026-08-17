@@ -790,7 +790,12 @@ def build_independent_audit(
             "snapshot_digest_recomputed_matches": all(
                 case_id in snapshots
                 and results.get(case_id, {}).get("snapshot_digest")
-                == snapshots[case_id].digest
+                == (
+                    snapshots[case_id].legacy_digest
+                    if results.get(case_id, {}).get("schema_version")
+                    == "MMLifelongOccurrenceNegativeSidecarCaseV1"
+                    else snapshots[case_id].digest
+                )
                 for case_id in ids
             ),
             "source_digests_recomputed_match": all(

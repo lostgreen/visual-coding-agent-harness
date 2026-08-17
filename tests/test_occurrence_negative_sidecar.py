@@ -343,11 +343,12 @@ def test_independent_audit_recomputes_sources_and_detects_mutation(
         _write_json(
             root / "cases" / "case-1" / "sidecar_result.json",
             {
+                "schema_version": "MMLifelongOccurrenceNegativeSidecarCaseV1",
                 "case_id": "case-1",
                 "repeat_label": label,
                 "status": "success",
                 "actual_model": "test-model",
-                "snapshot_digest": snapshot.digest,
+                "snapshot_digest": snapshot.legacy_digest,
                 "model_response_digest": "response-digest",
                 "source_digests": {
                     "case_sha256": snapshot.source_case_sha256,

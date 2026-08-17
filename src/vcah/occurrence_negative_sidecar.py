@@ -141,6 +141,21 @@ class NegativeSidecarSnapshot:
             }
         )
 
+    @property
+    def legacy_digest(self) -> str:
+        """Digest used by V1 sidecar records before packet provenance was added."""
+        return stable_digest(
+            {
+                "contract": NEGATIVE_SIDECAR_CONTRACT,
+                "case_id": self.case_id,
+                "set_id": self.set_id,
+                "model_payload": self.model_payload(),
+                "source_case_sha256": self.source_case_sha256,
+                "source_runtime_sha256": self.source_runtime_sha256,
+                "replay_fixture_sha256": self.replay_fixture_sha256,
+            }
+        )
+
 
 def assert_negative_sidecar_payload(payload: Mapping[str, Any]) -> None:
     try:
