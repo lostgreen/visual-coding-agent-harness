@@ -34,7 +34,13 @@ def run_batch(args: argparse.Namespace) -> Path:
     blind = _read_json(Path(args.items_json))
     key = _read_json(Path(args.key_json))
     _validate_bundle(blind, key)
-    tasks = _judgment_tasks(blind, key, seed=int(args.seed))
+    primary_only = bool(getattr(args, "primary_only", False))
+    tasks = _judgment_tasks(
+        blind,
+        key,
+        seed=int(args.seed),
+        include_reliability=not primary_only,
+    )
     client = OpenAICompatibleClient.from_yaml(Path(args.config), section=args.section)
     workers = max(1, min(MAX_WORKERS, int(args.workers), len(tasks)))
     protocol_digest = str(blind["judgment_protocol_digest"])
@@ -47,10 +53,13 @@ def run_batch(args: argparse.Namespace) -> Path:
         "actual_model": str(client.model),
         "judgment_protocol_digest": protocol_digest,
         "primary_item_count": int(blind["item_count"]),
-        "reliability_item_count": int(key["reliability_sample_count"]),
+        "reliability_item_count": (
+            0 if primary_only else int(key["reliability_sample_count"])
+        ),
         "task_count": len(tasks),
         "one_item_per_call": True,
         "shared_conversation_context": False,
+        "primary_only": primary_only,
         "max_completion_tokens": max(4096, int(args.max_completion_tokens)),
         "judge_max_retries": max(0, int(args.judge_max_retries)),
         "workers": workers,
@@ -127,7 +136,11 @@ def _validate_bundle(blind: Mapping[str, Any], key: Mapping[str, Any]) -> None:
 
 
 def _judgment_tasks(
-    blind: Mapping[str, Any], key: Mapping[str, Any], *, seed: int
+    blind: Mapping[str, Any],
+    key: Mapping[str, Any],
+    *,
+    seed: int,
+    include_reliability: bool = True,
 ) -> tuple[dict[str, Any], ...]:
     items = {
         str(row.get("audit_item_id", "") or ""): dict(row)
@@ -137,9 +150,12 @@ def _judgment_tasks(
     tasks: list[dict[str, Any]] = []
     for item_id, item in items.items():
         tasks.append(_task(item_id, item, kind="primary"))
-    for item_id in tuple(key.get("reliability_sample_item_ids", ()) or ()):
-        normalized_id = str(item_id)
-        tasks.append(_task(normalized_id, items[normalized_id], kind="reliability"))
+    if include_reliability:
+        for item_id in tuple(key.get("reliability_sample_item_ids", ()) or ()):
+            normalized_id = str(item_id)
+            tasks.append(
+                _task(normalized_id, items[normalized_id], kind="reliability")
+            )
     random.Random(seed).shuffle(tasks)
     return tuple(tasks)
 
@@ -366,6 +382,11 @@ def main() -> None:
     parser.add_argument("--judge-max-retries", type=int, default=2)
     parser.add_argument("--max-completion-tokens", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=20260817)
+    parser.add_argument(
+        "--primary-only",
+        action="store_true",
+        help="Judge each blind item once without the reliability rejudgment subset.",
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     output = run_batch(args)

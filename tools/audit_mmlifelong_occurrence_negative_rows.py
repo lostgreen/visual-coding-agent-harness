@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import importlib.util
 import json
 import math
@@ -16,6 +15,12 @@ from typing import Any, Mapping, Sequence
 from vcah.occurrence_negative_sidecar import (
     load_negative_sidecar_snapshot,
     stable_digest,
+)
+from vcah.occurrence_evaluation_stats import (
+    cohen_kappa,
+    fisher_exact_two_sided,
+    newcombe_difference_interval,
+    wilson_interval,
 )
 
 
@@ -303,7 +308,7 @@ def analyze_judgments(
         and winner_discrimination["complete"]
     )
     return {
-        "schema_version": "MMLifelongOccurrenceNegativeRowAuditAnalysisV2",
+        "schema_version": "MMLifelongOccurrenceNegativeRowAuditAnalysisV3",
         "metric_name": "citation_grounded_contradiction_precision",
         "scope_note": BLIND_JUDGMENT_PROTOCOL["scope_note"],
         "expected_item_count": len(key_rows),
@@ -428,7 +433,11 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 "**. Raw and validated endpoint values were not validity gates."
             ),
             "",
-            "| Repeat | Signal | False winner | Candidate-present winner | Strict-correct winner | False-candidate gap (95%) | False-strict gap (95%) |",
+            "This is same-cohort exploratory evidence. Repeated sidecars measure "
+            "stability, not independent cohort replication.",
+            str(discrimination["boundary_bootstrap_warning"]),
+            "",
+            "| Repeat | Signal | False winner (Wilson 95%) | Candidate-present winner (Wilson 95%) | Strict-correct winner (Wilson 95%) | False-candidate gap (Newcombe/bootstrap 95%; Fisher p) | False-strict gap (Newcombe/bootstrap 95%; Fisher p) |",
             "|---|---|---:|---:|---:|---:|---:|",
         ]
     )
@@ -437,14 +446,21 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             row = repeat[signal]
             lines.append(
                 f"| {repeat_label} | {signal} | "
-                f"{row['false_hit_count']}/{row['false_count']} | "
+                f"{row['false_hit_count']}/{row['false_count']} "
+                f"{_fmt_ci(row['false_rate_wilson95'])} | "
                 f"{row['candidate_present_hit_count']}/"
-                f"{row['candidate_present_count']} | "
-                f"{row['strict_correct_hit_count']}/{row['strict_correct_count']} | "
+                f"{row['candidate_present_count']} "
+                f"{_fmt_ci(row['candidate_present_rate_wilson95'])} | "
+                f"{row['strict_correct_hit_count']}/{row['strict_correct_count']} "
+                f"{_fmt_ci(row['strict_correct_rate_wilson95'])} | "
                 f"{_fmt(row['false_candidate_gap'])} "
-                f"{_fmt_ci(row['false_candidate_gap_bootstrap']['ci95'])} | "
+                f"{_fmt_ci(row['false_candidate_gap_newcombe95'])} / "
+                f"{_fmt_ci(row['false_candidate_gap_bootstrap']['ci95'])}; "
+                f"{_fmt(row['false_candidate_fisher_exact_two_sided_p'])} | "
                 f"{_fmt(row['false_strict_gap'])} "
-                f"{_fmt_ci(row['false_strict_gap_bootstrap']['ci95'])} |"
+                f"{_fmt_ci(row['false_strict_gap_newcombe95'])} / "
+                f"{_fmt_ci(row['false_strict_gap_bootstrap']['ci95'])}; "
+                f"{_fmt(row['false_strict_fisher_exact_two_sided_p'])} |"
             )
     stability = discrimination["validated_repeat_stability"]
     lines.extend(
@@ -589,19 +605,7 @@ def _reliability_report(
 
 
 def _cohen_kappa(pairs: Sequence[tuple[str, str]]) -> float | None:
-    if not pairs:
-        return None
-    total = len(pairs)
-    observed = sum(left == right for left, right in pairs) / total
-    left_counts = Counter(left for left, _ in pairs)
-    right_counts = Counter(right for _, right in pairs)
-    expected = sum(
-        (left_counts[label] / total) * (right_counts[label] / total)
-        for label in VALID_VERDICTS
-    )
-    if math.isclose(expected, 1.0):
-        return 1.0 if math.isclose(observed, 1.0) else 0.0
-    return (observed - expected) / (1.0 - expected)
+    return cohen_kappa(pairs, labels=sorted(VALID_VERDICTS))
 
 
 def _winner_discrimination_report(
@@ -687,20 +691,15 @@ def _winner_discrimination_report(
         }
     primary_complete = len(judgments) == len(key_rows)
     candidate_lower_bounds = [
-        row["validated"]["false_candidate_gap_bootstrap"]["ci95"][0]
+        row["validated"]["false_candidate_gap_newcombe95"][0]
         for row in per_repeat.values()
     ]
-    strict_lower_bounds = [
-        row["validated"]["false_strict_gap_bootstrap"]["ci95"][0]
-        for row in per_repeat.values()
-    ]
-    established = bool(
+    exploratory = bool(
         primary_complete
         and candidate_lower_bounds
-        and strict_lower_bounds
         and all(
             value is not None and value > 0
-            for value in (*candidate_lower_bounds, *strict_lower_bounds)
+            for value in candidate_lower_bounds
         )
     )
     scored_ids = tuple((*false_ids, *candidate_ids))
@@ -717,10 +716,17 @@ def _winner_discrimination_report(
         "validated_repeat_stability": _binary_repeat_stability(
             validated_hits_by_repeat, case_ids=scored_ids
         ),
-        "validated_discrimination_established": established,
+        "inferential_scope": "same_cohort_exploratory",
+        "boundary_bootstrap_warning": (
+            "Nonparametric bootstrap cannot represent unseen collateral when an "
+            "observed comparison group has zero hits; use Wilson, Newcombe, and "
+            "Fisher results as the primary small-sample summaries."
+        ),
+        "validated_discrimination_exploratory_signal": exploratory,
+        "validated_discrimination_established": False,
         "conclusion": (
-            "VALIDATED_WINNER_DISCRIMINATION_ESTABLISHED"
-            if established
+            "STRONG_EXPLORATORY_VALIDATED_WINNER_DISCRIMINATION"
+            if exploratory
             else "VALIDATED_WINNER_DISCRIMINATION_NOT_ESTABLISHED"
         ),
     }
@@ -741,6 +747,20 @@ def _winner_signal_metrics(
     false_rate = false_hits / len(false_ids) if false_ids else None
     candidate_rate = candidate_hits / len(candidate_ids) if candidate_ids else None
     strict_rate = strict_hits / len(strict_ids) if strict_ids else None
+    candidate_bootstrap = _winner_gap_bootstrap(
+        hit_ids,
+        false_ids=false_ids,
+        candidate_ids=candidate_ids,
+        samples=samples,
+        seed=seed,
+    )
+    strict_bootstrap = _winner_gap_bootstrap(
+        hit_ids,
+        false_ids=false_ids,
+        candidate_ids=strict_ids,
+        samples=samples,
+        seed=seed + 43,
+    )
     return {
         "false_count": len(false_ids),
         "false_hit_count": false_hits,
@@ -761,24 +781,38 @@ def _winner_signal_metrics(
             if false_rate is not None and candidate_rate is not None
             else None
         ),
-        "false_candidate_gap_bootstrap": _winner_gap_bootstrap(
-            hit_ids,
-            false_ids=false_ids,
-            candidate_ids=candidate_ids,
-            samples=samples,
-            seed=seed,
+        "false_candidate_gap_bootstrap": candidate_bootstrap,
+        "false_candidate_gap_case_cluster_bootstrap": candidate_bootstrap,
+        "false_candidate_gap_newcombe95": newcombe_difference_interval(
+            false_hits,
+            len(false_ids),
+            candidate_hits,
+            len(candidate_ids),
+        ),
+        "false_candidate_fisher_exact_two_sided_p": fisher_exact_two_sided(
+            false_hits,
+            len(false_ids),
+            candidate_hits,
+            len(candidate_ids),
         ),
         "false_strict_gap": (
             false_rate - strict_rate
             if false_rate is not None and strict_rate is not None
             else None
         ),
-        "false_strict_gap_bootstrap": _winner_gap_bootstrap(
-            hit_ids,
-            false_ids=false_ids,
-            candidate_ids=strict_ids,
-            samples=samples,
-            seed=seed + 43,
+        "false_strict_gap_bootstrap": strict_bootstrap,
+        "false_strict_gap_case_cluster_bootstrap": strict_bootstrap,
+        "false_strict_gap_newcombe95": newcombe_difference_interval(
+            false_hits,
+            len(false_ids),
+            strict_hits,
+            len(strict_ids),
+        ),
+        "false_strict_fisher_exact_two_sided_p": fisher_exact_two_sided(
+            false_hits,
+            len(false_ids),
+            strict_hits,
+            len(strict_ids),
         ),
     }
 
@@ -872,18 +906,7 @@ def _case_cluster_bootstrap(
 
 
 def _wilson_interval(successes: int, total: int) -> list[float | None]:
-    if total <= 0:
-        return [None, None]
-    z = 1.959963984540054
-    proportion = successes / total
-    denominator = 1 + z * z / total
-    center = (proportion + z * z / (2 * total)) / denominator
-    spread = (
-        z
-        * math.sqrt(proportion * (1 - proportion) / total + z * z / (4 * total * total))
-        / denominator
-    )
-    return [max(0.0, center - spread), min(1.0, center + spread)]
+    return wilson_interval(successes, total)
 
 
 def _quantile(values: Sequence[float], probability: float) -> float | None:

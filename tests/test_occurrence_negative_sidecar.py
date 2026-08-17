@@ -82,6 +82,18 @@ assert ROW_JUDGE_SPEC and ROW_JUDGE_SPEC.loader
 ROW_JUDGE = importlib.util.module_from_spec(ROW_JUDGE_SPEC)
 ROW_JUDGE_SPEC.loader.exec_module(ROW_JUDGE)
 
+TRANSFER_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "analyze_mmlifelong_occurrence_verifier_transfer.py"
+)
+TRANSFER_SPEC = importlib.util.spec_from_file_location(
+    "occurrence_verifier_transfer", TRANSFER_PATH
+)
+assert TRANSFER_SPEC and TRANSFER_SPEC.loader
+TRANSFER = importlib.util.module_from_spec(TRANSFER_SPEC)
+TRANSFER_SPEC.loader.exec_module(TRANSFER)
+
 
 def _write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -577,7 +589,12 @@ def test_row_audit_reconnects_validated_claims_to_frozen_winners() -> None:
     )
     discrimination = report["winner_discrimination"]
     assert report["complete"] is True
-    assert discrimination["validated_discrimination_established"] is True
+    assert discrimination["validated_discrimination_established"] is False
+    assert discrimination["validated_discrimination_exploratory_signal"] is True
+    assert (
+        discrimination["conclusion"]
+        == "STRONG_EXPLORATORY_VALIDATED_WINNER_DISCRIMINATION"
+    )
     assert discrimination["validated_repeat_stability"]["agreement_count"] == 4
     assert discrimination["validated_repeat_stability"]["cohen_kappa"] == 1.0
     for repeat in discrimination["per_repeat"].values():
@@ -585,6 +602,134 @@ def test_row_audit_reconnects_validated_claims_to_frozen_winners() -> None:
         assert repeat["validated"]["candidate_present_hit_count"] == 0
         assert repeat["validated"]["false_candidate_gap"] == 1.0
         assert repeat["validated"]["false_strict_gap"] == 1.0
+        assert repeat["validated"]["false_candidate_gap_newcombe95"][0] > 0
+
+
+def test_small_sample_winner_statistics_do_not_collapse_zero_cell() -> None:
+    metrics = ROW_AUDIT._winner_signal_metrics(
+        {f"false-{index}" for index in range(5)},
+        false_ids=[f"false-{index}" for index in range(12)],
+        candidate_ids=[f"positive-{index}" for index in range(8)],
+        strict_ids=[f"positive-{index}" for index in range(7)],
+        samples=200,
+        seed=7,
+    )
+    assert metrics["candidate_present_rate"] == 0.0
+    assert metrics["candidate_present_rate_wilson95"][1] > 0.30
+    assert metrics["false_candidate_gap_newcombe95"][0] > 0
+    assert metrics["false_candidate_fisher_exact_two_sided_p"] == pytest.approx(
+        0.0547, abs=0.001
+    )
+
+
+def test_blind_row_judge_primary_only_skips_reliability_tasks() -> None:
+    items = [
+        {"audit_item_id": "item-1"},
+        {"audit_item_id": "item-2"},
+    ]
+    tasks = ROW_JUDGE._judgment_tasks(
+        {"items": items},
+        {"reliability_sample_item_ids": ["item-1"]},
+        seed=7,
+        include_reliability=False,
+    )
+    assert len(tasks) == 2
+    assert {row["judgment_kind"] for row in tasks} == {"primary"}
+
+
+def test_runtime_verifier_transfer_uses_preregistered_small_sample_gates() -> None:
+    false_ids = [f"false-{index:02d}" for index in range(12)]
+    positive_ids = [f"positive-{index:02d}" for index in range(8)]
+    winner_cases = [
+        {
+            "case_id": case_id,
+            "winner_class": (
+                "false_winner" if case_id in false_ids else "candidate_present_winner"
+            ),
+            "strict_correct": case_id in positive_ids[:7],
+        }
+        for case_id in (*false_ids, *positive_ids)
+    ]
+    key_rows = []
+    labels = []
+    for repeat in ("r1", "r2"):
+        for case_id in (*false_ids[:5], *positive_ids):
+            item_id = f"{repeat}-{case_id}"
+            key_rows.append(
+                {
+                    "audit_item_id": item_id,
+                    "repeat_label": repeat,
+                    "case_id": case_id,
+                    "targets_selected_winner": True,
+                }
+            )
+            labels.append(
+                {
+                    "audit_item_id": item_id,
+                    "verdict": (
+                        "true_contradiction"
+                        if case_id in false_ids
+                        else "false_contradiction"
+                    ),
+                }
+            )
+    key = {
+        "item_count": len(key_rows),
+        "rows": key_rows,
+        "winner_cases": winner_cases,
+        "judgment_protocol_digest": "protocol",
+    }
+    reference = {
+        "actual_model": "gpt-reference",
+        "judgment_protocol_digest": "protocol",
+        "judgments": labels,
+    }
+    runtime = {
+        "actual_model": "runtime-verifier",
+        "judgment_protocol_digest": "protocol",
+        "judgments": labels,
+    }
+    common_manifest = {
+        "items_sha256": "items",
+        "key_sha256": "key",
+        "one_item_per_call": True,
+        "shared_conversation_context": False,
+        "raw_response_persisted": False,
+        "prompt_persisted": False,
+        "primary_item_count": len(key_rows),
+    }
+    report = TRANSFER.analyze_transfer(
+        key,
+        reference,
+        runtime,
+        reference_manifest={
+            **common_manifest,
+            "actual_model": "gpt-reference",
+            "reliability_item_count": 6,
+            "task_count": len(key_rows) + 6,
+            "primary_only": False,
+        },
+        runtime_manifest={
+            **common_manifest,
+            "actual_model": "runtime-verifier",
+            "reliability_item_count": 0,
+            "task_count": len(key_rows),
+            "primary_only": True,
+        },
+        expected_reference_model="gpt-reference",
+        expected_runtime_model="runtime-verifier",
+        bootstrap_samples=200,
+        seed=7,
+    )
+    assert report["structural_gate_passed"] is True
+    assert report["row_transfer"]["cohen_kappa"] == 1.0
+    assert report["row_transfer"]["true_contradiction"]["f1"] == 1.0
+    assert report["decision_checks"] == {
+        "row_kappa_passed": True,
+        "winner_discrimination_passed": True,
+        "correct_winner_collateral_passed": True,
+    }
+    assert report["decision"] == "RUNTIME_CONFLICT_VERIFIER_TRANSFER_FEASIBLE"
 
 
 def test_blind_row_judge_uses_one_item_without_persisting_prose(tmp_path: Path) -> None:
