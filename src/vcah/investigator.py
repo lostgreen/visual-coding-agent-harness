@@ -5,10 +5,16 @@ import json
 from typing import Any, Callable, Mapping, Sequence
 
 from vcah.evidence_state import InterpretationItem
+from vcah.caption_context import (
+    CAPTION_CONTEXT_CONTRACT,
+    DEFAULT_CONTEXT_MAX_GAP_SEC,
+    expand_query_conditioned_context,
+)
+from vcah.caption_evidence_bundle import build_caption_evidence_bundle_set
 from vcah.caption_hybrid_search import CaptionHybridSearch
 from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
 from vcah.caption_occurrence import build_caption_occurrence_set
-from vcah.caption_schema import CaptionHitV1
+from vcah.caption_schema import CaptionHitV1, stable_digest
 from vcah.caption_semantic_index import CaptionSemanticIndex
 from vcah.embedding_adapter import TextEmbeddingAdapter
 from vcah.types import EvidenceRecord
@@ -368,6 +374,8 @@ class VirtualVideoInvestigator:
         source_video_ids: Sequence[str] = (),
         top_k: int = 12,
         expand_neighbors: int = 0,
+        context_neighbors: int = 0,
+        context_max_gap_sec: float = DEFAULT_CONTEXT_MAX_GAP_SEC,
         index_mode: str = "lexical",
     ) -> Mapping[str, Any]:
         mode = str(index_mode or "lexical").strip().casefold()
@@ -414,7 +422,7 @@ class VirtualVideoInvestigator:
             index = self._load_caption_index(mode)
             self._caption_indexes[mode] = index
         index.save_manifest(self.workspace.asset_root)
-        hits = tuple(
+        seed_hits = tuple(
             _caption_hit_with_source_identity(self.workspace, hit)
             for hit in index.search(
                 queries,
@@ -424,12 +432,49 @@ class VirtualVideoInvestigator:
                 expand_neighbors=expand_neighbors,
             )
         )
-        fingerprint = index.query_fingerprint(
+        context_distance = max(0, int(context_neighbors))
+        context_gap = max(0.0, float(context_max_gap_sec))
+        if context_distance:
+            segment_to_source = {
+                segment.segment_id: segment.source_video_id
+                for segment in self.workspace.manifest.segments
+            }
+            hits = tuple(
+                _caption_hit_with_source_identity(self.workspace, hit)
+                for hit in expand_query_conditioned_context(
+                    index.passages,
+                    seed_hits,
+                    distance=context_distance,
+                    time_range=time_range,
+                    segment_ids=index_segment_ids,
+                    index_digest=index.index_digest,
+                    config_digest=index.config_digest,
+                    source_video_id_by_segment=segment_to_source,
+                    max_gap_sec=context_gap,
+                )
+            )
+            evidence_bundle_set = build_caption_evidence_bundle_set(hits)
+        else:
+            hits = seed_hits
+            evidence_bundle_set = None
+        base_fingerprint = index.query_fingerprint(
             queries,
             top_k=top_k,
             time_range=time_range,
             segment_ids=index_segment_ids,
             expand_neighbors=expand_neighbors,
+        )
+        fingerprint = (
+            stable_digest(
+                {
+                    "base_query_fingerprint": base_fingerprint,
+                    "context_contract": CAPTION_CONTEXT_CONTRACT,
+                    "context_neighbors": context_distance,
+                    "context_max_gap_sec": context_gap,
+                }
+            )
+            if context_distance
+            else base_fingerprint
         )
         packet: Mapping[str, Any] = {
             "queries": [str(query) for query in queries],
@@ -439,6 +484,8 @@ class VirtualVideoInvestigator:
             "scope_empty": scope_empty,
             "top_k": int(top_k),
             "expand_neighbors": int(expand_neighbors),
+            "context_neighbors": context_distance,
+            "context_max_gap_sec": context_gap,
             "index_mode": mode,
             "query_strategy": str(
                 getattr(index, "query_strategy", self._caption_query_strategy)
@@ -446,8 +493,14 @@ class VirtualVideoInvestigator:
             "index_digest": index.index_digest,
             "config_digest": index.config_digest,
             "query_fingerprint": fingerprint,
+            "seed_hits": [asdict(hit) for hit in seed_hits],
             "hits": [asdict(hit) for hit in hits],
-            "occurrence_set": build_caption_occurrence_set(hits),
+            "occurrence_set": build_caption_occurrence_set(seed_hits),
+            **(
+                {"evidence_bundle_set": evidence_bundle_set}
+                if evidence_bundle_set is not None
+                else {}
+            ),
             "rendered": render_caption_hits(hits),
         }
         if self._caption_packet_transform is not None:
@@ -467,6 +520,10 @@ class VirtualVideoInvestigator:
                     raise ValueError(
                         f"caption_packet_transform removed required field: {key}"
                     )
+            if context_distance and "evidence_bundle_set" not in packet:
+                raise ValueError(
+                    "caption_packet_transform removed required field: evidence_bundle_set"
+                )
         return packet
 
     def _load_caption_index(self, mode: str) -> Any:

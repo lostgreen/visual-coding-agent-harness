@@ -45,6 +45,9 @@ class DeterministicCaptionReplay:
         queries: Sequence[str],
         *,
         top_k: int,
+        expand_neighbors_override: int | None = None,
+        context_neighbors: int = 0,
+        context_max_gap_sec: float = 180.0,
     ) -> Mapping[str, Any]:
         mode = str(packet.get("index_mode", "") or "").strip().casefold()
         strategy = str(packet.get("query_strategy", "") or "joint").strip().casefold()
@@ -66,7 +69,13 @@ class DeterministicCaptionReplay:
             segment_ids=tuple(packet.get("segment_ids", ()) or ()),
             source_video_ids=tuple(packet.get("source_video_ids", ()) or ()),
             top_k=top_k,
-            expand_neighbors=int(packet.get("expand_neighbors", 0) or 0),
+            expand_neighbors=(
+                int(packet.get("expand_neighbors", 0) or 0)
+                if expand_neighbors_override is None
+                else max(0, int(expand_neighbors_override))
+            ),
+            context_neighbors=max(0, int(context_neighbors)),
+            context_max_gap_sec=max(0.0, float(context_max_gap_sec)),
             index_mode=mode,
         )
 
