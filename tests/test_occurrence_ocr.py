@@ -71,6 +71,29 @@ def test_parser_accepts_frames_as_root_array_with_audit_count() -> None:
     assert diagnostic["normalization_counts"] == {"root_array_to_frames": 1}
 
 
+def test_parser_allows_dense_ui_frames_but_retains_a_finite_cap() -> None:
+    rows = ",".join(
+        f'{{"text":"item {index}","region":"other","confidence":"low"}}'
+        for index in range(40)
+    )
+    raw = f'{{"frames":[{{"frame_label":"frame_01","visible_text":[{rows}]}}]}}'
+    assert (
+        parse_gemini_ocr_response(
+            raw,
+            allowed_frame_labels=("frame_01",),
+        )
+        is not None
+    )
+    assert (
+        parse_gemini_ocr_response(
+            raw,
+            allowed_frame_labels=("frame_01",),
+            max_rows_per_frame=32,
+        )
+        is None
+    )
+
+
 def test_temporal_dedup_keeps_lineage_and_highest_confidence() -> None:
     rows = deduplicate_ocr_rows(
         (

@@ -68,7 +68,7 @@ def parse_gemini_ocr_response(
     raw: str,
     *,
     allowed_frame_labels: Sequence[str],
-    max_rows_per_frame: int = 32,
+    max_rows_per_frame: int = 96,
 ) -> tuple[dict[str, Any], ...] | None:
     diagnostic = parse_gemini_ocr_response_diagnostic(
         raw,
@@ -83,7 +83,7 @@ def parse_gemini_ocr_response_diagnostic(
     raw: str,
     *,
     allowed_frame_labels: Sequence[str],
-    max_rows_per_frame: int = 32,
+    max_rows_per_frame: int = 96,
 ) -> dict[str, Any]:
     labels = tuple(
         dict.fromkeys(
