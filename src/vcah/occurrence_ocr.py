@@ -97,9 +97,13 @@ def parse_gemini_ocr_response_diagnostic(
         payload = json.loads(_FENCE_RE.sub("", str(raw).strip()))
     except (TypeError, ValueError, json.JSONDecodeError):
         return _parse_diagnostic(None, "invalid_json", normalization_counts)
-    if not isinstance(payload, Mapping):
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        frames = payload
+        normalization_counts["root_array_to_frames"] += 1
+    elif isinstance(payload, Mapping):
+        frames = payload.get("frames")
+    else:
         return _parse_diagnostic(None, "root_not_object", normalization_counts)
-    frames = payload.get("frames")
     if not isinstance(frames, Sequence) or isinstance(frames, (str, bytes)):
         return _parse_diagnostic(None, "frames_not_array", normalization_counts)
     allowed = set(labels)

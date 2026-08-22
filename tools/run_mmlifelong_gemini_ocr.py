@@ -87,6 +87,8 @@ def run(args: argparse.Namespace) -> Path:
         "answer_visible_to_model": False,
         "raw_response_persisted": False,
         "prompt_persisted": False,
+        "selected_variant_must_succeed_for_every_case": True,
+        "nonselected_variant_failure_is_diagnostic": True,
         "retrieval_claim_is_formal_improvement": False,
         "day_test140_accessed": False,
         "week_accessed": False,
@@ -149,8 +151,9 @@ def run(args: argparse.Namespace) -> Path:
                 flush=True,
             )
     _write_progress(out_root, work_items, results, run_manifest)
-    if sum(row.get("status") == "success" for row in results.values()) != len(
-        work_items
+    if any(
+        results[(case_id, str(args.selected_variant))].get("status") != "success"
+        for case_id in selected_ids
     ):
         raise SystemExit(1)
 
@@ -274,7 +277,13 @@ def _run_one(
     prior = _read_json(result_path) if args.resume and result_path.is_file() else None
     if (
         prior is not None
-        and prior.get("status") == "success"
+        and (
+            prior.get("status") == "success"
+            or (
+                variant != str(args.selected_variant)
+                and int(prior.get("attempt_count", 0) or 0) >= 2
+            )
+        )
         and prior.get("actual_model") == client.model
         and prior.get("prompt_digest") == stable_digest(prompt)
         and prior.get("frame_digest") == frame_digest

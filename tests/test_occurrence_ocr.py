@@ -61,6 +61,15 @@ def test_parser_normalizes_noncritical_schema_variation() -> None:
     }
 
 
+def test_parser_accepts_frames_as_root_array_with_audit_count() -> None:
+    diagnostic = parse_gemini_ocr_response_diagnostic(
+        '[{"frame_label":"frame_01","visible_text":[]}]',
+        allowed_frame_labels=("frame_01",),
+    )
+    assert diagnostic["status"] == "success"
+    assert diagnostic["normalization_counts"] == {"root_array_to_frames": 1}
+
+
 def test_temporal_dedup_keeps_lineage_and_highest_confidence() -> None:
     rows = deduplicate_ocr_rows(
         (
