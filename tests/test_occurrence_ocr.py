@@ -9,6 +9,7 @@ from vcah.occurrence_ocr import (
     ocr_sidecar_passages,
     ocr_query_overlap,
     parse_gemini_ocr_response,
+    parse_gemini_ocr_response_diagnostic,
 )
 
 
@@ -33,13 +34,31 @@ def test_parser_requires_every_bound_frame_and_valid_enums() -> None:
     )
     assert rows is not None
     assert rows[0]["text"] == "虎先锋"
-    assert (
-        parse_gemini_ocr_response(
-            '{"frames":[{"frame_label":"frame_01","visible_text":[]}]}',
-            allowed_frame_labels=("frame_01", "frame_02"),
-        )
-        is None
+    missing = parse_gemini_ocr_response_diagnostic(
+        '{"frames":[{"frame_label":"frame_01","visible_text":[]}]}',
+        allowed_frame_labels=("frame_01", "frame_02"),
     )
+    assert missing["status"] == "success"
+    assert missing["normalization_counts"]["implicit_empty_frame"] == 1
+
+
+def test_parser_normalizes_noncritical_schema_variation() -> None:
+    raw = (
+        '{"frames":[{"frame_label":"frame_01 (first)","visible_text":['
+        '{"text":"缩地青符","region":"item_name","confidence":0.91}]}]}'
+    )
+    diagnostic = parse_gemini_ocr_response_diagnostic(
+        raw, allowed_frame_labels=("frame_01", "frame_02")
+    )
+    assert diagnostic["status"] == "success"
+    assert diagnostic["rows"][0]["region"] == "other"
+    assert diagnostic["rows"][0]["confidence"] == "high"
+    assert diagnostic["normalization_counts"] == {
+        "confidence_normalized": 1,
+        "frame_label_alias": 1,
+        "implicit_empty_frame": 1,
+        "unknown_region_to_other": 1,
+    }
 
 
 def test_temporal_dedup_keeps_lineage_and_highest_confidence() -> None:

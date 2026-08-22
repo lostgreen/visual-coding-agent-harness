@@ -30,7 +30,7 @@ from vcah.occurrence_ocr import (
     gemini_ocr_prompt,
     ocr_sidecar_passages,
     ocr_query_overlap,
-    parse_gemini_ocr_response,
+    parse_gemini_ocr_response_diagnostic,
 )
 from vcah.virtual_video import VirtualVideoWorkspace, materialize_window_frames
 
@@ -283,6 +283,7 @@ def _run_one(
     started = time.monotonic()
     attempts: list[dict[str, Any]] = []
     parsed = None
+    parse_diagnostic: dict[str, Any] = {}
     raw = ""
     response_metadata: dict[str, Any] = {}
     for parse_attempt in range(2):
@@ -313,11 +314,19 @@ def _run_one(
                 }
             )
             break
-        parsed = parse_gemini_ocr_response(raw, allowed_frame_labels=labels)
+        parse_diagnostic = parse_gemini_ocr_response_diagnostic(
+            raw, allowed_frame_labels=labels
+        )
+        parsed_rows = parse_diagnostic.get("rows")
+        parsed = tuple(parsed_rows) if isinstance(parsed_rows, Sequence) else None
         attempts.append(
             {
                 "attempt_index": parse_attempt + 1,
                 "status": "success" if parsed is not None else "invalid_json",
+                "parse_status": str(parse_diagnostic.get("status", "invalid")),
+                "normalization_counts": dict(
+                    parse_diagnostic.get("normalization_counts", {})
+                ),
                 "model_response_digest": stable_digest(raw),
                 "response_metadata": response_metadata,
             }
@@ -344,6 +353,10 @@ def _run_one(
         "ocr_rows": list(ocr_rows),
         "ocr_unique_line_count": len(ocr_rows),
         "ocr_nonempty": bool(ocr_rows),
+        "parse_status": str(parse_diagnostic.get("status", "invalid")),
+        "normalization_counts": dict(
+            parse_diagnostic.get("normalization_counts", {})
+        ),
         "attempt_count": len(attempts),
         "attempt_history": attempts,
         "response_metadata": response_metadata,

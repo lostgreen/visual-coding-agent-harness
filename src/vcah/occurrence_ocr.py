@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, replace
 import json
 import re
@@ -69,6 +70,21 @@ def parse_gemini_ocr_response(
     allowed_frame_labels: Sequence[str],
     max_rows_per_frame: int = 32,
 ) -> tuple[dict[str, Any], ...] | None:
+    diagnostic = parse_gemini_ocr_response_diagnostic(
+        raw,
+        allowed_frame_labels=allowed_frame_labels,
+        max_rows_per_frame=max_rows_per_frame,
+    )
+    rows = diagnostic.get("rows")
+    return tuple(rows) if isinstance(rows, Sequence) else None
+
+
+def parse_gemini_ocr_response_diagnostic(
+    raw: str,
+    *,
+    allowed_frame_labels: Sequence[str],
+    max_rows_per_frame: int = 32,
+) -> dict[str, Any]:
     labels = tuple(
         dict.fromkeys(
             str(label).strip() for label in allowed_frame_labels if str(label).strip()
@@ -76,40 +92,68 @@ def parse_gemini_ocr_response(
     )
     if not labels:
         raise ValueError("allowed_frame_labels cannot be empty")
+    normalization_counts: Counter[str] = Counter()
     try:
         payload = json.loads(_FENCE_RE.sub("", str(raw).strip()))
     except (TypeError, ValueError, json.JSONDecodeError):
-        return None
+        return _parse_diagnostic(None, "invalid_json", normalization_counts)
     if not isinstance(payload, Mapping):
-        return None
+        return _parse_diagnostic(None, "root_not_object", normalization_counts)
     frames = payload.get("frames")
     if not isinstance(frames, Sequence) or isinstance(frames, (str, bytes)):
-        return None
+        return _parse_diagnostic(None, "frames_not_array", normalization_counts)
     allowed = set(labels)
     seen: set[str] = set()
     parsed: list[dict[str, Any]] = []
     for frame in frames:
         if not isinstance(frame, Mapping):
-            return None
+            return _parse_diagnostic(
+                None, "frame_not_object", normalization_counts
+            )
         label = str(frame.get("frame_label", "") or "").strip()
-        if label not in allowed or label in seen:
-            return None
+        if label not in allowed:
+            contained = tuple(value for value in labels if value in label)
+            if len(contained) == 1:
+                label = contained[0]
+                normalization_counts["frame_label_alias"] += 1
+            else:
+                return _parse_diagnostic(
+                    None, "unknown_frame_label", normalization_counts
+                )
+        if label in seen:
+            return _parse_diagnostic(
+                None, "duplicate_frame_label", normalization_counts
+            )
         seen.add(label)
         visible = frame.get("visible_text", ())
-        if not isinstance(visible, Sequence) or isinstance(visible, (str, bytes)):
-            return None
+        if isinstance(visible, str):
+            visible = (visible,)
+            normalization_counts["visible_text_string"] += 1
+        if not isinstance(visible, Sequence) or isinstance(visible, bytes):
+            return _parse_diagnostic(
+                None, "visible_text_not_array", normalization_counts
+            )
         if len(visible) > max(1, int(max_rows_per_frame)):
-            return None
+            return _parse_diagnostic(None, "too_many_rows", normalization_counts)
         for row in visible:
+            if isinstance(row, str):
+                row = {"text": row, "region": "other", "confidence": "low"}
+                normalization_counts["string_row"] += 1
             if not isinstance(row, Mapping):
-                return None
+                return _parse_diagnostic(None, "row_not_object", normalization_counts)
             text = _normalize_ocr_text(row.get("text", ""))
-            region = str(row.get("region", "") or "").strip().casefold()
-            confidence = str(row.get("confidence", "") or "").strip().casefold()
-            if not text or len(text) > 240:
-                return None
-            if region not in OCR_REGIONS or confidence not in OCR_CONFIDENCES:
-                return None
+            if not text:
+                normalization_counts["blank_row_dropped"] += 1
+                continue
+            if len(text) > 500:
+                return _parse_diagnostic(None, "text_too_long", normalization_counts)
+            region = str(row.get("region", "other") or "other").strip().casefold()
+            if region not in OCR_REGIONS:
+                region = "other"
+                normalization_counts["unknown_region_to_other"] += 1
+            confidence = _normalized_confidence(row.get("confidence", "low"))
+            if confidence != str(row.get("confidence", "low") or "low").strip().casefold():
+                normalization_counts["confidence_normalized"] += 1
             parsed.append(
                 {
                     "frame_label": label,
@@ -119,10 +163,8 @@ def parse_gemini_ocr_response(
                     "confidence": confidence,
                 }
             )
-    # Missing frame objects are invalid: otherwise the model can silently skip hard images.
-    if seen != allowed:
-        return None
-    return tuple(parsed)
+    normalization_counts["implicit_empty_frame"] += len(allowed - seen)
+    return _parse_diagnostic(tuple(parsed), "success", normalization_counts)
 
 
 def deduplicate_ocr_rows(
@@ -371,3 +413,33 @@ def _diagnostic_token(token: str) -> bool:
     if len(value) >= 2:
         return True
     return value.isdigit()
+
+
+def _normalized_confidence(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return "high" if number >= 0.8 else "medium" if number >= 0.5 else "low"
+    text = str(value or "low").strip().casefold()
+    if text in OCR_CONFIDENCES:
+        return text
+    aliases = {
+        "very high": "high",
+        "certain": "high",
+        "moderate": "medium",
+        "uncertain": "low",
+    }
+    return aliases.get(text, "low")
+
+
+def _parse_diagnostic(
+    rows: Sequence[Mapping[str, Any]] | None,
+    status: str,
+    counts: Mapping[str, int],
+) -> dict[str, Any]:
+    return {
+        "status": str(status),
+        "rows": tuple(dict(row) for row in rows) if rows is not None else None,
+        "normalization_counts": {
+            str(key): int(value) for key, value in sorted(counts.items()) if int(value)
+        },
+    }
