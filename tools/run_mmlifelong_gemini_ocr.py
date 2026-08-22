@@ -30,6 +30,7 @@ from vcah.occurrence_ocr import (
     gemini_ocr_prompt,
     ocr_sidecar_passages,
     ocr_query_overlap,
+    ocr_text_has_query_evidence,
     parse_gemini_ocr_response_diagnostic,
 )
 from vcah.virtual_video import VirtualVideoWorkspace, materialize_window_frames
@@ -470,12 +471,16 @@ def _build_report(
             )
             queries = tuple(str(value) for value in packet.get("queries", ()) or ())
             baseline_hits = tuple(packet.get("hits", ()) or ())[:retrieval_top_k]
-            ocr_hits = ocr_index.search(
-                queries,
-                top_k=max(20, retrieval_top_k * 4),
-                time_range=_optional_interval(packet.get("time_range")),
-                segment_ids=tuple(packet.get("segment_ids", ()) or ()),
-                expand_neighbors=0,
+            ocr_hits = tuple(
+                hit
+                for hit in ocr_index.search(
+                    queries,
+                    top_k=max(20, retrieval_top_k * 4),
+                    time_range=_optional_interval(packet.get("time_range")),
+                    segment_ids=tuple(packet.get("segment_ids", ()) or ()),
+                    expand_neighbors=0,
+                )
+                if ocr_text_has_query_evidence(hit.text, queries)
             )
             fused_hits = fuse_caption_hit_ranks(
                 baseline_hits,
@@ -529,7 +534,10 @@ def _build_report(
             "regressed_case_ids": [
                 row["case_id"] for row in case_rows if row["regressed_at_5"]
             ],
-            "fusion": "baseline_caption_rank + OCR-only lexical rank, RRF k0=60",
+            "fusion": (
+                "baseline_caption_rank + OCR-only lexical rank, RRF k0=60; "
+                "OCR admission requires an English/numeric token or Chinese bigram match"
+            ),
         },
         "case_level": case_rows,
         "validity": {

@@ -8,6 +8,7 @@ from vcah.occurrence_ocr import (
     gemini_ocr_prompt,
     ocr_sidecar_passages,
     ocr_query_overlap,
+    ocr_text_has_query_evidence,
     parse_gemini_ocr_response,
     parse_gemini_ocr_response_diagnostic,
 )
@@ -100,6 +101,8 @@ def test_ocr_query_overlap_uses_posthoc_tokens() -> None:
     result = ocr_query_overlap(({"text": "虎先锋"},), ("击败虎先锋之后",))
     assert "虎先" in result["matched_tokens"]
     assert result["matched_token_count"] > 0
+    assert ocr_text_has_query_evidence("虎先锋", ("击败虎先锋之后",)) is True
+    assert ocr_text_has_query_evidence("虎", ("击败虎先锋之后",)) is False
 
 
 def test_enrichment_binds_nearest_passage_without_changing_ids() -> None:

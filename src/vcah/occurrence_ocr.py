@@ -255,6 +255,14 @@ def ocr_query_overlap(
     }
 
 
+def ocr_text_has_query_evidence(text: str, query_texts: Sequence[str]) -> bool:
+    return bool(
+        ocr_query_overlap(({"text": str(text)},), query_texts)[
+            "matched_token_count"
+        ]
+    )
+
+
 def enrich_caption_passages_with_ocr(
     passages: Sequence[CaptionPassageV1],
     ocr_rows: Sequence[Mapping[str, Any]],
