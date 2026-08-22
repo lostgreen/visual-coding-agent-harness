@@ -23,6 +23,17 @@ def _bundle(
                 "passage_id": f"p-{bundle_id}-{index}",
                 "time_range": interval,
                 "role": "seed" if index == 0 else "context",
+                "context_links": (
+                    []
+                    if index == 0
+                    else [
+                        {
+                            "seed_passage_id": f"seed-{bundle_id}",
+                            "same_source_timeline": True,
+                            "source_match_basis": "source_video_id",
+                        }
+                    ]
+                ),
             }
             for index, interval in enumerate(intervals)
         ],
@@ -112,3 +123,25 @@ def test_context_expansion_rejects_seed_drift() -> None:
     assert report["structural_gate_passed"] is False
     assert report["decision"] == "STOP_STRUCTURAL_GATE_FAILED"
     assert any("seed_drift" in error for error in report["structural_errors"])
+
+
+def test_context_expansion_requires_proven_same_source_links() -> None:
+    case = _case("source-proof", baseline_gold=False, expanded_gold=True)
+    context_member = case["packets"][0]["variants"]["neighbors_1"][
+        "bundle_set"
+    ]["bundles"][0]["member_passages"][1]
+    context_member["context_links"] = []
+
+    report = build_occurrence_context_expansion_report(
+        (case,),
+        expected_cases=1,
+        variant_order=("neighbors_1", "neighbors_2"),
+        target_recall_count=1,
+        target_recovery_count=1,
+    )
+
+    assert report["structural_gate_passed"] is False
+    assert any(
+        "context_source_link_unproven" in error
+        for error in report["structural_errors"]
+    )

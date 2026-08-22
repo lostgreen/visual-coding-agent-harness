@@ -137,10 +137,19 @@ def _structural_errors(
                         errors.append(
                             f"{case_id}:packet{packet_index}:{variant}:boundary_not_preserved"
                         )
-                    if len(tuple(bundle.get("source_video_ids", ()) or ())) > 1:
-                        errors.append(
-                            f"{case_id}:packet{packet_index}:{variant}:cross_source_bundle"
-                        )
+                    for member in tuple(bundle.get("member_passages", ()) or ()):
+                        if str(member.get("role", "")) != "context":
+                            continue
+                        links = tuple(member.get("context_links", ()) or ())
+                        if not links or any(
+                            not isinstance(link, Mapping)
+                            or link.get("same_source_timeline") is not True
+                            for link in links
+                        ):
+                            errors.append(
+                                f"{case_id}:packet{packet_index}:{variant}:"
+                                "context_source_link_unproven"
+                            )
     return sorted(set(errors))
 
 

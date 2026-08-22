@@ -83,11 +83,13 @@ def expand_query_conditioned_context(
                 previous = neighbor
                 if neighbor.passage_id == seed.passage_id:
                     continue
+                source_relation = _timeline_relation(source, neighbor, source_map)
                 link = {
                     "seed_passage_id": seed.passage_id,
                     "seed_rank": seed.rank,
                     "offset": direction * step,
                     "edge_gap_sec": round(edge_gap, 3),
+                    **source_relation,
                 }
                 row = additions.setdefault(
                     neighbor.passage_id,
@@ -188,6 +190,18 @@ def _same_source_timeline(
     right: CaptionPassageV1,
     source_video_id_by_segment: Mapping[str, str],
 ) -> bool:
+    return bool(
+        _timeline_relation(left, right, source_video_id_by_segment)[
+            "same_source_timeline"
+        ]
+    )
+
+
+def _timeline_relation(
+    left: CaptionPassageV1,
+    right: CaptionPassageV1,
+    source_video_id_by_segment: Mapping[str, str],
+) -> dict[str, Any]:
     left_segments = _string_set(left.metadata.get("source_segments", ()))
     right_segments = _string_set(right.metadata.get("source_segments", ()))
     left_sources = {
@@ -201,10 +215,27 @@ def _same_source_timeline(
         if segment_id in source_video_id_by_segment
     }
     if left_sources and right_sources:
-        return bool(left_sources & right_sources)
+        shared_sources = sorted(left_sources & right_sources)
+        return {
+            "same_source_timeline": bool(shared_sources),
+            "source_match_basis": "source_video_id",
+            "shared_source_video_ids": shared_sources,
+            "shared_segment_ids": [],
+        }
     if left_segments and right_segments:
-        return bool(left_segments & right_segments)
-    return left.caption_id == right.caption_id
+        shared_segments = sorted(left_segments & right_segments)
+        return {
+            "same_source_timeline": bool(shared_segments),
+            "source_match_basis": "segment_id",
+            "shared_source_video_ids": [],
+            "shared_segment_ids": shared_segments,
+        }
+    return {
+        "same_source_timeline": left.caption_id == right.caption_id,
+        "source_match_basis": "caption_id",
+        "shared_source_video_ids": [],
+        "shared_segment_ids": [],
+    }
 
 
 def _in_time_range(

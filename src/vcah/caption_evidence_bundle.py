@@ -81,6 +81,13 @@ def build_caption_evidence_bundle_set(
                         "cross_caption": bool(
                             row["metadata"].get("cross_caption", False)
                         ),
+                        "context_links": [
+                            dict(link)
+                            for link in tuple(
+                                row["metadata"].get("context_links", ()) or ()
+                            )
+                            if isinstance(link, Mapping)
+                        ],
                     }
                     for row in members
                 ],

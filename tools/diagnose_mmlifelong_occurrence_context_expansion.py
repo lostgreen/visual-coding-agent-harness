@@ -183,7 +183,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"- Structural gate: {report['structural_gate_passed']}",
             f"- Structural error count: {len(report['structural_errors'])}",
             "- Retrieval seed IDs must match exactly across all variants.",
-            "- Bundles cannot cross source videos.",
+            "- Every context passage carries a proven same-source link to a seed passage.",
+            "- A bundle may list multiple source IDs when a boundary passage itself spans segments.",
             "- Bundles preserve member-event boundaries and assert only temporal relatedness.",
             "- frozen39 remains exploratory and underpowered.",
         ]
@@ -247,6 +248,13 @@ def _compact_bundle_set(bundle_set: Mapping[str, Any]) -> dict[str, Any]:
                         "cross_caption": bool(
                             member.get("cross_caption", False)
                         ),
+                        "context_links": [
+                            dict(link)
+                            for link in tuple(
+                                member.get("context_links", ()) or ()
+                            )
+                            if isinstance(link, Mapping)
+                        ],
                     }
                     for member in tuple(bundle.get("member_passages", ()) or ())
                     if isinstance(member, Mapping)

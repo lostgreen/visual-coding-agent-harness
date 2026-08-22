@@ -82,6 +82,18 @@ def test_context_expansion_crosses_caption_chunks_on_same_source() -> None:
     assert expanded[1].metadata["neighbor_of"] == "cap59:p5"
     assert expanded[1].metadata["cross_caption"] is True
     assert expanded[1].metadata["candidate_only"] is True
+    assert expanded[1].metadata["context_links"] == [
+        {
+            "seed_passage_id": "cap59:p5",
+            "seed_rank": 1,
+            "offset": 1,
+            "edge_gap_sec": 156.0,
+            "same_source_timeline": True,
+            "source_match_basis": "source_video_id",
+            "shared_source_video_ids": ["video-a"],
+            "shared_segment_ids": [],
+        }
+    ]
 
     bundle_set = build_caption_evidence_bundle_set(expanded)
     bundle = bundle_set["bundles"][0]
@@ -93,6 +105,9 @@ def test_context_expansion_crosses_caption_chunks_on_same_source() -> None:
     ]
     assert bundle["event_boundaries_preserved"] is True
     assert bundle["semantic_claim"] == "temporally_related_evidence_not_single_event"
+    assert bundle["member_passages"][1]["context_links"][0][
+        "same_source_timeline"
+    ] is True
 
 
 def test_context_expansion_respects_gap_and_source_boundaries() -> None:
