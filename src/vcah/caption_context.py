@@ -8,6 +8,7 @@ from vcah.caption_schema import CaptionHitV1, CaptionPassageV1, passage_in_segme
 
 CAPTION_CONTEXT_CONTRACT = "query_conditioned_caption_context_v1"
 DEFAULT_CONTEXT_MAX_GAP_SEC = 180.0
+CONTEXT_DIRECTIONS = frozenset({"both", "before", "after"})
 
 
 def expand_query_conditioned_context(
@@ -21,9 +22,18 @@ def expand_query_conditioned_context(
     config_digest: str,
     source_video_id_by_segment: Mapping[str, str] | None = None,
     max_gap_sec: float = DEFAULT_CONTEXT_MAX_GAP_SEC,
+    direction: str = "both",
 ) -> list[CaptionHitV1]:
     """Expand retrieved seeds on the same source timeline without merging events."""
 
+    selected_direction = str(direction).strip().casefold()
+    if selected_direction not in CONTEXT_DIRECTIONS:
+        raise ValueError(f"unsupported context direction: {direction}")
+    directions = {
+        "both": (-1, 1),
+        "before": (-1,),
+        "after": (1,),
+    }[selected_direction]
     seeds = list(seed_hits)
     radius = max(0, int(distance))
     if radius == 0 or not seeds:
@@ -70,10 +80,10 @@ def expand_query_conditioned_context(
         source_index = positions.get(source.passage_id)
         if source_index is None:
             continue
-        for direction in (-1, 1):
+        for offset_direction in directions:
             previous = source
             for step in range(1, radius + 1):
-                index = source_index + direction * step
+                index = source_index + offset_direction * step
                 if index < 0 or index >= len(timeline):
                     break
                 neighbor = timeline[index]
@@ -87,7 +97,7 @@ def expand_query_conditioned_context(
                 link = {
                     "seed_passage_id": seed.passage_id,
                     "seed_rank": seed.rank,
-                    "offset": direction * step,
+                    "offset": offset_direction * step,
                     "edge_gap_sec": round(edge_gap, 3),
                     **source_relation,
                 }
@@ -166,6 +176,7 @@ def expand_query_conditioned_context(
                     "index_digest": index_digest,
                     "candidate_only": True,
                     "context_expansion_contract": CAPTION_CONTEXT_CONTRACT,
+                    "context_direction": selected_direction,
                     "context_seed_passage_ids": list(
                         dict.fromkeys(
                             str(link["seed_passage_id"]) for link in links

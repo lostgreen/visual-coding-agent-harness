@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from vcah.caption_schema import CaptionPassageV1
 from vcah.occurrence_ocr import (
+    bind_ocr_rows_to_passages,
     deduplicate_ocr_rows,
     enrich_caption_passages_with_ocr,
     fuse_caption_hit_ranks,
@@ -128,6 +129,14 @@ def test_ocr_query_overlap_uses_posthoc_tokens() -> None:
     assert ocr_text_has_query_evidence("虎", ("击败虎先锋之后",)) is False
 
 
+def test_numeric_only_overlap_is_audited_but_not_admitted() -> None:
+    result = ocr_query_overlap(({"text": "3"},), ("Chapter 3",))
+    assert result["matched_token_count"] == 0
+    assert result["weak_numeric_matched_tokens"] == ["3"]
+    assert result["weak_numeric_only"] is True
+    assert ocr_text_has_query_evidence("3", ("Chapter 3",)) is False
+
+
 def test_enrichment_binds_nearest_passage_without_changing_ids() -> None:
     passages = (
         CaptionPassageV1(
@@ -163,10 +172,40 @@ def test_enrichment_binds_nearest_passage_without_changing_ids() -> None:
     )
     assert [row.passage_id for row in enriched] == ["p1", "p2"]
     assert "虎先锋" in enriched[0].text
+    assert enriched[0].metadata["ocr_rows"][0]["text"] == "虎先锋"
     assert enriched[1].text == passages[1].text
     sidecar = ocr_sidecar_passages(enriched)
     assert sidecar[0].text == "虎先锋"
     assert sidecar[1].text == ""
+
+
+def test_binding_retains_region_and_segment_lineage() -> None:
+    passage = CaptionPassageV1(
+        passage_id="p1",
+        caption_id="c1",
+        text="A subtitle is visible.",
+        virtual_start_sec=10.0,
+        virtual_end_sec=20.0,
+        anchor_virtual_sec=10.0,
+        ordinal=0,
+        metadata={"source_segments": ["seg-a"]},
+    )
+    bound = bind_ocr_rows_to_passages(
+        (passage,),
+        (
+            {
+                "text": "小的们",
+                "regions": ["subtitle"],
+                "max_confidence": "high",
+                "frame_labels": ["frame_01"],
+                "virtual_times_sec": [15.0],
+                "segment_ids": ["seg-a"],
+            },
+        ),
+    )
+    assert bound["p1"][0]["regions"] == ["subtitle"]
+    assert bound["p1"][0]["segment_ids"] == ["seg-a"]
+    assert bound["p1"][0]["binding_distance_sec"] == 0.0
 
 
 def test_rank_fusion_can_promote_ocr_only_passage() -> None:

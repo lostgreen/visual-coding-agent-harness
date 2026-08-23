@@ -88,6 +88,18 @@ def build_caption_evidence_bundle_set(
                             )
                             if isinstance(link, Mapping)
                         ],
+                        "evidence_channels_observed": list(
+                            row["metadata"].get(
+                                "evidence_channels_observed", ()
+                            )
+                            or ()
+                        ),
+                        "anchor_evidence_contract": str(
+                            row["metadata"].get(
+                                "anchor_evidence_contract", ""
+                            )
+                            or ""
+                        ),
                     }
                     for row in members
                 ],

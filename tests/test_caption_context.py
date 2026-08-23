@@ -164,6 +164,27 @@ def test_context_expansion_keeps_all_seeds_ahead_of_context() -> None:
     assert expanded[2].metadata["context_seed_passage_ids"] == ["first", "last"]
 
 
+def test_context_expansion_can_be_directional() -> None:
+    before = _passage("before", "cap-a", 10.0, 20.0, "seg-a")
+    anchor = _passage("anchor", "cap-a", 21.0, 30.0, "seg-a")
+    after = _passage("after", "cap-a", 31.0, 40.0, "seg-a")
+
+    expanded = expand_query_conditioned_context(
+        (before, anchor, after),
+        (_hit(anchor),),
+        distance=1,
+        time_range=None,
+        index_digest="index",
+        config_digest="cfg",
+        source_video_id_by_segment={"seg-a": "video-a"},
+        direction="after",
+    )
+
+    assert [hit.passage_id for hit in expanded] == ["anchor", "after"]
+    assert expanded[1].metadata["neighbor_offset"] == 1
+    assert expanded[1].metadata["context_direction"] == "after"
+
+
 def test_caption_search_context_is_opt_in_and_emits_bundle(tmp_path) -> None:
     defeat = CaptionPassageV1(
         "cap59:p5",

@@ -231,19 +231,26 @@ def ocr_query_overlap(
     ocr_rows: Sequence[Mapping[str, Any]],
     query_texts: Sequence[str],
 ) -> dict[str, Any]:
-    ocr_tokens = {
+    all_ocr_tokens = {
         token
         for row in ocr_rows
         for token in tokenize_caption_text(str(row.get("text", "") or ""))
         if _diagnostic_token(token)
     }
-    query_tokens = {
+    all_query_tokens = {
         token
         for query in query_texts
         for token in tokenize_caption_text(str(query))
         if _diagnostic_token(token)
     }
+    ocr_tokens = {token for token in all_ocr_tokens if not _numeric_token(token)}
+    query_tokens = {
+        token for token in all_query_tokens if not _numeric_token(token)
+    }
+    weak_ocr_tokens = all_ocr_tokens - ocr_tokens
+    weak_query_tokens = all_query_tokens - query_tokens
     matched = sorted(ocr_tokens & query_tokens)
+    weak_numeric_matched = sorted(weak_ocr_tokens & weak_query_tokens)
     return {
         "ocr_token_count": len(ocr_tokens),
         "query_token_count": len(query_tokens),
@@ -252,6 +259,11 @@ def ocr_query_overlap(
             len(matched) / len(query_tokens) if query_tokens else 0.0
         ),
         "matched_tokens": matched[:24],
+        "weak_numeric_ocr_token_count": len(weak_ocr_tokens),
+        "weak_numeric_query_token_count": len(weak_query_tokens),
+        "weak_numeric_matched_token_count": len(weak_numeric_matched),
+        "weak_numeric_matched_tokens": weak_numeric_matched[:24],
+        "weak_numeric_only": bool(weak_numeric_matched) and not bool(matched),
     }
 
 
@@ -269,7 +281,49 @@ def enrich_caption_passages_with_ocr(
     *,
     nearest_tolerance_sec: float = 8.0,
 ) -> tuple[CaptionPassageV1, ...]:
-    additions: dict[str, list[str]] = {}
+    additions = bind_ocr_rows_to_passages(
+        passages,
+        ocr_rows,
+        nearest_tolerance_sec=nearest_tolerance_sec,
+    )
+    enriched: list[CaptionPassageV1] = []
+    for passage in passages:
+        rows = additions.get(passage.passage_id, ())
+        values = list(
+            dict.fromkeys(
+                str(row.get("text", "") or "")
+                for row in rows
+                if str(row.get("text", "") or "")
+            )
+        )
+        if not values:
+            enriched.append(passage)
+            continue
+        suffix = " ; ".join(values)
+        enriched.append(
+            replace(
+                passage,
+                text=f"{passage.text} [VISIBLE OCR] {suffix}",
+                metadata={
+                    **dict(passage.metadata),
+                    "ocr_contract": GEMINI_OCR_CONTRACT,
+                    "ocr_text": values,
+                    "ocr_rows": [dict(row) for row in rows],
+                },
+            )
+        )
+    return tuple(enriched)
+
+
+def bind_ocr_rows_to_passages(
+    passages: Sequence[CaptionPassageV1],
+    ocr_rows: Sequence[Mapping[str, Any]],
+    *,
+    nearest_tolerance_sec: float = 8.0,
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Bind OCR evidence to the nearest passage while retaining row lineage."""
+
+    additions: dict[str, list[dict[str, Any]]] = {}
     for row in ocr_rows:
         text = _normalize_ocr_text(row.get("text", ""))
         times = tuple(
@@ -303,29 +357,36 @@ def enrich_caption_passages_with_ocr(
             if distance > best_distance + 1e-6:
                 continue
             values = additions.setdefault(passage.passage_id, [])
-            if normalize_caption_query(text) not in {
-                normalize_caption_query(value) for value in values
+            normalized = normalize_caption_query(text)
+            if normalized in {
+                normalize_caption_query(value.get("text", "")) for value in values
             }:
-                values.append(text)
-    enriched: list[CaptionPassageV1] = []
-    for passage in passages:
-        values = additions.get(passage.passage_id, [])
-        if not values:
-            enriched.append(passage)
-            continue
-        suffix = " ; ".join(values)
-        enriched.append(
-            replace(
-                passage,
-                text=f"{passage.text} [VISIBLE OCR] {suffix}",
-                metadata={
-                    **dict(passage.metadata),
-                    "ocr_contract": GEMINI_OCR_CONTRACT,
-                    "ocr_text": list(values),
-                },
-            )
-        )
-    return tuple(enriched)
+                continue
+            compact = {
+                "text": text,
+                "normalized_text": normalized,
+                "regions": [
+                    str(value)
+                    for value in tuple(row.get("regions", ()) or ())
+                    if str(value)
+                ],
+                "max_confidence": str(
+                    row.get("max_confidence", row.get("confidence", "low")) or "low"
+                ),
+                "frame_labels": [
+                    str(value)
+                    for value in tuple(row.get("frame_labels", ()) or ())
+                    if str(value)
+                ],
+                "virtual_times_sec": [round(float(value), 3) for value in times],
+                "segment_ids": sorted(segment_ids),
+                "binding_distance_sec": round(float(distance), 3),
+            }
+            values.append(compact)
+    return {
+        passage_id: tuple(rows)
+        for passage_id, rows in sorted(additions.items())
+    }
 
 
 def ocr_sidecar_passages(
@@ -425,6 +486,10 @@ def _diagnostic_token(token: str) -> bool:
     if len(value) >= 2:
         return True
     return value.isdigit()
+
+
+def _numeric_token(token: str) -> bool:
+    return str(token).strip().isdigit()
 
 
 def _normalized_confidence(value: Any) -> str:
