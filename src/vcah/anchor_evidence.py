@@ -32,7 +32,6 @@ def infer_anchor_evidence_request(question: str) -> AnchorEvidenceRequest:
         for token in (
             " after ",
             "after ",
-            "following ",
             "随后",
             "之后",
             "以后",
@@ -150,6 +149,37 @@ def infer_anchor_evidence_request(question: str) -> AnchorEvidenceRequest:
             None,
             tuple(channels),
             "no_explicit_before_or_after_relation",
+        )
+    if "which of the following" in text or "下列" in text:
+        return AnchorEvidenceRequest(
+            False,
+            direction,
+            relation,
+            tuple(channels),
+            "multi_candidate_relation_requires_separate_anchors",
+        )
+    relation_prefix = text.split(",", 1)[0]
+    if (
+        direction == "after"
+        and relation_prefix.startswith("after ")
+        and "which" in relation_prefix
+    ):
+        return AnchorEvidenceRequest(
+            False,
+            direction,
+            relation,
+            tuple(channels),
+            "anchor_is_unknown_answer_target",
+        )
+    if "respectively" in text or (
+        "first boss" in text and "final boss" in text
+    ):
+        return AnchorEvidenceRequest(
+            False,
+            direction,
+            relation,
+            tuple(channels),
+            "multi_occurrence_selection_requires_stateful_evidence",
         )
     if "numeric_or_aggregate" in channels:
         return AnchorEvidenceRequest(

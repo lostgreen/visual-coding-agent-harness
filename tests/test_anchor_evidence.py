@@ -63,6 +63,25 @@ def test_request_recognizes_direction_and_channel_without_entities() -> None:
     assert numeric_ocr.direction == "before"
     assert numeric_ocr.evidence_channels == ("numeric_ocr",)
 
+    following = infer_anchor_evidence_request(
+        "Which of the following statements is correct?"
+    )
+    assert following.eligible is False
+    assert following.direction is None
+
+    multi_anchor = infer_anchor_evidence_request(
+        "Before fighting which of the following characters is mana not full?"
+    )
+    assert multi_anchor.eligible is False
+    assert multi_anchor.direction == "before"
+    assert multi_anchor.reason == "multi_candidate_relation_requires_separate_anchors"
+
+    unknown_anchor = infer_anchor_evidence_request(
+        "After defeating which boss was the armor unlocked?"
+    )
+    assert unknown_anchor.eligible is False
+    assert unknown_anchor.reason == "anchor_is_unknown_answer_target"
+
 
 def test_expansion_bypasses_packet_scope_only_after_frozen_anchor() -> None:
     anchor = _passage("anchor", 10.0, 20.0, "seg-a")
