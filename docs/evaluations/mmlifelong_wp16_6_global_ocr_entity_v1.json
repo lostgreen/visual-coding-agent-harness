@@ -1,0 +1,152 @@
+{
+  "contract": "WP16-6-global-ocr-entity-sidecar-v1",
+  "protocol_frozen_before_outcomes": true,
+  "source_protocol": {
+    "wp16_5_commit": "d49bfc2acfc43df7f3653b23d5cd33b934bcbc46",
+    "caption_config_digest": "fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96",
+    "caption_passage_count": 2960,
+    "caption_chunk_count": 296,
+    "video_segment_count": 32,
+    "frozen10_field_spec_sha256": "7133c2ee45b22ce78d7ae9be06033cdbe207674d5cad257b77f281f28696c161"
+  },
+  "sampling": {
+    "strategy": "fixed_3_per_caption_passage_v1",
+    "positions": ["start", "midpoint", "end_minus_1ms"],
+    "deduplicate_at_millisecond": true,
+    "question_independent": true,
+    "official_interval_independent": true,
+    "canary_selection": {
+      "algorithm": "sort_by_sha256(seed_colon_passage_id)_take_first_n",
+      "seed": "wp16-6a0-20260824-v1",
+      "fraction": 0.2,
+      "exact_passage_count": 592
+    },
+    "full_selection": {
+      "exact_passage_count": 2960,
+      "maximum_frame_count": 8880
+    }
+  },
+  "model_contract": {
+    "role": "entity_oriented_visible_text_transcriber",
+    "expected_model": "pa/gmn-2.5-pr",
+    "question_visible": false,
+    "options_visible": false,
+    "answer_visible": false,
+    "official_intervals_visible": false,
+    "caption_text_visible": false,
+    "event_summary_allowed": false,
+    "state_inference_allowed": false,
+    "relation_inference_allowed": false,
+    "alias_guess_allowed": false,
+    "raw_response_persisted": false,
+    "prompt_persisted": false
+  },
+  "entity_types": [
+    "boss_name",
+    "npc_name",
+    "location",
+    "item_name",
+    "skill_name",
+    "menu_title",
+    "chapter_title",
+    "other_named_entity"
+  ],
+  "ui_regions": [
+    "boss_name_bar",
+    "npc_label",
+    "item_popup",
+    "location_title",
+    "menu_title",
+    "chapter_title",
+    "skill_panel",
+    "other"
+  ],
+  "admission": {
+    "multi_frame_min_support": 2,
+    "single_frame_high_value_regions": [
+      "boss_name_bar",
+      "npc_label",
+      "item_popup",
+      "location_title",
+      "menu_title",
+      "chapter_title",
+      "skill_panel"
+    ],
+    "minimum_cjk_characters": 2,
+    "minimum_english_meaningful_tokens": 2,
+    "reject_numeric_only": true,
+    "reject_single_cjk_character": true,
+    "blocked_normalized_text": [
+      "攻击",
+      "返回",
+      "确认",
+      "取消",
+      "x3",
+      "f",
+      "e"
+    ]
+  },
+  "indexing": {
+    "bind_to_sampled_caption_passage": true,
+    "retain_frame_and_time_lineage": true,
+    "entity_lexical_index_separate_from_caption_index": true,
+    "caption_plus_ocr_embedding_concat": false,
+    "late_fusion": "rrf",
+    "rrf_k0": 60,
+    "caption_weight": 1.0,
+    "entity_weight": 1.0,
+    "rrf_weights_tunable_on_frozen10": false
+  },
+  "query_policy": {
+    "entity_query": "frozen WP16-5 manual entity query terms",
+    "caption_query": "frozen WP16-4 manual anchor query",
+    "question_parser_automated": false
+  },
+  "primary_metrics": [
+    "anchor_recall_at_1",
+    "anchor_recall_at_3",
+    "anchor_recall_at_5",
+    "anchor_recall_at_10"
+  ],
+  "secondary_metrics": [
+    "gold_anchor_entity_coverage",
+    "same_entity_occurrence_count",
+    "non_gold_entity_document_rate",
+    "duplicate_entity_rate",
+    "sampled_frame_count",
+    "model_call_count",
+    "parse_retry_count",
+    "admitted_entity_rows_per_passage"
+  ],
+  "canary_structural_gates": [
+    "selection_is_exact_hash20",
+    "all_selected_passages_complete",
+    "actual_model_matches",
+    "fixed3_lineage_valid",
+    "blind_prompt_contract_valid",
+    "all_results_parse",
+    "all_admitted_rows_satisfy_runtime_policy",
+    "zero_numeric_only_or_blocked_admissions"
+  ],
+  "decision_policy": {
+    "go": "anchor_recall_at_5_count >= 8",
+    "partial": "5 <= anchor_recall_at_5_count <= 7",
+    "stop_fixed3_low_coverage": "anchor_recall_at_5_count <= 4 and gold_anchor_entity_coverage_count <= 4",
+    "retrieval_confusion": "anchor_recall_at_5_count <= 4 and gold_anchor_entity_coverage_count >= 5"
+  },
+  "explicit_exclusions": [
+    "ui_change_sampling",
+    "event_generator",
+    "state_memory",
+    "entity_graph",
+    "multi_occurrence_reasoning",
+    "bounded_evidence_search",
+    "full_qa_evaluation",
+    "judge_evaluation",
+    "learned_reranker",
+    "caption_prompt_changes"
+  ],
+  "day_test140_accessed": false,
+  "week_accessed": false,
+  "outcome_status_at_freeze": "not_run"
+}
