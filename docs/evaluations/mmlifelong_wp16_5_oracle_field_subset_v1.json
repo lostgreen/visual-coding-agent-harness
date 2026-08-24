@@ -1,0 +1,164 @@
+{
+  "contract": "WP16-5-oracle-anchor-field-subset-v1",
+  "fields_frozen_before_ablation_outcomes": true,
+  "annotation_policy": {
+    "gold_occurrence_only": true,
+    "query_fields_are_manual_parser_upper_bound": true,
+    "document_fields_are_perfect_extraction_upper_bound": true,
+    "target_evidence_and_reference_answer_values_excluded": true,
+    "outcome_status_at_freeze": "not_run"
+  },
+  "fields": ["entity", "event", "state"],
+  "cases": {
+    "mmlifelong-game-test-0010": {
+      "anchor_description": "defeat Black Wind King",
+      "entity": {
+        "query_terms": ["Black Wind King", "黑风大王"],
+        "document_terms": ["Black Wind King", "黑风大王", "black wind boss"]
+      },
+      "event": {
+        "query_terms": ["defeat boss", "final blow"],
+        "document_terms": ["boss defeat", "final decisive blow", "victory"]
+      },
+      "state": {
+        "query_terms": ["boss defeat", "combat end"],
+        "document_terms": ["boss_defeat", "combat_end"]
+      }
+    },
+    "mmlifelong-game-test-0016": {
+      "anchor_description": "fight First Prince of Flowing Sands",
+      "entity": {
+        "query_terms": ["First Prince of Flowing Sands", "沙大郎"],
+        "document_terms": ["First Prince of Flowing Sands", "沙大郎", "large horned beast"]
+      },
+      "event": {
+        "query_terms": ["fight First Prince", "boss fight begins"],
+        "document_terms": ["fight large horned beast", "boss fight begins"]
+      },
+      "state": {
+        "query_terms": ["boss start", "combat start"],
+        "document_terms": ["boss_start", "combat_start"]
+      }
+    },
+    "mmlifelong-game-test-0028": {
+      "anchor_description": "defeat Red Loong",
+      "entity": {
+        "query_terms": ["Red Loong", "赤髯龙"],
+        "document_terms": ["Red Loong", "赤髯龙", "red dragon beast"]
+      },
+      "event": {
+        "query_terms": ["defeat Red Loong", "boss defeat"],
+        "document_terms": ["red dragon defeated", "beast collapses", "victory"]
+      },
+      "state": {
+        "query_terms": ["boss defeat", "combat end"],
+        "document_terms": ["boss_defeat", "combat_end", "reward_follows"]
+      }
+    },
+    "mmlifelong-game-test-0054": {
+      "anchor_description": "battle with Yellowbrow begins",
+      "entity": {
+        "query_terms": ["Yellowbrow", "黄眉"],
+        "document_terms": ["Yellowbrow", "黄眉", "large monk boss"]
+      },
+      "event": {
+        "query_terms": ["battle with Yellowbrow begins", "boss fight begins"],
+        "document_terms": ["boss rises", "skeletal face boss", "battle begins"]
+      },
+      "state": {
+        "query_terms": ["boss start", "combat start"],
+        "document_terms": ["boss_start", "combat_start"]
+      }
+    },
+    "mmlifelong-game-test-0076": {
+      "anchor_description": "gourd level-up selection",
+      "entity": {
+        "query_terms": ["Elixir Gourd", "葫芦"],
+        "document_terms": ["Elixir Gourd", "葫芦", "drinking vessel"]
+      },
+      "event": {
+        "query_terms": ["level up Gourd", "gourd upgrade"],
+        "document_terms": ["upgrade drinking vessel", "upgrade menu", "gourd level up"]
+      },
+      "state": {
+        "query_terms": ["menu upgrade", "item upgrade"],
+        "document_terms": ["menu_upgrade", "item_upgrade"]
+      }
+    },
+    "mmlifelong-game-test-0100": {
+      "anchor_description": "fourth meditation point in Chapter 3",
+      "entity": {
+        "query_terms": ["Chapter 3 fourth meditation point"],
+        "document_terms": ["Chapter 3", "fourth meditation point", "golden meditation mural"]
+      },
+      "event": {
+        "query_terms": ["meditation point", "interact with meditation object"],
+        "document_terms": ["interacts with glowing object", "golden mural", "meditation point"]
+      },
+      "state": {
+        "query_terms": ["meditation complete", "location checkpoint"],
+        "document_terms": ["meditation_complete", "location_checkpoint"]
+      }
+    },
+    "mmlifelong-game-test-0108": {
+      "anchor_description": "enter Chapter 5 Flaming Mountains",
+      "entity": {
+        "query_terms": ["Flaming Mountains", "火焰山", "Chapter 5"],
+        "document_terms": ["Flaming Mountains", "火焰山", "Chapter Five"]
+      },
+      "event": {
+        "query_terms": ["enter Flaming Mountains", "enter Chapter Five"],
+        "document_terms": ["enter desolate fiery landscape", "Chapter Five begins", "scene transition"]
+      },
+      "state": {
+        "query_terms": ["chapter enter", "location transition"],
+        "document_terms": ["chapter_enter", "location_transition"]
+      }
+    },
+    "mmlifelong-game-test-0166": {
+      "anchor_description": "challenge Bishui Golden-Eyed Beast",
+      "entity": {
+        "query_terms": ["Bishui Golden-Eyed Beast", "碧水金睛兽"],
+        "document_terms": ["Bishui Golden-Eyed Beast", "碧水金睛兽", "fiery multi-limbed beast"]
+      },
+      "event": {
+        "query_terms": ["challenge Bishui Golden-Eyed Beast", "boss fight begins"],
+        "document_terms": ["fiery beast breaks out of ice", "boss fight commences"]
+      },
+      "state": {
+        "query_terms": ["boss start", "combat start"],
+        "document_terms": ["boss_start", "combat_start"]
+      }
+    },
+    "mmlifelong-game-test-0179": {
+      "anchor_description": "unlock Qingzhang Dao Keeper's Shrine",
+      "entity": {
+        "query_terms": ["Qingzhang Dao", "青嶂道", "Keeper's Shrine", "土地庙"],
+        "document_terms": ["Qingzhang Dao", "青嶂道", "Keeper's Shrine", "土地庙"]
+      },
+      "event": {
+        "query_terms": ["unlock Qingzhang Dao shrine", "unlock Keeper shrine"],
+        "document_terms": ["unlock shrine", "interact with shrine", "incense at shrine"]
+      },
+      "state": {
+        "query_terms": ["shrine unlock", "location transition"],
+        "document_terms": ["shrine_unlock", "location_transition"]
+      }
+    },
+    "mmlifelong-game-test-0184": {
+      "anchor_description": "unlock Fire-Scorched Three Passes Keeper's Shrine",
+      "entity": {
+        "query_terms": ["Fire-Scorched Three Passes", "火炼三关", "Keeper's Shrine", "土地庙"],
+        "document_terms": ["Fire-Scorched Three Passes", "火炼三关", "Keeper's Shrine", "土地庙"]
+      },
+      "event": {
+        "query_terms": ["unlock Keeper shrine", "places incense at shrine"],
+        "document_terms": ["ornate shrine", "places incense", "fiery talismans light up"]
+      },
+      "state": {
+        "query_terms": ["shrine unlock", "location checkpoint"],
+        "document_terms": ["shrine_unlock", "location_checkpoint"]
+      }
+    }
+  }
+}
