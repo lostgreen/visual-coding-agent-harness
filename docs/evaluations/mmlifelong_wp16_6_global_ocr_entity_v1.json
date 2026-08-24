@@ -15,6 +15,12 @@
     "deduplicate_at_millisecond": true,
     "question_independent": true,
     "official_interval_independent": true,
+    "preflight_selection": {
+      "algorithm": "same_hash_order_as_canary_take_first_n",
+      "seed": "wp16-6a0-20260824-v1",
+      "exact_passage_count": 3,
+      "endpoint_evaluation_allowed": false
+    },
     "canary_selection": {
       "algorithm": "sort_by_sha256(seed_colon_passage_id)_take_first_n",
       "seed": "wp16-6a0-20260824-v1",

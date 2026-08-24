@@ -44,6 +44,32 @@ def test_hash20_selection_uses_frozen_seed_and_exact_count() -> None:
     )
 
 
+def test_smoke_selection_is_a_prefix_of_the_hash20_selection() -> None:
+    protocol = {
+        "sampling": {
+            "preflight_selection": {
+                "seed": "frozen",
+                "exact_passage_count": 2,
+            },
+            "canary_selection": {
+                "seed": "frozen",
+                "exact_passage_count": 5,
+            },
+        }
+    }
+    smoke = _selected_passages(
+        _passages(10),
+        args=Namespace(selection_mode="smoke"),
+        protocol=protocol,
+    )
+    canary = _selected_passages(
+        _passages(10),
+        args=Namespace(selection_mode="hash20"),
+        protocol=protocol,
+    )
+    assert smoke == canary[:2]
+
+
 def test_full_selection_preserves_caption_order() -> None:
     passages = _passages(3)
     selected = _selected_passages(

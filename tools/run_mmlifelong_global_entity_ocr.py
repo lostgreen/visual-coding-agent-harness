@@ -199,13 +199,17 @@ def _selected_passages(
     mode = str(args.selection_mode)
     if mode == "full":
         return tuple(passages)
-    if mode != "hash20":
-        raise ValueError("selection mode must be hash20 or full")
-    canary = dict(protocol.get("sampling", {}).get("canary_selection", {}))
-    count = int(canary.get("exact_passage_count", 0) or 0)
+    sampling = dict(protocol.get("sampling", {}) or {})
+    if mode == "smoke":
+        selection = dict(sampling.get("preflight_selection", {}) or {})
+    elif mode == "hash20":
+        selection = dict(sampling.get("canary_selection", {}) or {})
+    else:
+        raise ValueError("selection mode must be smoke, hash20, or full")
+    count = int(selection.get("exact_passage_count", 0) or 0)
     return select_hashed_passages(
         passages,
-        seed=str(canary.get("seed", "")),
+        seed=str(selection.get("seed", "")),
         count=count,
     )
 
@@ -626,7 +630,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-passages", type=int, default=2960)
     parser.add_argument("--protocol-spec", required=True)
     parser.add_argument("--expected-protocol-sha256", required=True)
-    parser.add_argument("--selection-mode", choices=("hash20", "full"), required=True)
+    parser.add_argument(
+        "--selection-mode", choices=("smoke", "hash20", "full"), required=True
+    )
     parser.add_argument("--expected-selected-passages", type=int, required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--section", default="planner_api")
