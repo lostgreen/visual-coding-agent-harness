@@ -1,0 +1,92 @@
+{
+  "contract": "WP16-4-manual-anchor-query-subset-v1",
+  "queries_frozen_before_anchor_outcomes": true,
+  "representation_policy": {
+    "anchor_query": "question anchor span only; target and answer excluded",
+    "anchor_event_queries": "manual question-plus-caption event representation upper bound",
+    "global_ocr_used": false,
+    "outcome_status_at_freeze": "not_run"
+  },
+  "cases": {
+    "mmlifelong-game-test-0010": {
+      "anchor_query": "player defeats Black Wind King 黑风大王",
+      "anchor_event_queries": [
+        "Black Wind King boss defeat 黑风大王",
+        "Great King of Black Wind defeated victory",
+        "large bald enemy defeated after final blow"
+      ]
+    },
+    "mmlifelong-game-test-0016": {
+      "anchor_query": "player fights First Prince of Flowing Sands 沙大郎",
+      "anchor_event_queries": [
+        "First Prince of Flowing Sands boss fight begins 沙大郎",
+        "large horned beast confronts player",
+        "player jumps down to fight large beast"
+      ]
+    },
+    "mmlifelong-game-test-0028": {
+      "anchor_query": "player defeats Red Loong 赤髯龙",
+      "anchor_event_queries": [
+        "Red Loong boss defeat 赤髯龙",
+        "red dragon beast defeated victory",
+        "warrior final attack beast collapses"
+      ]
+    },
+    "mmlifelong-game-test-0054": {
+      "anchor_query": "battle with Yellowbrow begins 黄眉",
+      "anchor_event_queries": [
+        "Yellowbrow boss battle begins 黄眉",
+        "large monk transforms before boss fight",
+        "player faces giant monk in temple hall"
+      ]
+    },
+    "mmlifelong-game-test-0076": {
+      "anchor_query": "leveling up Elixir Gourd 葫芦",
+      "anchor_event_queries": [
+        "gourd level-up selection 葫芦升阶",
+        "upgrade healing gourd",
+        "wine vessel upgrade menu"
+      ]
+    },
+    "mmlifelong-game-test-0100": {
+      "anchor_query": "fourth meditation point in Chapter 3",
+      "anchor_event_queries": [
+        "Chapter 3 fourth meditation point",
+        "golden meditation mural in snowy valley",
+        "interacts with glowing meditation object"
+      ]
+    },
+    "mmlifelong-game-test-0108": {
+      "anchor_query": "entering Flaming Mountains 火焰山",
+      "anchor_event_queries": [
+        "enter Flaming Mountains Chapter Five 火焰山",
+        "Chapter Five Sunset in the Mortal World begins",
+        "arrives in desolate fiery Chapter Five landscape"
+      ]
+    },
+    "mmlifelong-game-test-0166": {
+      "anchor_query": "challenging Bishui Golden-Eyed Beast 碧水金睛兽",
+      "anchor_event_queries": [
+        "Bishui Golden-Eyed Beast boss fight begins 碧水金睛兽",
+        "fiery multi-limbed beast breaks out of ice",
+        "massive fiery beast boss fight commences"
+      ]
+    },
+    "mmlifelong-game-test-0179": {
+      "anchor_query": "unlock Qingzhang Dao Mount Huaguo Keeper shrine 青嶂道 土地庙",
+      "anchor_event_queries": [
+        "Qingzhang Dao Keeper shrine unlock 青嶂道 土地庙",
+        "Mount Huaguo small stone shrine",
+        "player defeats enemies then interacts with smoky shrine"
+      ]
+    },
+    "mmlifelong-game-test-0184": {
+      "anchor_query": "unlock Fire-Scorched Three Passes Keeper shrine 土地庙",
+      "anchor_event_queries": [
+        "Fire-Scorched Three Passes Keeper shrine unlock 火炼三关",
+        "small ornate shrine emitting lightning",
+        "places incense at shrine in ashen landscape"
+      ]
+    }
+  }
+}
