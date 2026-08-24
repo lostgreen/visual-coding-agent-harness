@@ -1,6 +1,6 @@
 {
-  "contract": "WP16-4-manual-oracle-relation-subset-v1",
-  "labels_frozen_before_search_outcomes": true,
+  "contract": "WP16-4-manual-oracle-relation-subset-v2",
+  "labels_frozen_before_primary_outcomes": true,
   "annotation_policy": {
     "sources": [
       "question",
@@ -8,7 +8,10 @@
       "official_clue_timing"
     ],
     "target_terms_exclude_reference_answer_values": true,
-    "outcome_status_at_freeze": "not_run"
+    "outcome_status_at_freeze": "canary4_v1_completed_primary10_not_run",
+    "canary_adjustments": {
+      "mmlifelong-game-test-0016": "replace absent devour/eaten wording with two caption-grounded entity proxy groups; no reference-answer token added"
+    }
   },
   "excluded_cases": {
     "mmlifelong-game-test-0115": "multi_occurrence_state_comparison"
@@ -34,7 +37,10 @@
       "anchor_intervals": [[11142.0, 11161.0]],
       "relation": "before",
       "target_event_description": "event involving the small king immediately before the fight",
-      "target_event_term_groups": [["devour", "eaten", "swallow"]],
+      "target_event_term_groups": [
+        ["smaller creature", "goblin-like creature", "small king"],
+        ["larger beast", "horned beast", "first prince"]
+      ],
       "target_text_sources": ["caption"],
       "target_evidence_type": ["caption"],
       "target_evidence_intervals": [[11119.0, 11128.0]],

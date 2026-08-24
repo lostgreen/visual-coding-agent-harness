@@ -23,8 +23,8 @@ def build_relation_evidence_report(
         "single_anchor_subset_excludes_0115": all(
             not case_id.endswith("-0115") for case_id in case_ids
         ),
-        "manual_labels_frozen_before_search_outcomes": all(
-            bool(case.get("labels_frozen_before_search_outcomes")) for case in rows
+        "manual_labels_frozen_before_primary_outcomes": all(
+            bool(case.get("labels_frozen_before_primary_outcomes")) for case in rows
         ),
         "anchor_identity_labeled": all(
             bool(case.get("anchor_description")) and bool(case.get("anchor_intervals"))

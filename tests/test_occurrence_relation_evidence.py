@@ -32,7 +32,7 @@ def _case(case_id: str, *, bounded_start: float) -> dict:
         "target_event_term_groups": [["item"]],
         "target_evidence_type": ["visible_ocr"],
         "evidence_intervals": [[30.0, 40.0]],
-        "labels_frozen_before_search_outcomes": True,
+        "labels_frozen_before_primary_outcomes": True,
         "variants": {
             "fixed_d20": {
                 "anchor_hit": anchor,

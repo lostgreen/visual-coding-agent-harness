@@ -35,7 +35,7 @@ def load_relation_evidence_cases(
     fixed_distance: int,
 ) -> tuple[dict[str, Any], ...]:
     specifications = dict(spec.get("cases", {}) or {})
-    labels_frozen = bool(spec.get("labels_frozen_before_search_outcomes"))
+    labels_frozen = bool(spec.get("labels_frozen_before_primary_outcomes"))
     cases: list[dict[str, Any]] = []
     for case_id in case_ids:
         case_spec = specifications.get(case_id)
@@ -131,7 +131,7 @@ def load_relation_evidence_cases(
                 "official_clue_intervals": list(
                     evaluation_record.get("clue_intervals", ()) or ()
                 ),
-                "labels_frozen_before_search_outcomes": labels_frozen,
+                "labels_frozen_before_primary_outcomes": labels_frozen,
                 "variants": {
                     f"fixed_d{int(fixed_distance)}": _compact_result(fixed),
                     "bounded_search": _compact_result(bounded),
