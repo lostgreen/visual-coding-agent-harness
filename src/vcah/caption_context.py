@@ -58,22 +58,7 @@ def expand_query_conditioned_context(
         source = by_id.get(seed.passage_id)
         if source is None:
             continue
-        timeline = tuple(
-            sorted(
-                (
-                    passage
-                    for passage in eligible
-                    if _same_source_timeline(source, passage, source_map)
-                ),
-                key=lambda passage: (
-                    passage.virtual_start_sec,
-                    passage.virtual_end_sec,
-                    passage.caption_id,
-                    passage.ordinal,
-                    passage.passage_id,
-                ),
-            )
-        )
+        timeline = ordered_source_timeline(eligible, source, source_map)
         positions = {
             passage.passage_id: index for index, passage in enumerate(timeline)
         }
@@ -111,17 +96,13 @@ def expand_query_conditioned_context(
                 )
                 row["score"] = max(
                     float(row["score"]),
-                    max(0.0, seed.fused_score * (0.5 ** step)),
+                    max(0.0, seed.fused_score * (0.5**step)),
                 )
                 row["links"].append(link)
 
     seed_ids = {hit.passage_id for hit in seeds}
     ordered_additions = sorted(
-        (
-            row
-            for passage_id, row in additions.items()
-            if passage_id not in seed_ids
-        ),
+        (row for passage_id, row in additions.items() if passage_id not in seed_ids),
         key=lambda row: (
             min(
                 (
@@ -163,9 +144,7 @@ def expand_query_conditioned_context(
                 wall_clock_begin=_optional_text(
                     passage.metadata.get("wall_clock_begin")
                 ),
-                wall_clock_end=_optional_text(
-                    passage.metadata.get("wall_clock_end")
-                ),
+                wall_clock_end=_optional_text(passage.metadata.get("wall_clock_end")),
                 text=passage.text,
                 interval_precision=str(
                     passage.metadata.get("interval_precision", "chunk")
@@ -178,9 +157,7 @@ def expand_query_conditioned_context(
                     "context_expansion_contract": CAPTION_CONTEXT_CONTRACT,
                     "context_direction": selected_direction,
                     "context_seed_passage_ids": list(
-                        dict.fromkeys(
-                            str(link["seed_passage_id"]) for link in links
-                        )
+                        dict.fromkeys(str(link["seed_passage_id"]) for link in links)
                     ),
                     "context_links": [dict(link) for link in links],
                     "neighbor_of": str(primary["seed_passage_id"]),
@@ -194,6 +171,36 @@ def expand_query_conditioned_context(
         CaptionHitV1(**{**asdict(hit), "rank": rank})
         for rank, hit in enumerate(expanded, start=1)
     ]
+
+
+def ordered_source_timeline(
+    passages: Sequence[CaptionPassageV1],
+    source: CaptionPassageV1,
+    source_video_id_by_segment: Mapping[str, str] | None = None,
+) -> tuple[CaptionPassageV1, ...]:
+    """Return passages on the source occurrence's physical video timeline."""
+
+    source_map = {
+        str(segment_id): str(source_id)
+        for segment_id, source_id in dict(source_video_id_by_segment or {}).items()
+        if str(segment_id) and str(source_id)
+    }
+    return tuple(
+        sorted(
+            (
+                passage
+                for passage in passages
+                if _same_source_timeline(source, passage, source_map)
+            ),
+            key=lambda passage: (
+                passage.virtual_start_sec,
+                passage.virtual_end_sec,
+                passage.caption_id,
+                passage.ordinal,
+                passage.passage_id,
+            ),
+        )
+    )
 
 
 def _same_source_timeline(

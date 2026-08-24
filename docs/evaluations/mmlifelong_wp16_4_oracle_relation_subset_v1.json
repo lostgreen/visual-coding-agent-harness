@@ -1,0 +1,161 @@
+{
+  "contract": "WP16-4-manual-oracle-relation-subset-v1",
+  "labels_frozen_before_search_outcomes": true,
+  "annotation_policy": {
+    "sources": [
+      "question",
+      "caption_timeline",
+      "official_clue_timing"
+    ],
+    "target_terms_exclude_reference_answer_values": true,
+    "outcome_status_at_freeze": "not_run"
+  },
+  "excluded_cases": {
+    "mmlifelong-game-test-0115": "multi_occurrence_state_comparison"
+  },
+  "cases": {
+    "mmlifelong-game-test-0010": {
+      "question": "After the player defeats the Black Wind King (黑风大王), what does the Black Wind King (黑风大王) say?",
+      "anchor_description": "defeat Black Wind King",
+      "anchor_intervals": [[6661.0, 6675.0]],
+      "relation": "after",
+      "target_event_description": "defeated boss dialogue",
+      "target_event_term_groups": [["subtitle", "speaks", "says", "acknowledging"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["subtitle"],
+      "target_evidence_intervals": [[6675.0, 6741.0]],
+      "max_passages": 12,
+      "max_elapsed_sec": 300.0,
+      "max_gap_sec": 120.0
+    },
+    "mmlifelong-game-test-0016": {
+      "question": "Before the player fights the First Prince of Flowing Sands (沙大郎), what happened to the King of the Small Kingdom (沙国王)?",
+      "anchor_description": "fight First Prince of Flowing Sands",
+      "anchor_intervals": [[11142.0, 11161.0]],
+      "relation": "before",
+      "target_event_description": "event involving the small king immediately before the fight",
+      "target_event_term_groups": [["devour", "eaten", "swallow"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["caption"],
+      "target_evidence_intervals": [[11119.0, 11128.0]],
+      "max_passages": 12,
+      "max_elapsed_sec": 300.0,
+      "max_gap_sec": 120.0
+    },
+    "mmlifelong-game-test-0028": {
+      "question": "After the player defeats The Red Loong (赤髯龙), which materials are obtained?",
+      "anchor_description": "defeat Red Loong",
+      "anchor_intervals": [[17600.0, 17637.0]],
+      "relation": "after",
+      "target_event_description": "post-battle reward acquisition",
+      "target_event_term_groups": [["chest", "loot", "collect", "obtain"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["visible_ocr"],
+      "target_evidence_intervals": [[17637.0, 17700.0]],
+      "max_passages": 12,
+      "max_elapsed_sec": 300.0,
+      "max_gap_sec": 120.0
+    },
+    "mmlifelong-game-test-0054": {
+      "question": "In the animated storyline before the battle with Yellowbrow (黄眉), what is Yellowbrow (黄眉)'s last line of dialogue?",
+      "anchor_description": "battle with Yellowbrow begins",
+      "anchor_intervals": [[42914.0, 42923.0]],
+      "relation": "before",
+      "target_event_description": "closest Yellowbrow dialogue before battle",
+      "target_event_term_groups": [["dialogue", "subtitle", "speaks", "says"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["subtitle"],
+      "target_evidence_intervals": [[42842.0, 42877.0]],
+      "max_passages": 16,
+      "max_elapsed_sec": 600.0,
+      "max_gap_sec": 180.0
+    },
+    "mmlifelong-game-test-0076": {
+      "question": "After leveling up, what Gourd (葫芦) did the Elixir Gourd (葫芦) become?",
+      "anchor_description": "gourd level-up selection",
+      "anchor_intervals": [[23133.0, 23147.0]],
+      "relation": "after",
+      "target_event_description": "gourd upgrade completes",
+      "target_event_term_groups": [["upgrade", "transform"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["visible_ocr"],
+      "target_evidence_intervals": [[23147.0, 23166.0]],
+      "max_passages": 12,
+      "max_elapsed_sec": 300.0,
+      "max_gap_sec": 120.0
+    },
+    "mmlifelong-game-test-0100": {
+      "question": "After the fourth meditation point in Chapter 3, which talent did the player upgrade using Inspiration Points?",
+      "anchor_description": "fourth meditation point in Chapter 3",
+      "anchor_intervals": [[34011.0, 34056.0]],
+      "relation": "after",
+      "target_event_description": "talent upgrade with Inspiration Points",
+      "target_event_term_groups": [["talent", "skill tree", "inspiration", "upgrade"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["visible_ocr"],
+      "target_evidence_intervals": [[34091.0, 34127.0]],
+      "max_passages": 20,
+      "max_elapsed_sec": 600.0,
+      "max_gap_sec": 180.0
+    },
+    "mmlifelong-game-test-0108": {
+      "question": "After entering the Flaming Mountains (火焰山), what is the first Spirit (精魄) absorbed?",
+      "anchor_description": "enter Chapter 5 Flaming Mountains",
+      "anchor_intervals": [[63135.0, 63172.0]],
+      "relation": "after",
+      "target_event_description": "first Spirit acquisition",
+      "target_event_term_groups": [
+        ["absorb", "collect", "equips a new item", "interacts with a small floating creature"],
+        ["spirit", "blue flame", "floating creature", "精魂"]
+      ],
+      "target_text_sources": ["caption", "ocr"],
+      "target_evidence_type": ["visible_ocr"],
+      "target_evidence_intervals": [[64655.0, 64753.0]],
+      "max_passages": 120,
+      "max_elapsed_sec": 2400.0,
+      "max_gap_sec": 600.0
+    },
+    "mmlifelong-game-test-0166": {
+      "question": "How many units of Spirit Essence did the player obtain from the last treasure chest opened before challenging the boss 'Bishui Golden-Eyed Beast'?",
+      "anchor_description": "challenge Bishui Golden-Eyed Beast",
+      "anchor_intervals": [[73771.0, 73800.0]],
+      "relation": "before",
+      "target_event_description": "nearest treasure chest opening",
+      "target_event_term_groups": [["chest", "treasure"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["numeric_ocr"],
+      "target_evidence_intervals": [[73674.0, 73705.0]],
+      "max_passages": 30,
+      "max_elapsed_sec": 900.0,
+      "max_gap_sec": 180.0
+    },
+    "mmlifelong-game-test-0179": {
+      "question": "After the player unlocked Qingzhang Dao at the Mount Huaguo (花果山) Keeper's Shrine (土地庙), which clothing/armor information did they view in the gear forging interface?",
+      "anchor_description": "unlock Qingzhang Dao Keeper's Shrine",
+      "anchor_intervals": [[77002.0, 77011.0]],
+      "relation": "after",
+      "target_event_description": "view armor in gear forging interface",
+      "target_event_term_groups": [["forge", "forging", "armor", "gear", "crafting"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["visible_ocr"],
+      "target_evidence_intervals": [[77011.0, 77114.0]],
+      "max_passages": 20,
+      "max_elapsed_sec": 600.0,
+      "max_gap_sec": 180.0
+    },
+    "mmlifelong-game-test-0184": {
+      "question": "After the player unlocks the Keeper's Shrine (土地庙) in Fire-Scorched Three Passes, what is the name of the next Spirit (精魄) the player absorbs?",
+      "anchor_description": "unlock Fire-Scorched Three Passes Keeper's Shrine",
+      "anchor_intervals": [[70941.0, 70961.0]],
+      "relation": "after",
+      "target_event_description": "next Spirit acquisition",
+      "target_event_term_groups": [["spirit", "blue flame", "floating creature"]],
+      "target_text_sources": ["caption"],
+      "target_evidence_type": ["visible_ocr"],
+      "target_evidence_intervals": [[71138.0, 71154.0]],
+      "max_passages": 30,
+      "max_elapsed_sec": 600.0,
+      "max_gap_sec": 180.0
+    }
+  }
+}

@@ -111,19 +111,22 @@ def infer_anchor_evidence_request(question: str) -> AnchorEvidenceRequest:
     ):
         channels = [value for value in channels if value != "visible_ocr"]
         channels.append("numeric_ocr")
-    if any(
-        token in text
-        for token in (
-            "how many",
-            "how many times",
-            "how long",
-            "number of",
-            " in total",
-            "多少",
-            "几次",
-            "多久",
+    if (
+        any(
+            token in text
+            for token in (
+                "how many",
+                "how many times",
+                "how long",
+                "number of",
+                " in total",
+                "多少",
+                "几次",
+                "多久",
+            )
         )
-    ) and "numeric_ocr" not in channels:
+        and "numeric_ocr" not in channels
+    ):
         channels.append("numeric_or_aggregate")
     if any(
         token in text
@@ -171,9 +174,7 @@ def infer_anchor_evidence_request(question: str) -> AnchorEvidenceRequest:
             tuple(channels),
             "anchor_is_unknown_answer_target",
         )
-    if "respectively" in text or (
-        "first boss" in text and "final boss" in text
-    ):
+    if "respectively" in text or ("first boss" in text and "final boss" in text):
         return AnchorEvidenceRequest(
             False,
             direction,
@@ -249,7 +250,7 @@ def expand_anchor_conditioned_evidence(
                 "anchor_relation": request.relation,
                 "evidence_channels_requested": list(request.evidence_channels),
                 "evidence_channels_observed": list(
-                    _observed_channels(metadata)
+                    observed_evidence_channels(metadata)
                 ),
                 "packet_scope_bypassed_after_anchor": True,
             }
@@ -264,7 +265,9 @@ def expand_anchor_conditioned_evidence(
     }
 
 
-def _observed_channels(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+def observed_evidence_channels(
+    metadata: Mapping[str, Any],
+) -> tuple[str, ...]:
     rows = tuple(metadata.get("ocr_rows", ()) or ())
     channels = ["caption"]
     if rows:
@@ -276,10 +279,7 @@ def _observed_channels(metadata: Mapping[str, Any]) -> tuple[str, ...]:
     ):
         channels.append("numeric_ocr")
     if any(
-        "subtitle" in {
-            str(region)
-            for region in tuple(row.get("regions", ()) or ())
-        }
+        "subtitle" in {str(region) for region in tuple(row.get("regions", ()) or ())}
         for row in rows
         if isinstance(row, Mapping)
     ):
