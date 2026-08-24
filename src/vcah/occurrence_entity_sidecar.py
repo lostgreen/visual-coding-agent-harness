@@ -104,13 +104,38 @@ def parse_global_entity_ocr_response_diagnostic(
     if not isinstance(frames, Sequence) or isinstance(frames, (str, bytes)):
         return _parse_diagnostic(None, "frames_not_array", counts)
 
+    # Some JSON-mode responses repeat the requested root schema once. Unwrap only
+    # the single, otherwise-empty wrapper so the repair cannot reorder evidence.
+    if (
+        len(frames) == 1
+        and isinstance(frames[0], Mapping)
+        and set(frames[0]) == {"frames"}
+        and isinstance(frames[0]["frames"], Sequence)
+        and not isinstance(frames[0]["frames"], (str, bytes))
+    ):
+        frames = frames[0]["frames"]
+        counts["single_frames_wrapper_unwrapped"] += 1
+
+    positional_labels: tuple[str, ...] | None = None
+    if len(frames) == len(labels) and all(
+        isinstance(frame, Mapping)
+        and not str(frame.get("frame_label", "") or "").strip()
+        for frame in frames
+    ):
+        positional_labels = labels
+        counts["frame_labels_recovered_by_position"] += len(labels)
+
     allowed = set(labels)
     seen: set[str] = set()
     parsed: list[dict[str, Any]] = []
-    for frame in frames:
+    for frame_index, frame in enumerate(frames):
         if not isinstance(frame, Mapping):
             return _parse_diagnostic(None, "frame_not_object", counts)
-        label = str(frame.get("frame_label", "") or "").strip()
+        label = (
+            positional_labels[frame_index]
+            if positional_labels is not None
+            else str(frame.get("frame_label", "") or "").strip()
+        )
         if label not in allowed:
             contained = tuple(value for value in labels if value in label)
             if len(contained) != 1:

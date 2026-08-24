@@ -47,6 +47,15 @@
     "raw_response_persisted": false,
     "prompt_persisted": false
   },
+  "response_normalization": {
+    "repair_scope": "structural_canary_only_before_endpoint_evaluation",
+    "single_otherwise_empty_frames_wrapper_unwrapped": true,
+    "missing_frame_labels_recovered_by_fixed3_position_only_when_row_count_is_exact": true,
+    "mixed_or_ambiguous_frame_labels_rejected": true,
+    "frame_order_recovery_source": "ordered Fixed-3 image inputs",
+    "repair_trigger": "70 of 592 structural-canary passages returned unknown_frame_label; all 140 attempts ended with finish_reason=stop and no model/API failure",
+    "endpoint_values_seen_before_repair": false
+  },
   "entity_types": [
     "boss_name",
     "npc_name",

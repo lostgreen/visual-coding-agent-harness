@@ -73,6 +73,49 @@ def test_parser_and_admission_keep_consensus_with_lineage() -> None:
     assert row["frame_ids"] == ["f1", "f2"]
 
 
+def test_parser_recovers_unambiguous_positional_frame_labels() -> None:
+    raw = (
+        '{"frames":['
+        '{"entities":[{"text":"赤髯龙","entity_type":"boss_name",'
+        '"ui_region":"boss_name_bar","confidence":"high"}]},'
+        '{"entities":[]}]}'
+    )
+    parsed = parse_global_entity_ocr_response_diagnostic(
+        raw, allowed_frame_labels=("frame_01", "frame_02")
+    )
+    assert parsed["status"] == "success"
+    assert parsed["rows"][0]["frame_label"] == "frame_01"
+    assert parsed["normalization_counts"] == {
+        "frame_labels_recovered_by_position": 2,
+    }
+
+
+def test_parser_unwraps_one_exact_frames_wrapper() -> None:
+    raw = (
+        '{"frames":[{"frames":['
+        '{"entities":[]},'
+        '{"entities":[{"text":"火焰山","entity_type":"location",'
+        '"ui_region":"location_title","confidence":"high"}]}]}]}'
+    )
+    parsed = parse_global_entity_ocr_response_diagnostic(
+        raw, allowed_frame_labels=("frame_01", "frame_02")
+    )
+    assert parsed["status"] == "success"
+    assert parsed["rows"][0]["frame_label"] == "frame_02"
+    assert parsed["normalization_counts"] == {
+        "frame_labels_recovered_by_position": 2,
+        "single_frames_wrapper_unwrapped": 1,
+    }
+
+
+def test_parser_rejects_ambiguous_missing_frame_labels() -> None:
+    parsed = parse_global_entity_ocr_response_diagnostic(
+        '{"frames":[{"entities":[]}]}',
+        allowed_frame_labels=("frame_01", "frame_02"),
+    )
+    assert parsed["status"] == "unknown_frame_label"
+
+
 def test_single_high_value_region_admitted_but_noise_rejected() -> None:
     admission = admit_global_entity_rows(
         (
