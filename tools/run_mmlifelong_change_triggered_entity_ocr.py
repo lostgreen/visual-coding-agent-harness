@@ -13,7 +13,7 @@ import statistics
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 from vcah.change_triggered_entity_occurrence import (
     CHANGE_TRIGGERED_ENTITY_CONTRACT,
@@ -36,6 +36,8 @@ from vcah.virtual_video import VirtualVideoSegment, VirtualVideoWorkspace
 
 MAX_WORKERS = 16
 ALLOWED_ARMS = ("a1_uniform", "a2_change")
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -135,7 +137,12 @@ def run(args: argparse.Namespace) -> Path:
     by_segment: dict[str, list[dict[str, Any]]] = {}
     for row in selection:
         by_segment.setdefault(str(row["segment_id"]), []).append(dict(row))
-    for completed, segment_id in enumerate(sorted(by_segment), start=1):
+    segment_ids = tuple(sorted(by_segment))
+    progress_lock = threading.Lock()
+    progress_completed = 0
+
+    def run_segment(segment_id: str) -> tuple[str, int, tuple[dict[str, Any], ...]]:
+        nonlocal progress_completed
         segment = segments[segment_id]
         rows = tuple(
             sorted(
@@ -151,14 +158,25 @@ def run(args: argparse.Namespace) -> Path:
             temp_root=temp_root,
             client_for_worker=client_for_worker,
             args=args,
+            batch_workers=1,
         )
+        with progress_lock:
+            progress_completed += 1
+            print(
+                "CHANGE_OCR_SEGMENT_DONE "
+                f"completed={progress_completed}/{len(segment_ids)} "
+                f"segment={segment_id} frames={len(rows)} batches={len(results)}",
+                flush=True,
+            )
+        return segment_id, len(rows), results
+
+    segment_results = _ordered_parallel_map(
+        segment_ids,
+        run_segment,
+        workers=int(args.workers),
+    )
+    for _segment_id, _frame_count, results in segment_results:
         all_results.extend(results)
-        print(
-            "CHANGE_OCR_SEGMENT_DONE "
-            f"completed={completed}/{len(by_segment)} segment={segment_id} "
-            f"frames={len(rows)} batches={len(results)}",
-            flush=True,
-        )
 
     frame_metadata = {
         _frame_label(row): {
@@ -289,6 +307,7 @@ def _run_segment_batches(
     temp_root: Path,
     client_for_worker: Callable[[], OpenAICompatibleClient],
     args: argparse.Namespace,
+    batch_workers: int | None = None,
 ) -> tuple[dict[str, Any], ...]:
     batch_size = max(1, min(16, int(args.batch_size)))
     batches = tuple(
@@ -327,15 +346,18 @@ def _run_segment_batches(
     path_by_identity = {
         _selection_identity(row): path for row, path in zip(rows, frame_paths)
     }
-    workers = max(1, min(MAX_WORKERS, int(args.workers), len(pending)))
+    requested_workers = (
+        int(args.workers) if batch_workers is None else int(batch_workers)
+    )
+    workers = max(1, min(MAX_WORKERS, requested_workers, len(pending)))
     generated: dict[int, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                _run_batch,
+    if workers == 1:
+        for index in pending:
+            generated[index] = _run_batch(
                 batches[index],
                 image_paths=tuple(
-                    path_by_identity[_selection_identity(row)] for row in batches[index]
+                    path_by_identity[_selection_identity(row)]
+                    for row in batches[index]
                 ),
                 arm=arm,
                 result_path=_batch_result_path(
@@ -343,15 +365,45 @@ def _run_segment_batches(
                 ),
                 client_for_worker=client_for_worker,
                 args=args,
-            ): index
-            for index in pending
-        }
-        for future in as_completed(futures):
-            generated[futures[future]] = future.result()
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _run_batch,
+                    batches[index],
+                    image_paths=tuple(
+                        path_by_identity[_selection_identity(row)]
+                        for row in batches[index]
+                    ),
+                    arm=arm,
+                    result_path=_batch_result_path(
+                        result_root, arm=arm, batch=batches[index]
+                    ),
+                    client_for_worker=client_for_worker,
+                    args=args,
+                ): index
+                for index in pending
+            }
+            for future in as_completed(futures):
+                generated[futures[future]] = future.result()
     if all(result.get("status") == "success" for result in generated.values()):
         shutil.rmtree(segment_temp)
     combined = {**reusable, **generated}
     return tuple(combined[index] for index in range(len(batches)))
+
+
+def _ordered_parallel_map(
+    values: Sequence[T],
+    function: Callable[[T], R],
+    *,
+    workers: int,
+) -> tuple[R, ...]:
+    worker_count = max(1, min(MAX_WORKERS, int(workers), len(values)))
+    if worker_count == 1:
+        return tuple(function(value) for value in values)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return tuple(executor.map(function, values))
 
 
 def _run_batch(

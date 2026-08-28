@@ -65,6 +65,23 @@ def _args(*, resume: bool = False) -> Namespace:
     )
 
 
+def test_ordered_parallel_map_runs_concurrently_and_preserves_input_order() -> None:
+    barrier = threading.Barrier(2, timeout=2)
+
+    def work(value: int) -> int:
+        barrier.wait()
+        return value * 10
+
+    assert runner._ordered_parallel_map((2, 1), work, workers=2) == (20, 10)
+
+
+def test_ordered_parallel_map_clamps_worker_count() -> None:
+    assert runner._ordered_parallel_map((1, 2), lambda value: value, workers=0) == (
+        1,
+        2,
+    )
+
+
 def test_selected_frame_materialization_uses_only_requested_indexes(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -135,6 +152,45 @@ def test_worker_clients_are_created_inside_executor_threads(
     assert len(results) == 2
     assert client_threads
     assert all(identifier != main_thread for identifier in client_threads)
+    assert not any((tmp_path / "temporary").rglob("*.jpg"))
+
+
+def test_single_batch_worker_runs_on_the_calling_segment_thread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calling_thread = threading.get_ident()
+    client_threads = []
+
+    def fake_materialize(segment, rows, *, out_dir, max_image_edge, ffmpeg_executable):
+        del segment, max_image_edge, ffmpeg_executable
+        out_dir.mkdir(parents=True)
+        paths = []
+        for index, _ in enumerate(rows):
+            path = out_dir / f"frame_{index + 1:06d}.jpg"
+            path.write_bytes(b"jpeg")
+            paths.append(path)
+        return tuple(paths)
+
+    def fake_batch(batch, *, client_for_worker, **kwargs):
+        del batch, kwargs
+        client_for_worker()
+        return {"status": "success", "parse_status": "success"}
+
+    monkeypatch.setattr(
+        runner, "_materialize_selected_segment_frames", fake_materialize
+    )
+    monkeypatch.setattr(runner, "_run_batch", fake_batch)
+    runner._run_segment_batches(
+        _segment(),
+        _rows(),
+        arm="a2_change",
+        result_root=tmp_path / "results",
+        temp_root=tmp_path / "temporary",
+        client_for_worker=lambda: client_threads.append(threading.get_ident()),
+        args=_args(),
+        batch_workers=1,
+    )
+    assert client_threads == [calling_thread, calling_thread]
     assert not any((tmp_path / "temporary").rglob("*.jpg"))
 
 
