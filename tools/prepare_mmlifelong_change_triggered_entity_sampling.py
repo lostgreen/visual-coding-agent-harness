@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 from vcah.change_triggered_entity_occurrence import (
     CHANGE_TRIGGERED_ENTITY_CONTRACT,
@@ -18,6 +19,10 @@ from vcah.change_triggered_entity_occurrence import (
 )
 from vcah.occurrence_negative_sidecar import file_sha256, stable_digest
 from vcah.virtual_video import VirtualVideoSegment, VirtualVideoWorkspace
+
+
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -42,9 +47,14 @@ def run(args: argparse.Namespace) -> Path:
     score_root = out_root / "tier0_scores"
     score_root.mkdir(parents=True, exist_ok=True)
 
-    observations: list[dict[str, Any]] = []
-    segment_rows = []
-    for completed, segment in enumerate(segments, start=1):
+    def scan_one(
+        segment: VirtualVideoSegment,
+    ) -> tuple[
+        VirtualVideoSegment,
+        tuple[dict[str, Any], ...],
+        bool,
+        Path,
+    ]:
         score_path = score_root / f"{_segment_key(segment)}.jsonl"
         rows = _read_jsonl(score_path) if args.resume and score_path.is_file() else ()
         reused = bool(rows) and _valid_reusable_segment(rows, segment=segment)
@@ -57,6 +67,18 @@ def run(args: argparse.Namespace) -> Path:
                 ffmpeg_executable=str(args.ffmpeg_executable),
             )
             write_jsonl(score_path, rows)
+        return segment, tuple(dict(row) for row in rows), reused, score_path
+
+    scan_results = _ordered_parallel_map(
+        segments,
+        scan_one,
+        workers=int(args.scan_workers),
+    )
+    observations: list[dict[str, Any]] = []
+    segment_rows = []
+    for completed, (segment, rows, reused, score_path) in enumerate(
+        scan_results, start=1
+    ):
         observations.extend(dict(row) for row in rows)
         segment_rows.append(
             {
@@ -107,6 +129,7 @@ def run(args: argparse.Namespace) -> Path:
         "tier0_width": int(args.tier0_width),
         "tier0_height": int(args.tier0_height),
         "ffmpeg_executable": str(args.ffmpeg_executable),
+        "scan_workers": max(1, int(args.scan_workers)),
         "segment_count": len(segments),
         "observation_count": len(observations),
         "observation_digest": stable_digest(
@@ -238,6 +261,19 @@ def _valid_reusable_segment(
     )
 
 
+def _ordered_parallel_map(
+    values: Sequence[T],
+    function: Callable[[T], R],
+    *,
+    workers: int,
+) -> tuple[R, ...]:
+    worker_count = max(1, min(int(workers), len(values)))
+    if worker_count == 1:
+        return tuple(function(value) for value in values)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return tuple(executor.map(function, values))
+
+
 def _segment_key(segment: VirtualVideoSegment) -> str:
     return hashlib.sha256(segment.segment_id.encode("utf-8")).hexdigest()[:16]
 
@@ -306,6 +342,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tier0-width", type=int, default=160)
     parser.add_argument("--tier0-height", type=int, default=90)
     parser.add_argument("--ffmpeg-executable", default="ffmpeg")
+    parser.add_argument("--scan-workers", type=int, default=1)
     parser.add_argument("--coverage-bin-sec", type=float, default=300.0)
     parser.add_argument("--min-spacing-sec", type=float, default=2.0)
     parser.add_argument("--segment-ids", nargs="*", default=())
