@@ -9,6 +9,7 @@ from vcah.change_triggered_entity_occurrence import (
     admit_entity_occurrences,
     frame_change_scores,
     select_change_budget,
+    select_interval_diagnostic,
     select_uniform_budget,
 )
 from vcah.virtual_video import VirtualVideoSegment
@@ -99,6 +100,21 @@ def test_change_selection_uses_deterministic_spacing_fallback() -> None:
     assert len(selected) == 6
     assert any(
         row["selection_reason"] == "exact_budget_spacing_fallback" for row in selected
+    )
+
+
+def test_interval_diagnostic_selects_shared_frames_and_tracks_cases() -> None:
+    selected = select_interval_diagnostic(
+        _observations(8),
+        intervals_by_case={
+            "case-a": ((1.0, 3.0),),
+            "case-b": ((3.0, 4.0),),
+        },
+    )
+    assert [row["tier0_frame_index"] for row in selected] == [1, 2, 3, 4]
+    assert selected[2]["diagnostic_case_ids"] == ["case-a", "case-b"]
+    assert all(
+        row["selection_arm"] == "a3_tier0_diagnostic" for row in selected
     )
 
 

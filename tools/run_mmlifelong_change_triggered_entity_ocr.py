@@ -36,7 +36,7 @@ from vcah.virtual_video import VirtualVideoSegment, VirtualVideoWorkspace
 
 
 MAX_WORKERS = 16
-ALLOWED_ARMS = ("a1_uniform", "a2_change")
+ALLOWED_ARMS = ("a1_uniform", "a2_change", "a3_tier0_diagnostic")
 T = TypeVar("T")
 R = TypeVar("R")
 
@@ -49,7 +49,7 @@ def run(args: argparse.Namespace) -> Path:
         raise ValueError("WP16-7 protocol contract mismatch")
     arm = str(args.arm)
     if arm not in ALLOWED_ARMS:
-        raise ValueError("arm must be a1_uniform or a2_change")
+        raise ValueError(f"arm must be one of: {', '.join(ALLOWED_ARMS)}")
 
     sampling_root = Path(args.sampling_root)
     sampling_report = _read_json(sampling_root / "sampling_report.json")

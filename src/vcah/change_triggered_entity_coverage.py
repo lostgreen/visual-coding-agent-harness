@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import math
 from typing import Any, Mapping, Sequence
 
@@ -159,6 +160,93 @@ def build_change_triggered_coverage_report(
         "structural_gate_passed": checks["structural_gate_passed"],
         "endpoint_values_were_not_structural_gates": True,
         "frozen10_is_underpowered": True,
+        "retrieval_run": False,
+        "qa_run": False,
+        "judge_calls": 0,
+    }
+
+
+def build_tier0_miss_audit_report(
+    *,
+    case_rows: Sequence[Mapping[str, Any]],
+    diagnostic_occurrences: Sequence[Mapping[str, Any]],
+    structural_checks: Mapping[str, bool],
+) -> dict[str, Any]:
+    rows = []
+    category_counts: Counter[str] = Counter()
+    seen = set()
+    for raw in case_rows:
+        case_id = str(raw.get("case_id", "") or "")
+        expectation = str(raw.get("anchor_text_expected", "") or "")
+        if not case_id or case_id in seen:
+            raise ValueError("miss-audit case IDs must be nonempty and unique")
+        if expectation not in {"yes", "no", "uncertain"}:
+            raise ValueError(f"{case_id}: invalid anchor text expectation")
+        seen.add(case_id)
+        matches = matching_entity_occurrences(
+            diagnostic_occurrences,
+            query_terms=tuple(raw.get("entity_query", ()) or ()),
+            anchor_intervals=tuple(raw.get("anchor_intervals", ()) or ()),
+            tolerance_sec=0.0,
+        )
+        if matches:
+            category = "ui_text_exists_reader_or_resolution_failure"
+        elif expectation == "no":
+            category = "no_ui_text_visual_event_or_state"
+        elif expectation == "uncertain":
+            category = "annotation_uncertain"
+        else:
+            category = "other"
+        category_counts[category] += 1
+        rows.append(
+            {
+                "case_id": case_id,
+                "anchor_text_expected": expectation,
+                "entity_query": list(raw.get("entity_query", ()) or ()),
+                "anchor_intervals": [
+                    list(value) for value in tuple(raw.get("anchor_intervals", ()) or ())
+                ],
+                "category": category,
+                "diagnostic_match_count": len(matches),
+                "diagnostic_matching_occurrences": list(matches),
+            }
+        )
+    strict_rows = tuple(row for row in rows if row["anchor_text_expected"] == "yes")
+    strict_recovered = sum(
+        row["diagnostic_match_count"] > 0 for row in strict_rows
+    )
+    checks = {str(key): bool(value) for key, value in structural_checks.items()}
+    checks.update(
+        {
+            "nonempty_miss_case_set": bool(rows),
+            "all_cases_assigned_one_category": sum(category_counts.values())
+            == len(rows),
+            "diagnostic_is_not_endpoint": True,
+            "diagnostic_is_not_upper_bound": True,
+        }
+    )
+    checks["structural_gate_passed"] = all(checks.values())
+    if not checks["structural_gate_passed"]:
+        decision = "STRUCTURAL_FAILURE"
+    elif strict_recovered:
+        decision = "CONTINUE_READER_OR_SAMPLING_REPAIR"
+    else:
+        decision = "STOP_NO_VISIBLE_ENTITY_RECOVERY_AT_TIER0"
+    return {
+        "schema_version": "MMLifelongTier0MissAuditReportV1",
+        "decision": decision,
+        "case_count": len(rows),
+        "strict_text_expected_yes": {
+            "recovered_count": strict_recovered,
+            "case_count": len(strict_rows),
+            "rate": strict_recovered / len(strict_rows) if strict_rows else 0.0,
+        },
+        "category_counts": dict(sorted(category_counts.items())),
+        "case_level": rows,
+        "gates": checks,
+        "structural_gate_passed": checks["structural_gate_passed"],
+        "endpoint_evaluation": False,
+        "upper_bound_claim": False,
         "retrieval_run": False,
         "qa_run": False,
         "judge_calls": 0,

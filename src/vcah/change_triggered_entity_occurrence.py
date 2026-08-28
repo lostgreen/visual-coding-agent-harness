@@ -290,6 +290,53 @@ def select_change_budget(
     )
 
 
+def select_interval_diagnostic(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    intervals_by_case: Mapping[str, Sequence[Sequence[float]]],
+) -> tuple[dict[str, Any], ...]:
+    """Select the shared 1fps frames inside frozen diagnostic intervals."""
+    normalized: dict[str, tuple[tuple[float, float], ...]] = {}
+    for raw_case_id, raw_intervals in sorted(intervals_by_case.items()):
+        case_id = str(raw_case_id).strip()
+        if not case_id:
+            raise ValueError("diagnostic case IDs cannot be empty")
+        intervals = []
+        for raw_interval in raw_intervals:
+            if len(raw_interval) != 2:
+                raise ValueError("diagnostic intervals must be [start, end]")
+            start, end = float(raw_interval[0]), float(raw_interval[1])
+            if end < start:
+                raise ValueError("diagnostic interval end precedes start")
+            intervals.append((start, end))
+        if not intervals:
+            raise ValueError(f"{case_id}: diagnostic intervals cannot be empty")
+        normalized[case_id] = tuple(intervals)
+    if not normalized:
+        raise ValueError("diagnostic case set cannot be empty")
+
+    selected = []
+    for row in _ordered_observations(observations):
+        timestamp = float(row["virtual_time_sec"])
+        case_ids = tuple(
+            case_id
+            for case_id, intervals in normalized.items()
+            if any(start <= timestamp <= end for start, end in intervals)
+        )
+        if case_ids:
+            selected.append(
+                {
+                    **row,
+                    "selection_arm": "a3_tier0_diagnostic",
+                    "selection_reason": "official_interval_dense_1fps_diagnostic",
+                    "diagnostic_case_ids": list(case_ids),
+                }
+            )
+    if not selected:
+        raise RuntimeError("Tier-0 diagnostic selected zero frames")
+    return tuple(selected)
+
+
 def admit_entity_occurrences(
     rows: Sequence[Mapping[str, Any]],
     *,

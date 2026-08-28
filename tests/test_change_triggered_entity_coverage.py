@@ -1,5 +1,6 @@
 from vcah.change_triggered_entity_coverage import (
     build_change_triggered_coverage_report,
+    build_tier0_miss_audit_report,
     matching_entity_occurrences,
 )
 
@@ -90,3 +91,35 @@ def test_endpoint_values_do_not_override_structural_failure() -> None:
     )
     assert report["decision"] == "STRUCTURAL_FAILURE"
     assert report["endpoint_values_were_not_structural_gates"] is True
+
+
+def test_tier0_miss_audit_routes_recovered_text_without_becoming_endpoint() -> None:
+    rows = (
+        {
+            "case_id": "case-yes",
+            "anchor_text_expected": "yes",
+            "entity_query": ("Black Wind King", "黑风大王"),
+            "anchor_intervals": ((100.0, 110.0),),
+        },
+        {
+            "case_id": "case-no",
+            "anchor_text_expected": "no",
+            "entity_query": ("fourth meditation point",),
+            "anchor_intervals": ((200.0, 210.0),),
+        },
+    )
+    report = build_tier0_miss_audit_report(
+        case_rows=rows,
+        diagnostic_occurrences=(
+            _occurrence("visible", "黑风大王", 103.0, 104.0),
+        ),
+        structural_checks={"runtime_inputs_valid": True},
+    )
+    assert report["decision"] == "CONTINUE_READER_OR_SAMPLING_REPAIR"
+    assert report["strict_text_expected_yes"]["recovered_count"] == 1
+    assert report["category_counts"] == {
+        "no_ui_text_visual_event_or_state": 1,
+        "ui_text_exists_reader_or_resolution_failure": 1,
+    }
+    assert report["endpoint_evaluation"] is False
+    assert report["upper_bound_claim"] is False

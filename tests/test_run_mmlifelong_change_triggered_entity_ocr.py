@@ -83,6 +83,14 @@ def test_ordered_parallel_map_clamps_worker_count() -> None:
     )
 
 
+def test_diagnostic_arm_is_supported_without_changing_endpoint_arms() -> None:
+    assert runner.ALLOWED_ARMS == (
+        "a1_uniform",
+        "a2_change",
+        "a3_tier0_diagnostic",
+    )
+
+
 def test_selected_frame_materialization_uses_only_requested_indexes(
     tmp_path: Path, monkeypatch
 ) -> None:
