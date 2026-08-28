@@ -1,0 +1,216 @@
+{
+  "contract": "WP16-7-change-triggered-entity-occurrence-v1",
+  "protocol_frozen_before_outcomes": true,
+  "source_protocol": {
+    "wp16_6_commit": "935dc3dd8d629739258471c04fc5c50dcc359066",
+    "wp16_6_protocol": "docs/evaluations/mmlifelong_wp16_6_global_ocr_entity_v1.json",
+    "wp16_6_protocol_sha256": "94728191717c097801d753d5c8e7d84aed01d5a551807185491bb67a0dc6ea98",
+    "caption_config_digest": "fb25cc6e8c5c4f855d86b724882b14502d3ff17d0670e1c0dc61e52a3bd08b96",
+    "caption_passage_count": 2960,
+    "video_segment_count": 32,
+    "virtual_duration_sec": 88733.909,
+    "frozen10_field_spec": "docs/evaluations/mmlifelong_wp16_5_oracle_field_subset_v1.json",
+    "frozen10_field_spec_sha256": "7133c2ee45b22ce78d7ae9be06033cdbe207674d5cad257b77f281f28696c161"
+  },
+  "scope": {
+    "phase_7a_only": true,
+    "coverage_only": true,
+    "retrieval_run": false,
+    "rrf_run": false,
+    "qa_run": false,
+    "judge_run": false,
+    "phase_7b_requires_explicit_7a_go": true,
+    "day_test140_accessed": false,
+    "week_accessed": false
+  },
+  "storage": {
+    "source_video_reused_in_place": true,
+    "video_copy_forbidden": true,
+    "dense_frame_materialization_forbidden": true,
+    "tier0_decoding": "streamed_ffmpeg_rawvideo_pipe",
+    "persisted_large_artifacts": "none",
+    "persisted_artifacts": [
+      "tier0_change_scores_jsonl",
+      "selected_frame_manifest_jsonl",
+      "normalized_ocr_batch_results",
+      "entity_occurrences_jsonl",
+      "coverage_reports"
+    ],
+    "selected_frame_policy": "temporary_per_segment_then_delete_after_normalized_result"
+  },
+  "tier0": {
+    "fps": 1.0,
+    "width": 160,
+    "height": 90,
+    "grayscale": true,
+    "selection_score": "0.65 * mean_full_frame_absdiff + 0.35 * mean_ui_band_absdiff",
+    "coverage_bin_sec": 300.0,
+    "minimum_change_frame_spacing_sec": 2.0,
+    "tier0_diagnostic_is_not_an_upper_bound": true
+  },
+  "arms": {
+    "a0_fixed3": {
+      "role": "historical_reproduction_only",
+      "source": "completed WP16-6 full sidecar",
+      "rerun": false,
+      "sampling": "three frames per Caption passage",
+      "admission": "historical WP16-6 admission"
+    },
+    "a1_uniform": {
+      "role": "budget_matched_control",
+      "sampling": "uniform over the exact Tier-0 frame universe",
+      "ocr_and_admission": "shared_with_a2"
+    },
+    "a2_change": {
+      "role": "treatment",
+      "sampling": "one change peak per 300-second bin, then globally ranked peaks with 2-second NMS, then exact-budget fallback",
+      "ocr_and_admission": "shared_with_a1"
+    },
+    "a3_tier0_diagnostic": {
+      "role": "miss_diagnostic_only",
+      "sampling": "dense 1fps inside official gold intervals for failed cases",
+      "official_intervals_visible_to_diagnostic": true,
+      "endpoint_evaluation_allowed": false,
+      "upper_bound_claim_allowed": false
+    }
+  },
+  "budget_ladder": {
+    "smoke_selected_frames_per_arm": 24,
+    "canary_selected_frames_per_arm": 256,
+    "b1_selected_frames_per_arm": 8873,
+    "b2_selected_frames_per_arm": 17746,
+    "b3_selected_frames_per_arm": 26600,
+    "primary_frozen10_budget": "b1",
+    "a1_a2_exact_budget_equality_required": true
+  },
+  "model_contract": {
+    "expected_model": "pa/gmn-2.5-pr",
+    "role": "entity_oriented_visible_text_transcriber",
+    "wp16_6_prompt_reused": true,
+    "question_visible": false,
+    "options_visible": false,
+    "answer_visible": false,
+    "official_intervals_visible": false,
+    "caption_text_visible": false,
+    "event_or_state_inference_allowed": false,
+    "raw_response_persisted": false,
+    "prompt_persisted": false
+  },
+  "admission": {
+    "lexical_rules_frozen_from_wp16_6": true,
+    "multi_frame_min_support": 2,
+    "single_frame_high_value_region_allowed": true,
+    "shared_temporal_support_substitute_for_a1_and_a2": true,
+    "occurrence_merge_gap_sec": 60.0,
+    "occurrence_merge_gap_is_provisional": true,
+    "admission_is_not_identical_to_historical_a0": true,
+    "reason": "A1 and A2 admit repeated observations within one temporal entity occurrence instead of within one Fixed-3 Caption packet; both new arms use the same rule."
+  },
+  "anchor_text_expected_annotation": {
+    "frozen_before_a1_a2_outcomes": true,
+    "allowed_values": ["yes", "no", "uncertain"],
+    "primary_denominator": "yes_only",
+    "all_case_coverage_is_secondary": true,
+    "cases": {
+      "mmlifelong-game-test-0010": {
+        "value": "yes",
+        "reason": "boss name bar or victory UI is expected near the defeat"
+      },
+      "mmlifelong-game-test-0016": {
+        "value": "yes",
+        "reason": "boss encounter is expected to expose a named boss label"
+      },
+      "mmlifelong-game-test-0028": {
+        "value": "yes",
+        "reason": "boss name bar is expected during the Red Loong encounter"
+      },
+      "mmlifelong-game-test-0054": {
+        "value": "yes",
+        "reason": "boss start is expected to expose the Yellowbrow name"
+      },
+      "mmlifelong-game-test-0076": {
+        "value": "yes",
+        "reason": "the item upgrade menu is expected to show the gourd name"
+      },
+      "mmlifelong-game-test-0100": {
+        "value": "no",
+        "reason": "the ordinal meditation-point identity is primarily visual/event state, not stable on-screen named text"
+      },
+      "mmlifelong-game-test-0108": {
+        "value": "uncertain",
+        "reason": "a chapter or location title may appear, but the transition can also be conveyed without stable text"
+      },
+      "mmlifelong-game-test-0166": {
+        "value": "yes",
+        "reason": "boss challenge is expected to expose a named boss label"
+      },
+      "mmlifelong-game-test-0179": {
+        "value": "yes",
+        "reason": "shrine activation is expected to expose a location or shrine label"
+      },
+      "mmlifelong-game-test-0184": {
+        "value": "yes",
+        "reason": "shrine activation is expected to expose a location or shrine label"
+      }
+    }
+  },
+  "miss_audit": {
+    "run_only_after_frozen_endpoint_report": true,
+    "sample": "all frozen10 A2 misses, capped at 10",
+    "categories": [
+      "ui_text_exists_reader_or_resolution_failure",
+      "no_ui_text_visual_event_or_state",
+      "speech_only_asr_candidate",
+      "annotation_uncertain",
+      "other"
+    ],
+    "routing": {
+      "ui_text_exists_reader_or_resolution_failure": "improve Tier-0 reader or selected-frame resolution",
+      "no_ui_text_visual_event_or_state": "route to a separate event-state index",
+      "speech_only_asr_candidate": "route to ASR",
+      "annotation_uncertain": "retain as diagnostic; do not change the frozen primary denominator"
+    }
+  },
+  "structural_gates": [
+    "exact_shared_tier0_frame_universe",
+    "a1_a2_exact_budget_equality",
+    "question_and_gold_blind_sampling",
+    "actual_model_matches",
+    "shared_prompt_and_admission_for_a1_a2",
+    "complete_selected_frame_lineage",
+    "all_results_parse",
+    "all_occurrences_satisfy_runtime_admission",
+    "zero_persisted_raw_model_responses",
+    "zero_dense_frame_persistence"
+  ],
+  "endpoint_policy": {
+    "primary_metric": "strict_gold_anchor_entity_coverage_on_text_expected_yes",
+    "coverage_anchor_tolerance_sec": 60.0,
+    "secondary_metrics": [
+      "all_case_gold_anchor_entity_coverage",
+      "sampled_frame_count",
+      "change_event_count",
+      "admitted_entity_occurrence_count",
+      "same_entity_occurrence_count",
+      "duplicate_entity_rate",
+      "model_call_count"
+    ],
+    "frozen10_go": "A2 strict coverage exceeds A1 by at least 2 cases and A2 strict coverage is at least 4 of 8",
+    "frozen10_partial": "A2 strict coverage exceeds A1 by 1 case or A2 strict coverage is 3 of 8",
+    "frozen10_stop": "A2 strict coverage does not exceed A1 and A3 shows no missed visible anchor text",
+    "mcnemar": "report_only_not_a_hard_gate",
+    "endpoint_values_are_not_structural_gates": true,
+    "frozen10_is_underpowered": true,
+    "frozen39_requires_a_separately_frozen_text_expected_annotation_before_outcomes": true
+  },
+  "explicit_exclusions": [
+    "A4.2",
+    "A5",
+    "WP7",
+    "event_state_generator_changes",
+    "question_conditioned_sampling",
+    "learned_change_detector",
+    "retrieval_or_qa_evaluation_in_7a"
+  ],
+  "outcome_status_at_freeze": "not_run"
+}
