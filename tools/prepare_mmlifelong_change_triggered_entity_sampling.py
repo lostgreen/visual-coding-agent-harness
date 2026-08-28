@@ -54,6 +54,7 @@ def run(args: argparse.Namespace) -> Path:
                 fps=float(args.tier0_fps),
                 width=int(args.tier0_width),
                 height=int(args.tier0_height),
+                ffmpeg_executable=str(args.ffmpeg_executable),
             )
             write_jsonl(score_path, rows)
         observations.extend(dict(row) for row in rows)
@@ -105,6 +106,7 @@ def run(args: argparse.Namespace) -> Path:
         "tier0_fps": float(args.tier0_fps),
         "tier0_width": int(args.tier0_width),
         "tier0_height": int(args.tier0_height),
+        "ffmpeg_executable": str(args.ffmpeg_executable),
         "segment_count": len(segments),
         "observation_count": len(observations),
         "observation_digest": stable_digest(
@@ -303,6 +305,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tier0-fps", type=float, default=1.0)
     parser.add_argument("--tier0-width", type=int, default=160)
     parser.add_argument("--tier0-height", type=int, default=90)
+    parser.add_argument("--ffmpeg-executable", default="ffmpeg")
     parser.add_argument("--coverage-bin-sec", type=float, default=300.0)
     parser.add_argument("--min-spacing-sec", type=float, default=2.0)
     parser.add_argument("--segment-ids", nargs="*", default=())

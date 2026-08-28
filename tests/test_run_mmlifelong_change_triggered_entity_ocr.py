@@ -61,6 +61,7 @@ def _args(*, resume: bool = False) -> Namespace:
         resume=resume,
         expected_model="model-a",
         max_image_edge=640,
+        ffmpeg_executable="/opt/test/ffmpeg",
     )
 
 
@@ -79,9 +80,14 @@ def test_selected_frame_materialization_uses_only_requested_indexes(
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     paths = runner._materialize_selected_segment_frames(
-        _segment(), _rows(), out_dir=tmp_path / "frames", max_image_edge=640
+        _segment(),
+        _rows(),
+        out_dir=tmp_path / "frames",
+        max_image_edge=640,
+        ffmpeg_executable="/opt/test/ffmpeg",
     )
     assert len(paths) == 2
+    assert seen["command"][0] == "/opt/test/ffmpeg"
     filter_value = seen["command"][seen["command"].index("-vf") + 1]
     assert "eq(n\\,1)+eq(n\\,4)" in filter_value
     assert "scale=640:640" in filter_value
@@ -94,8 +100,8 @@ def test_worker_clients_are_created_inside_executor_threads(
     main_thread = threading.get_ident()
     client_threads = []
 
-    def fake_materialize(segment, rows, *, out_dir, max_image_edge):
-        del segment, max_image_edge
+    def fake_materialize(segment, rows, *, out_dir, max_image_edge, ffmpeg_executable):
+        del segment, max_image_edge, ffmpeg_executable
         out_dir.mkdir(parents=True)
         paths = []
         for index, _ in enumerate(rows):

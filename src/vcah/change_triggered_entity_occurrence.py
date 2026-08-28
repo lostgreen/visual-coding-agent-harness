@@ -33,6 +33,7 @@ def scan_segment_change_observations(
     fps: float = DEFAULT_TIER0_FPS,
     width: int = DEFAULT_TIER0_WIDTH,
     height: int = DEFAULT_TIER0_HEIGHT,
+    ffmpeg_executable: str = "ffmpeg",
 ) -> tuple[dict[str, Any], ...]:
     """Stream low-resolution frames from ffmpeg without materializing them."""
     rate = float(fps)
@@ -46,7 +47,7 @@ def scan_segment_change_observations(
     if duration <= 0.0:
         return ()
     command = [
-        "ffmpeg",
+        str(ffmpeg_executable),
         "-nostdin",
         "-hide_banner",
         "-loglevel",
@@ -75,7 +76,9 @@ def scan_segment_change_observations(
             stderr=subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("ffmpeg is required for Tier-0 change scanning") from exc
+        raise RuntimeError(
+            f"ffmpeg executable is unavailable: {ffmpeg_executable}"
+        ) from exc
     if process.stdout is None or process.stderr is None:
         process.kill()
         raise RuntimeError("ffmpeg Tier-0 stream was not captured")

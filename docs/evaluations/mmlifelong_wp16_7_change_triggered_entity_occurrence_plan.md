@@ -53,6 +53,7 @@ WP16-6 证明 Fixed-3 的主要失败来自时间采样覆盖，而不是 RRF �
 - 大文件根目录只用于小型中间结果：`/m2v_intern/xuboshen/zgw/mger_runs/...`。
 - 不创建视频副本。
 - Tier-0 解码使用 rawvideo pipe；仅保存每秒的时间戳与两个变化分数。
+- decoder 路径由 `--ffmpeg-executable` 显式传入并写入 manifest；允许复用环境内 `imageio-ffmpeg` 的二进制，不要求安装系统 ffmpeg。
 - 高分辨率候选帧按 segment 临时生成，OCR 的结构化结果持久化后立即删除。
 - 所有输出保留 source video、segment、source time、virtual time 与 selection reason。
 

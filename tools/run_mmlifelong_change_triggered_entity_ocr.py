@@ -116,6 +116,7 @@ def run(args: argparse.Namespace) -> Path:
         "batch_size": max(1, min(16, int(args.batch_size))),
         "max_completion_tokens": max(4096, int(args.max_completion_tokens)),
         "occurrence_gap_sec": float(args.occurrence_gap_sec),
+        "ffmpeg_executable": str(args.ffmpeg_executable),
         "question_visible_to_model": False,
         "options_visible_to_model": False,
         "answer_visible_to_model": False,
@@ -321,6 +322,7 @@ def _run_segment_batches(
         rows,
         out_dir=segment_temp,
         max_image_edge=int(args.max_image_edge),
+        ffmpeg_executable=str(args.ffmpeg_executable),
     )
     path_by_identity = {
         _selection_identity(row): path for row, path in zip(rows, frame_paths)
@@ -450,6 +452,7 @@ def _materialize_selected_segment_frames(
     *,
     out_dir: Path,
     max_image_edge: int,
+    ffmpeg_executable: str = "ffmpeg",
 ) -> tuple[Path, ...]:
     selected = tuple(
         sorted(
@@ -467,7 +470,7 @@ def _materialize_selected_segment_frames(
     duration = float(segment.source_end_sec) - float(segment.source_start_sec)
     output_pattern = output_root / "frame_%06d.jpg"
     command = [
-        "ffmpeg",
+        str(ffmpeg_executable),
         "-nostdin",
         "-hide_banner",
         "-loglevel",
@@ -500,7 +503,9 @@ def _materialize_selected_segment_frames(
             timeout=max(120.0, duration * 2.0),
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("ffmpeg is required to materialize selected frames") from exc
+        raise RuntimeError(
+            f"ffmpeg executable is unavailable: {ffmpeg_executable}"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("selected-frame ffmpeg extraction timed out") from exc
     paths = tuple(sorted(output_root.glob("frame_*.jpg")))
@@ -635,6 +640,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-image-edge", type=int, default=1280)
+    parser.add_argument("--ffmpeg-executable", default="ffmpeg")
     parser.add_argument("--max-completion-tokens", type=int, default=4096)
     parser.add_argument("--occurrence-gap-sec", type=float, default=60.0)
     parser.add_argument("--resume", action="store_true")
