@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from vcah.caption_schema import CaptionPassageV1
 from vcah.occurrence_entity_sidecar import (
+    MAX_GLOBAL_ENTITY_ROWS_PER_FRAME,
     admit_global_entity_rows,
     build_entity_sidecar_passages,
     fixed3_passage_targets,
@@ -114,6 +117,26 @@ def test_parser_rejects_ambiguous_missing_frame_labels() -> None:
         allowed_frame_labels=("frame_01", "frame_02"),
     )
     assert parsed["status"] == "unknown_frame_label"
+
+
+def test_parser_enforces_the_shared_per_frame_entity_limit() -> None:
+    raw = json.dumps(
+        {
+            "frames": [
+                {
+                    "frame_label": "frame_01",
+                    "entities": [
+                        {"text": f"Named Entity {index}"}
+                        for index in range(MAX_GLOBAL_ENTITY_ROWS_PER_FRAME + 1)
+                    ],
+                }
+            ]
+        }
+    )
+    parsed = parse_global_entity_ocr_response_diagnostic(
+        raw, allowed_frame_labels=("frame_01",)
+    )
+    assert parsed["status"] == "too_many_rows"
 
 
 def test_single_high_value_region_admitted_but_noise_rejected() -> None:

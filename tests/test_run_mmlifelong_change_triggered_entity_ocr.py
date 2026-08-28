@@ -62,6 +62,7 @@ def _args(*, resume: bool = False) -> Namespace:
         expected_model="model-a",
         max_image_edge=640,
         ffmpeg_executable="/opt/test/ffmpeg",
+        max_completion_tokens=4096,
     )
 
 
@@ -192,6 +193,48 @@ def test_single_batch_worker_runs_on_the_calling_segment_thread(
     )
     assert client_threads == [calling_thread, calling_thread]
     assert not any((tmp_path / "temporary").rglob("*.jpg"))
+
+
+def test_too_many_rows_retry_states_the_runtime_limit(tmp_path: Path) -> None:
+    prompts = []
+    frame_label = runner._frame_label(_rows()[0])
+    too_many = {
+        "frames": [
+            {
+                "frame_label": frame_label,
+                "entities": [
+                    {"text": f"Named Entity {index}"}
+                    for index in range(runner.MAX_GLOBAL_ENTITY_ROWS_PER_FRAME + 1)
+                ],
+            }
+        ]
+    }
+    valid = {"frames": [{"frame_label": frame_label, "entities": []}]}
+
+    class FakeClient:
+        model = "model-a"
+        last_response_metadata = {}
+
+        def __init__(self) -> None:
+            self.responses = iter((json.dumps(too_many), json.dumps(valid)))
+
+        def chat(self, prompt, **kwargs):
+            del kwargs
+            prompts.append(prompt)
+            return next(self.responses)
+
+    result = runner._run_batch(
+        (_rows()[0],),
+        image_paths=(tmp_path / "frame.jpg",),
+        arm="a1_uniform",
+        result_path=tmp_path / "result.json",
+        client_for_worker=FakeClient,
+        args=_args(),
+    )
+    assert result["status"] == "success"
+    assert result["attempt_count"] == 2
+    assert "at most 32 entries" not in prompts[0]
+    assert "at most 32 entries" in prompts[1]
 
 
 def test_resume_reuse_removes_stale_temporary_frames(

@@ -49,6 +49,7 @@ _ENGLISH_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9'-]*")
 _NUMERIC_ONLY_RE = re.compile(r"^[\d\s.,:/+\-xX×%]+$")
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 _CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+MAX_GLOBAL_ENTITY_ROWS_PER_FRAME = 32
 
 
 def global_entity_ocr_prompt(frame_labels: Sequence[str]) -> str:
@@ -80,7 +81,7 @@ def parse_global_entity_ocr_response_diagnostic(
     raw: str,
     *,
     allowed_frame_labels: Sequence[str],
-    max_rows_per_frame: int = 32,
+    max_rows_per_frame: int = MAX_GLOBAL_ENTITY_ROWS_PER_FRAME,
 ) -> dict[str, Any]:
     labels = tuple(
         dict.fromkeys(

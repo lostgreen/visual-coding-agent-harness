@@ -22,6 +22,7 @@ from vcah.change_triggered_entity_occurrence import (
 )
 from vcah.model_client import OpenAICompatibleClient
 from vcah.occurrence_entity_sidecar import (
+    MAX_GLOBAL_ENTITY_ROWS_PER_FRAME,
     admitted_entity_row_valid,
     global_entity_ocr_prompt,
     parse_global_entity_ocr_response_diagnostic,
@@ -432,6 +433,12 @@ def _run_batch(
                 "\nThe previous response violated the schema. Emit each allowed "
                 "frame_label exactly once and return JSON only."
             )
+            if diagnostic.get("status") == "too_many_rows":
+                call_prompt += (
+                    " Keep each frame's entities array to at most "
+                    f"{MAX_GLOBAL_ENTITY_ROWS_PER_FRAME} entries. Retain only "
+                    "stable named-entity text visibly supported by that frame."
+                )
         try:
             raw = client.chat(
                 call_prompt,
