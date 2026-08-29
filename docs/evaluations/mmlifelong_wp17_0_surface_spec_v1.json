@@ -8,7 +8,7 @@
   "post_hoc_after_wp16_7": true,
   "visible_to_ocr_model": false,
   "question_options_answer_included": false,
-  "annotation_status": "draft_pending_three_case_pixel_review",
+  "annotation_status": "frozen_after_three_case_pixel_review",
   "cases": {
     "mmlifelong-game-test-0010": {
       "canonical_entity": "Black Wind King / 黑风大王",
@@ -24,8 +24,8 @@
       "expected_surfaces": ["First Prince of Flowing Sands", "沙大郎"],
       "diagnostic_alias_surfaces": [],
       "visual_audit": {
-        "pixel_status": "pending",
-        "basis": "requires direct contact-sheet review"
+        "pixel_status": "visible",
+        "basis": "eight-frame full and bottom contact review shows the boss name bar; blind OCR produced repeated one-glyph near misses"
       }
     },
     "mmlifelong-game-test-0028": {
@@ -33,8 +33,8 @@
       "expected_surfaces": ["Red Loong", "赤髯龙", "妖王·赤髯龙"],
       "diagnostic_alias_surfaces": [],
       "visual_audit": {
-        "pixel_status": "pending",
-        "basis": "requires direct contact-sheet review"
+        "pixel_status": "visible",
+        "basis": "eight-frame full and bottom contact review shows the boss name bar; blind OCR produced a one-glyph near miss"
       }
     },
     "mmlifelong-game-test-0054": {
@@ -74,8 +74,8 @@
       ],
       "diagnostic_alias_surfaces": [],
       "visual_audit": {
-        "pixel_status": "pending",
-        "basis": "requires direct contact-sheet review"
+        "pixel_status": "absent",
+        "basis": "eight-frame full and bottom contact review shows combat and reward notifications but no Qingzhang Dao or Keeper's Shrine surface"
       }
     },
     "mmlifelong-game-test-0184": {
