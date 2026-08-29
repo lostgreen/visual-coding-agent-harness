@@ -37,6 +37,8 @@
   "reader_policy": {
     "cheap_reader": "PaddleOCR-3.7.0",
     "language": "ch",
+    "text_detection_model_name": "PP-OCRv5_server_det",
+    "text_recognition_model_name": "PP-OCRv5_server_rec",
     "local_reader_only": true,
     "gemini_verification_enabled": false,
     "gemini_verification_budget_cap": 500,

@@ -129,6 +129,7 @@ def build_local_timeline(
         "frame_width": int(spec.get("frame_width", 1280)),
         "frame_height": int(spec.get("frame_height", 720)),
         "views": tuple(dict(row) for row in tuple(spec.get("views", ()) or ())),
+        "reader_policy": dict(spec.get("reader_policy", {}) or {}),
         "gates": checks,
         "structural_gate_passed": checks["structural_gate_passed"],
     }

@@ -58,6 +58,10 @@ def test_timeline_merges_overlaps_and_strips_paths() -> None:
             "case-c": {"anchor_intervals": [[90.0, 98.0]]},
         },
         "views": [],
+        "reader_policy": {
+            "text_detection_model_name": "det",
+            "text_recognition_model_name": "rec",
+        },
     }
 
     result = build_local_timeline(spec, manifest=_manifest())
@@ -73,6 +77,7 @@ def test_timeline_merges_overlaps_and_strips_paths() -> None:
     }
     assert all("source_path" not in row for row in result["timeline_slices"])
     assert result["windows"][0]["case_ids"] == ["case-a", "case-b"]
+    assert result["reader_policy"]["text_detection_model_name"] == "det"
 
 
 def test_paddle_rows_map_roi_boxes_to_full_frame() -> None:

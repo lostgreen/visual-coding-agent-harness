@@ -52,9 +52,20 @@ def run(args: argparse.Namespace) -> Path:
     except ImportError as exc:
         raise RuntimeError("PaddleOCR runtime is unavailable") from exc
 
+    reader_policy = dict(timeline.get("reader_policy", {}) or {})
+    detection_model = str(
+        reader_policy.get("text_detection_model_name", "") or ""
+    )
+    recognition_model = str(
+        reader_policy.get("text_recognition_model_name", "") or ""
+    )
+    if not detection_model or not recognition_model:
+        raise ValueError("WP17 PaddleOCR model names are not frozen")
     reader = PaddleOCR(
-        lang=str(args.lang),
+        lang=str(reader_policy.get("language", args.lang) or args.lang),
         device=str(args.device),
+        text_detection_model_name=detection_model,
+        text_recognition_model_name=recognition_model,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
@@ -76,6 +87,8 @@ def run(args: argparse.Namespace) -> Path:
         "timeline_sha256": file_sha256(timeline_path),
         "workspace_id": workspace.workspace_id,
         "reader_source": reader_source,
+        "text_detection_model_name": detection_model,
+        "text_recognition_model_name": recognition_model,
         "paddle_version": str(getattr(paddle, "__version__", "unknown")),
         "device": str(args.device),
         "sampling_fps": float(timeline["sampling_fps"]),
@@ -274,6 +287,12 @@ def run(args: argparse.Namespace) -> Path:
             "source": reader_source,
             "paddle_version": run_manifest["paddle_version"],
             "device": str(args.device),
+            "text_detection_model_name": run_manifest[
+                "text_detection_model_name"
+            ],
+            "text_recognition_model_name": run_manifest[
+                "text_recognition_model_name"
+            ],
         },
         "track_counts": dict(track_build["counts"]),
         "gates": gates,
