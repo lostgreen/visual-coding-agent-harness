@@ -202,6 +202,7 @@ def admit_global_entity_rows(
     multi_frame_min_support: int = 2,
     high_value_regions: Sequence[str] = tuple(sorted(HIGH_VALUE_UI_REGIONS)),
     blocked_normalized_text: Sequence[str] = tuple(sorted(DEFAULT_BLOCKED_ENTITY_TEXT)),
+    lexical_filter_enabled: bool = True,
 ) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     rejection_counts: Counter[str] = Counter()
@@ -219,7 +220,11 @@ def admit_global_entity_rows(
     for normalized in sorted(grouped):
         candidates = grouped[normalized]
         text = str(candidates[0]["text"])
-        lexical_reason = _lexical_rejection_reason(text, normalized, blocked)
+        lexical_reason = (
+            _lexical_rejection_reason(text, normalized, blocked)
+            if lexical_filter_enabled
+            else None
+        )
         if lexical_reason:
             rejection_counts[lexical_reason] += 1
             continue

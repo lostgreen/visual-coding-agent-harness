@@ -1,0 +1,96 @@
+{
+  "schema_version": "MMLifelongWP17SurfaceSpecV1",
+  "contract": "WP17-0-memory-construction-preflight-v1",
+  "created_date": "2026-08-29",
+  "source_commit": "c49426e",
+  "diagnostic_only": true,
+  "evaluation_only": true,
+  "post_hoc_after_wp16_7": true,
+  "visible_to_ocr_model": false,
+  "question_options_answer_included": false,
+  "annotation_status": "draft_pending_three_case_pixel_review",
+  "cases": {
+    "mmlifelong-game-test-0010": {
+      "canonical_entity": "Black Wind King / 黑风大王",
+      "expected_surfaces": ["Black Wind King", "黑风大王"],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "visible",
+        "basis": "exact blind OCR surface recovered in WP16-7 A3"
+      }
+    },
+    "mmlifelong-game-test-0016": {
+      "canonical_entity": "First Prince of Flowing Sands / 沙大郎",
+      "expected_surfaces": ["First Prince of Flowing Sands", "沙大郎"],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "pending",
+        "basis": "requires direct contact-sheet review"
+      }
+    },
+    "mmlifelong-game-test-0028": {
+      "canonical_entity": "Red Loong / 赤髯龙",
+      "expected_surfaces": ["Red Loong", "赤髯龙", "妖王·赤髯龙"],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "pending",
+        "basis": "requires direct contact-sheet review"
+      }
+    },
+    "mmlifelong-game-test-0054": {
+      "canonical_entity": "Yellowbrow / 黄眉",
+      "expected_surfaces": ["Yellowbrow", "黄眉"],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "visible",
+        "basis": "exact blind OCR surface recovered in WP16-7 A3"
+      }
+    },
+    "mmlifelong-game-test-0076": {
+      "canonical_entity": "Elixir Gourd / 葫芦",
+      "expected_surfaces": ["Elixir Gourd", "葫芦"],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "visible",
+        "basis": "exact blind OCR surface recovered in WP16-7 A3"
+      }
+    },
+    "mmlifelong-game-test-0166": {
+      "canonical_entity": "Bishui Golden-Eyed Beast / 碧水金睛兽",
+      "expected_surfaces": ["Bishui Golden-Eyed Beast", "碧水金睛兽"],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "visible",
+        "basis": "exact blind OCR surface recovered in WP16-7 A3"
+      }
+    },
+    "mmlifelong-game-test-0179": {
+      "canonical_entity": "Qingzhang Dao Keeper's Shrine / 青嶂道土地庙",
+      "expected_surfaces": [
+        "Qingzhang Dao",
+        "青嶂道",
+        "Keeper's Shrine",
+        "土地庙"
+      ],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "pending",
+        "basis": "requires direct contact-sheet review"
+      }
+    },
+    "mmlifelong-game-test-0184": {
+      "canonical_entity": "Fire-Scorched Three Passes Keeper's Shrine / 火炼三关土地庙",
+      "expected_surfaces": [
+        "Fire-Scorched Three Passes",
+        "火炼三关",
+        "Keeper's Shrine",
+        "土地庙"
+      ],
+      "diagnostic_alias_surfaces": [],
+      "visual_audit": {
+        "pixel_status": "visible",
+        "basis": "exact blind OCR surface recovered in WP16-7 A3"
+      }
+    }
+  }
+}

@@ -12,6 +12,7 @@ import numpy as np
 
 from vcah.caption_lexical_index import normalize_caption_query
 from vcah.occurrence_entity_sidecar import (
+    HIGH_VALUE_UI_REGIONS,
     admit_global_entity_rows,
     normalize_entity_text,
 )
@@ -342,6 +343,9 @@ def admit_entity_occurrences(
     *,
     frame_metadata: Mapping[str, Mapping[str, Any]],
     merge_gap_sec: float = DEFAULT_OCCURRENCE_GAP_SEC,
+    multi_frame_min_support: int = 2,
+    high_value_regions: Sequence[str] = tuple(sorted(HIGH_VALUE_UI_REGIONS)),
+    lexical_filter_enabled: bool = True,
 ) -> dict[str, Any]:
     gap = float(merge_gap_sec)
     if gap < 0.0:
@@ -407,6 +411,9 @@ def admit_entity_occurrences(
                 cluster,
                 passage_id=occurrence_id,
                 frame_metadata=frame_metadata,
+                multi_frame_min_support=multi_frame_min_support,
+                high_value_regions=high_value_regions,
+                lexical_filter_enabled=lexical_filter_enabled,
             )
             rejection_counts.update(admission["rejection_counts"])
             for admitted in admission["admitted_rows"]:
