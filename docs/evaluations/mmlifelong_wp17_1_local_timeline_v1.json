@@ -1,0 +1,51 @@
+{
+  "contract": "WP17-1-local-timeline-v1",
+  "protocol_frozen_before_dense_ocr_outcomes": true,
+  "development_only": true,
+  "scope": "frozen10_plus_0115_anchor_padding",
+  "padding_sec": 600.0,
+  "sampling_fps": 1.0,
+  "frame_width": 1280,
+  "frame_height": 720,
+  "construction_inputs": {
+    "question": false,
+    "options": false,
+    "gold_answer": false,
+    "target_entity_aliases": false,
+    "caption_text": false
+  },
+  "scope_annotations_visible_to_reader": false,
+  "cases": {
+    "mmlifelong-game-test-0010": {"anchor_intervals": [[6661.0, 6675.0]]},
+    "mmlifelong-game-test-0016": {"anchor_intervals": [[11142.0, 11161.0]]},
+    "mmlifelong-game-test-0028": {"anchor_intervals": [[17600.0, 17637.0]]},
+    "mmlifelong-game-test-0054": {"anchor_intervals": [[42914.0, 42923.0]]},
+    "mmlifelong-game-test-0076": {"anchor_intervals": [[23133.0, 23147.0]]},
+    "mmlifelong-game-test-0100": {"anchor_intervals": [[34011.0, 34056.0]]},
+    "mmlifelong-game-test-0108": {"anchor_intervals": [[63135.0, 63172.0]]},
+    "mmlifelong-game-test-0115": {"anchor_intervals": [[68811.0, 68825.0]]},
+    "mmlifelong-game-test-0166": {"anchor_intervals": [[73771.0, 73800.0]]},
+    "mmlifelong-game-test-0179": {"anchor_intervals": [[77002.0, 77011.0]]},
+    "mmlifelong-game-test-0184": {"anchor_intervals": [[70941.0, 70961.0]]}
+  },
+  "views": [
+    {"view_id": "full_frame", "ui_region": "full_frame", "bbox_norm": [0.0, 0.0, 1.0, 1.0]},
+    {"view_id": "top_band", "ui_region": "top", "bbox_norm": [0.0, 0.0, 1.0, 0.32]},
+    {"view_id": "bottom_band", "ui_region": "bottom", "bbox_norm": [0.0, 0.62, 1.0, 1.0]},
+    {"view_id": "center_bottom_name_bar", "ui_region": "boss_name_bar", "bbox_norm": [0.12, 0.58, 0.88, 0.9]}
+  ],
+  "reader_policy": {
+    "cheap_reader": "PaddleOCR-3.7.0",
+    "language": "ch",
+    "local_reader_only": true,
+    "gemini_verification_enabled": false,
+    "gemini_verification_budget_cap": 500,
+    "raw_frames_persisted": false,
+    "source_paths_persisted": false
+  },
+  "provenance": {
+    "frozen10_source": "mmlifelong_wp16_4_oracle_relation_subset_v2.json",
+    "case_0115_source": "oracle-day-prepared-fb25-20260811 intervention 613f0fd45524cb5045cafd7f57a5040d1c49ab11514a083c333412ccd096b8cc",
+    "scope_note": "Official development annotations define only the local timeline boundary and are never supplied to the OCR reader or construction model."
+  }
+}
