@@ -446,17 +446,19 @@ ffmpeg 1fps stream
 
 WP17-1 mechanism check：track-level strict target recall 不低于 official-interval dense review 的 80%；以实际计数同时报告，不能用小样本百分比掩盖分母。若不通过，先修 ROI/reader/track，不进入 WP17-2。
 
+2026-08-30 实际结果：完整 timeline 为 13,447 个 1fps 时间点、53,788 个 local reader calls、47,522 个 tracks。7 个 pixel-visible surface case 中，exact-normalized 为 5/7，既有 WP17-0 `surface_matches` 口径为 7/7，冻结 near-miss 后 alias-aware 为 7/7；A3 Gemini 对照分别为 3/7 与 6/7。机制 gate 通过，但 3,142/5,837 个 normalized surfaces 被拆成多个 tracks，故 WP17-2 可以开始，track consolidation 仍是显式风险。0166/0184 的 WP17-0 strict 命中来自短子串或通用 surface，报告不得把 7/7 误写为 canonical exact coverage。
+
 ### WP17-2：2×2 memory construction（5-7 天）
 
-范围：同一 3.5h timeline，固定 30s segment，约 420 segments。
+范围：同一 3.735h timeline，固定 30s segment，按 11 个窗口分别切分，共 454 segments。
 
 调用量：
 
 ```text
-420 segments × 4 arms = 1,680 base generation calls
+454 segments × 4 arms = 1,816 base generation calls
 ```
 
-重试总上限建议为 10%，总调用 hard cap 1,850；final/SER JSON 调用的 completion budget 不低于 4096，并保留 usage metadata。
+重试总上限为 10%，总调用 hard cap 2,000；final/SER JSON 调用的 completion budget 不低于 4096，并保留 usage metadata。旧 1,850 上限低于实际 base+retry 预算，已废弃。
 
 执行顺序：先做 3-case vertical canary；结构 gate 通过后再跑全量。分析只做 construction endpoints，不调用 QA judge。
 

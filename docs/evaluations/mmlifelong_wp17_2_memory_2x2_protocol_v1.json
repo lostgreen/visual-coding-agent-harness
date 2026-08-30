@@ -1,0 +1,168 @@
+{
+  "schema_version": "MMLifelongWP17Memory2x2ProtocolV1",
+  "contract": "WP17-2-memory-construction-factorial-protocol-v1",
+  "frozen_date": "2026-08-30",
+  "protocol_frozen_before_wp17_2_outcomes": true,
+  "endpoint_values_are_structural_gates": false,
+  "provenance": {
+    "parent_dense_data_commit": "196a7fa",
+    "parent_dense_audit_commit": "10d0349"
+  },
+  "scope": {
+    "timeline": "frozen10_plus_0115_local_timeline",
+    "segment_duration_sec": 30.0,
+    "frame_sampling_fps": 1.0,
+    "expected_segment_count": 454,
+    "expected_base_calls": 1816,
+    "retry_fraction_cap": 0.1,
+    "model_call_hard_cap": 2000,
+    "canary_case_ids": [
+      "mmlifelong-game-test-0016",
+      "mmlifelong-game-test-0115",
+      "mmlifelong-game-test-0179"
+    ],
+    "expected_canary_segment_count": 3,
+    "expected_input_sha256": {
+      "dense_audit": "d6303fcac29de37a6ba463c3a6ce4ff4846077a0e8dbd8f416abbefd4371e8c1",
+      "dense_report": "4a0395f11b6552f22914b9fcedb5fbe9dd2db1ec3d82dd6de9edc756cd540d21",
+      "timeline": "081f7e2ed1511c2878efab1f8b44ba7a0e56716d0e9812807f01b46e42e5f354"
+    },
+    "day_test140_accessed": false,
+    "week_accessed": false
+  },
+  "construction_input_visibility": {
+    "question": false,
+    "options": false,
+    "gold_answer": false,
+    "official_intervals": false,
+    "evaluation_aliases": false,
+    "case_ids": false
+  },
+  "shared_inputs": {
+    "frame_packet": "same 1fps 30s frame universe for all arms",
+    "asr": "same frozen existing ASR packet for all arms when present",
+    "frame_preprocessing": "identical across arms",
+    "segment_timestamps": "identical across arms"
+  },
+  "arms": [
+    {
+      "arm": "c00",
+      "current_frames": true,
+      "ocr_evidence": false,
+      "inherited_state": false,
+      "role": "independent structured construction baseline"
+    },
+    {
+      "arm": "c01",
+      "current_frames": true,
+      "ocr_evidence": false,
+      "inherited_state": true,
+      "role": "state-only drift and hallucination probe"
+    },
+    {
+      "arm": "c10",
+      "current_frames": true,
+      "ocr_evidence": true,
+      "inherited_state": false,
+      "role": "OCR evidence direct effect"
+    },
+    {
+      "arm": "c11",
+      "current_frames": true,
+      "ocr_evidence": true,
+      "inherited_state": true,
+      "role": "full treatment"
+    }
+  ],
+  "matched_control": {
+    "c10_c11_share_frozen_ocr_packet": true,
+    "state_stores_are_arm_isolated": true,
+    "stateful_arms_run_in_timeline_order": true,
+    "segment_arm_order": "four-position cyclic rotation",
+    "cross_treatment_response_replay": false,
+    "same_arm_identical_request_resume_allowed": true,
+    "same_model_provider_budget_schema_retries": true
+  },
+  "model_policy": {
+    "config": "configs/local_gemini25_pro_ppio.yaml",
+    "api": "planner_api",
+    "actual_model": "pa/gmn-2.5-pr",
+    "max_completion_tokens_minimum": 4096,
+    "reasoning_usage_metadata_required": true,
+    "empty_visible_content_requires_finish_and_usage_diagnosis": true
+  },
+  "ocr_packet_policy": {
+    "arms": ["c10", "c11"],
+    "source": "frozen WP17-1 PaddleOCR track/evidence store",
+    "selection": "all tracks overlapping the current segment",
+    "fields": [
+      "evidence_id",
+      "track_id",
+      "raw_surfaces",
+      "time_range_sec",
+      "ui_regions",
+      "bbox_series",
+      "support_frame_ids",
+      "confidence"
+    ],
+    "gold_alias_injection": false
+  },
+  "state_policy": {
+    "arms": ["c01", "c11"],
+    "operations": ["observe", "update", "close", "retain"],
+    "versioned": true,
+    "retain_cannot_rewrite_facts": true,
+    "new_or_changed_fact_requires_current_evidence": true,
+    "carry_forward_preserves_origin_provenance": true,
+    "silent_overwrite_allowed": false
+  },
+  "output_contract": {
+    "record": "Structured Event Record",
+    "required_top_level_fields": [
+      "segment_id",
+      "entities",
+      "events",
+      "state_changes",
+      "relations",
+      "occurrence_refs",
+      "summary"
+    ],
+    "every_nonretain_write_requires_evidence_ids": true,
+    "natural_language_summary_is_not_the_only_memory": true
+  },
+  "structural_gates": [
+    "exact segment/frame universe aligned",
+    "question/gold/official-interval blind",
+    "actual model/provider/config exact",
+    "OCR/SER/state/occurrence schemas parse",
+    "evidence handles unique with complete lineage",
+    "PV_ref equals 100 percent",
+    "mechanical PV_text equals 100 percent",
+    "state versions monotonic and arm-isolated",
+    "occurrence lifecycle transitions legal",
+    "zero silent overwrite and terminal transaction failure",
+    "finish reason and reasoning usage metadata complete",
+    "source video not copied and temporary frames not persisted",
+    "endpoint values not used as structural gates"
+  ],
+  "construction_endpoints": [
+    "anchor_representation_coverage",
+    "canonical_entity_coverage",
+    "relation_state_coverage",
+    "occurrence_coverage",
+    "ordinal_accuracy",
+    "PV_ref",
+    "PV_text",
+    "PV_visual_blind_sample",
+    "unsupported_state_write_rate",
+    "model_and_storage_cost"
+  ],
+  "development_decisions": {
+    "ocr_go": "C10-C00 adds at least 2 ARC/CEC cases and PV drops no more than 5pp",
+    "state_go": "C11-C10 adds at least 2 RSC/ARC/ordinal cases and PV drops no more than 5pp",
+    "simplify": "C10 improves and C11 is approximately C10; keep OCR and stop state inheritance",
+    "state_stop": "C11 has no gain or unsupported writes/propagation worsen",
+    "construction_stop": "C10 and C11 do not improve over C00"
+  }
+}
+
