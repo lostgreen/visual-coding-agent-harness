@@ -87,7 +87,7 @@ def test_slot_transaction_validates_observations_before_ops_and_binds_participan
     )
 
 
-def test_working_slots_require_explicit_lifecycle_and_retain_cannot_rewrite() -> None:
+def test_working_slots_require_explicit_lifecycle() -> None:
     state = SlotMemoryState("e1c2")
     state.apply(
         _transaction(
@@ -108,13 +108,52 @@ def test_working_slots_require_explicit_lifecycle_and_retain_cannot_rewrite() ->
             segment_id="segment-2",
             allowed_evidence_ids=("frame:1",),
         )
+
+
+def test_retain_can_refresh_provenance_without_rewriting_value() -> None:
+    state = SlotMemoryState("e1c2")
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "walking"},
+                "observation_ids": ["obs-1"],
+            }
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    payload = _transaction(
+        {
+            "operation": "retain",
+            "slot": "current_activity",
+            "expected_version": 1,
+            "observation_ids": ["obs-1"],
+        }
+    )
+    payload["observations"][0]["evidence_ids"] = ["frame:2"]
+
+    result = state.apply(
+        payload,
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:2",),
+    )
+
+    record = state.records["current_activity"]
+    assert record["value"] == {"activity": "walking"}
+    assert record["version"] == 2
+    assert record["last_verified_segment_id"] == "segment-2"
+    assert record["provenance"] == ["frame:1", "frame:2"]
+    assert result["lifecycle_events"][0]["operation"] == "retain"
     with pytest.raises(SlotTransactionError, match="cannot rewrite"):
         state.apply(
             _transaction(
                 {
                     "operation": "retain",
                     "slot": "current_activity",
-                    "expected_version": 1,
+                    "expected_version": 2,
                     "value": {"activity": "running"},
                     "observation_ids": [],
                 }

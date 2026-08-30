@@ -85,6 +85,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "capsule_provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
             "working_capsule_contains_raw_provenance_ids": False,
             "full_provenance_preserved_in_state_and_ledger": True,
+            "retain_may_refresh_provenance_without_value_change": True,
         },
         "output_contract": {
             "structured_event_singletons_normalized_to_lists": True,

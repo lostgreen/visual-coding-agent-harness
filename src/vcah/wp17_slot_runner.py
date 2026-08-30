@@ -235,8 +235,10 @@ def construction_prompt(
             "in history.slots must receive exactly one operation in this segment. Use expected_version "
             "from history.versions (0 when absent). write/update/close require observation_ids from this "
             "segment; each slot_operations.observation_ids entry must exactly copy an observation_id "
-            "from the observations array, never a frame/OCR/ASR evidence ID. retain/archive/evict cannot "
-            "rewrite values. active_participants value must be "
+            "from the observations array, never a frame/OCR/ASR evidence ID. retain cannot rewrite a "
+            "value but may cite current observations to refresh provenance and last verification; an "
+            "evidence-free retain leaves the slot unchanged. archive/evict cannot rewrite values or "
+            "attach observations. active_participants value must be "
             '{"event_ref":"<active encounter event_id>","participants":[...]}. '
             "active_encounter value must contain event_id. Do not put merely visible entities into "
             "active_participants. The slot capsule is sparse cross-segment working memory, not a copy "

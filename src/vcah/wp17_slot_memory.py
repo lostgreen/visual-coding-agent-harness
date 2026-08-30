@@ -440,9 +440,18 @@ class SlotMemoryState:
         elif action == "retain":
             if prior_status not in _WORKING_STATUSES:
                 raise SlotTransactionError(f"cannot retain non-working slot {name}")
-            if observation_ids:
-                raise SlotTransactionError("retain cannot attach new observations")
-            record = prior
+            record = (
+                {
+                    **prior,
+                    "version": prior_version + 1,
+                    "provenance": list(
+                        dict.fromkeys(tuple(prior["provenance"]) + current_evidence)
+                    ),
+                    "last_verified_segment_id": segment_id,
+                }
+                if observation_ids
+                else prior
+            )
         elif action == "close":
             if prior_status != "active":
                 raise SlotTransactionError(f"cannot close non-active slot {name}")

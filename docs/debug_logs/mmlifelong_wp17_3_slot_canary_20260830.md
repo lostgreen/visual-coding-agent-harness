@@ -94,3 +94,17 @@ Validate the question-blind 120-second `E1C0/E1C1/E1C2` construction transaction
 
 - Mechanically normalize any missing SER collection field to an empty list, without adding entities, events, relations, state changes, or occurrence references.
 - Keep the natural-language summary required and retain every semantic/state/provenance validation rule.
+
+## Protocol-v7 Result
+
+- Commit `878e19d` passed the local and remote suites (`664/664`).
+- The fresh canary again passed the first two segments in six calls.
+- Third-segment `E1C2` stopped because both attempts attached current observations to a `retain` operation; the prompt prohibited value rewrite but the runtime additionally rejected evidence refresh.
+- Root: `/m2v_intern/xuboshen/zgw/mger_runs/mmlifelong-wp17-3-slot-canary3-878e19d-20260830`.
+- No endpoint values were produced or inspected. The v7 root is structural-debug evidence only.
+
+## Protocol-v8 Repair
+
+- Permit `retain` to cite current observations while leaving value/status unchanged; append canonical provenance, refresh last verification, and increment version.
+- Preserve evidence-free retain as a no-op and keep archive/evict observation-free.
+- Align the prompt, runtime transaction, frozen protocol, and replay tests to this single lifecycle meaning.
