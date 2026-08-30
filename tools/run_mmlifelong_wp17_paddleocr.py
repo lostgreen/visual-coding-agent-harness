@@ -80,6 +80,11 @@ def run(args: argparse.Namespace) -> Path:
         raise FileExistsError("WP17 dense OCR report already exists")
     if run_manifest_path.exists() and not args.resume:
         raise FileExistsError("WP17 dense OCR output already exists")
+    scope_override = (
+        args.virtual_start_sec is not None
+        or args.virtual_end_sec is not None
+        or int(args.max_frames) > 0
+    )
     run_manifest = {
         "schema_version": "MMLifelongWP17DenseOCRRunV1",
         "contract": WP17_DENSE_OCR_CONTRACT,
@@ -96,9 +101,7 @@ def run(args: argparse.Namespace) -> Path:
         "frame_height": int(timeline["frame_height"]),
         "views": tuple(dict(row) for row in timeline.get("views", ())),
         "scope_slice_count": len(slices),
-        "canary_scope_override": args.virtual_start_sec is not None
-        or args.virtual_end_sec is not None
-        or int(args.max_frames) > 0,
+        "canary_scope_override": scope_override,
         "question_visible_to_reader": False,
         "options_visible_to_reader": False,
         "answer_visible_to_reader": False,
@@ -121,6 +124,11 @@ def run(args: argparse.Namespace) -> Path:
         slices,
         fps=float(timeline["sampling_fps"]),
         max_frames=int(args.max_frames),
+        full_scope_expected_frames=(
+            None
+            if scope_override
+            else int(timeline["counts"]["expected_sample_points"])
+        ),
     )
     for slice_index, raw_slice in enumerate(slices):
         if int(args.max_frames) > 0 and processed_frames >= int(args.max_frames):
@@ -277,6 +285,7 @@ def run(args: argparse.Namespace) -> Path:
         ),
         "counts": {
             "frames": processed_frames,
+            "expected_frames": expected_frames,
             "views_per_frame": len(tuple(timeline.get("views", ()) or ())),
             "reader_calls": reader_calls,
             "observations": len(observations),
@@ -347,17 +356,27 @@ def _clip_slices(
 
 
 def _expected_frames(
-    rows: Sequence[Mapping[str, Any]], *, fps: float, max_frames: int
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    fps: float,
+    max_frames: int,
+    full_scope_expected_frames: int | None = None,
 ) -> int:
-    total = sum(
-        int(
-            math.ceil(
-                (float(row["virtual_end_sec"]) - float(row["virtual_start_sec"]))
-                * float(fps)
+    if full_scope_expected_frames is not None:
+        total = int(full_scope_expected_frames)
+    else:
+        total = sum(
+            int(
+                math.ceil(
+                    (
+                        float(row["virtual_end_sec"])
+                        - float(row["virtual_start_sec"])
+                    )
+                    * float(fps)
+                )
             )
+            for row in rows
         )
-        for row in rows
-    )
     return min(total, int(max_frames)) if int(max_frames) > 0 else total
 
 

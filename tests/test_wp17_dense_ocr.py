@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 
 from vcah.virtual_video import VirtualVideoManifest, VirtualVideoSegment
@@ -10,6 +13,13 @@ from vcah.wp17_dense_ocr import (
     paddle_result_rows,
     stable_frame_label,
 )
+
+RUNNER_PATH = Path(__file__).parents[1] / "tools" / "run_mmlifelong_wp17_paddleocr.py"
+RUNNER_SPEC = importlib.util.spec_from_file_location("wp17_paddleocr_runner", RUNNER_PATH)
+assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
+RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(RUNNER)
+_expected_frames = RUNNER._expected_frames
 
 
 def _manifest() -> VirtualVideoManifest:
@@ -134,3 +144,30 @@ def test_crop_and_frame_ids_are_stable() -> None:
     assert crop.shape == (60, 100, 3)
     assert stable_frame_label("slice-a", 3) == stable_frame_label("slice-a", 3)
     assert stable_frame_label("slice-a", 3) != stable_frame_label("slice-a", 4)
+
+
+def test_full_scope_expected_frames_uses_frozen_timeline_count() -> None:
+    slices = (
+        {"virtual_start_sec": 0.0, "virtual_end_sec": 339.136},
+        {"virtual_start_sec": 339.136, "virtual_end_sec": 400.0},
+    )
+
+    assert _expected_frames(slices, fps=1.0, max_frames=0) == 401
+    assert (
+        _expected_frames(
+            slices,
+            fps=1.0,
+            max_frames=0,
+            full_scope_expected_frames=400,
+        )
+        == 400
+    )
+    assert (
+        _expected_frames(
+            slices,
+            fps=1.0,
+            max_frames=5,
+            full_scope_expected_frames=400,
+        )
+        == 5
+    )
