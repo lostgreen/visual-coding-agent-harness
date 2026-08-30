@@ -135,6 +135,10 @@ def test_dense_audit_excludes_pixel_absent_and_reports_complementarity() -> None
         "paddle_only": 1,
     }
     rows = {row["case_id"]: row for row in report["case_level"]}
+    assert rows["case-strict"]["paddle_outcome"] == "exact_normalized_hit"
+    assert rows["case-strict"]["exact_matching_surfaces"] == [
+        {"surface": "沙大郎", "count": 2}
+    ]
     assert rows["case-near"]["paddle_outcome"] == "near_miss"
     assert rows["case-absent"]["paddle_outcome"] == "miss"
 

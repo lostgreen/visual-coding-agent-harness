@@ -71,7 +71,9 @@ def build_dense_ocr_audit(
             if any(_track_overlaps(track, interval) for interval in windows)
         )
         surface_counts: Counter[str] = Counter()
+        exact_tracks = []
         strict_tracks = []
+        strict_only_tracks = []
         near_tracks = []
         for track in relevant:
             surfaces = tuple(track.get("surfaces", ()) or ())
@@ -85,11 +87,18 @@ def build_dense_ocr_audit(
                 text = str(row.get("surface", "") or "")
                 if text:
                     surface_counts[text] += int(row.get("count", 1) or 1)
-            if any(surface_matches(value, expected) for value in values):
+            exact_match = any(_exact_surface_match(value, expected) for value in values)
+            strict_match = any(surface_matches(value, expected) for value in values)
+            if strict_match:
                 strict_tracks.append(track)
+                if exact_match:
+                    exact_tracks.append(track)
+                else:
+                    strict_only_tracks.append(track)
             elif any(_near_surface_match(value, targets) for value in values):
                 near_tracks.append(track)
 
+        exact_hit = bool(exact_tracks)
         strict_hit = bool(strict_tracks)
         near_hit = bool(near_tracks)
         alias_aware_hit = strict_hit or near_hit
@@ -113,20 +122,34 @@ def build_dense_ocr_audit(
                 "window_count": len(windows),
                 "observed_track_count": len(relevant),
                 "observed_surface_count": len(surface_counts),
+                "paddle_exact_normalized_hit": exact_hit,
                 "paddle_strict_hit": strict_hit,
                 "paddle_alias_aware_hit": alias_aware_hit,
                 "paddle_outcome": (
-                    "strict_hit"
+                    "exact_normalized_hit"
+                    if exact_hit
+                    else "strict_substring_hit"
                     if strict_hit
                     else "near_miss"
                     if near_hit
                     else "miss"
                 ),
+                "exact_matching_track_count": len(exact_tracks),
                 "strict_matching_track_count": len(strict_tracks),
+                "strict_only_matching_track_count": len(strict_only_tracks),
                 "near_only_matching_track_count": len(near_tracks),
                 "matching_support_frame_count": sum(
                     int(track.get("support_frame_count", 0) or 0)
                     for track in matching_tracks
+                ),
+                "exact_matching_surfaces": _matching_surfaces(
+                    surface_counts,
+                    lambda value: _exact_surface_match(value, expected),
+                ),
+                "strict_only_matching_surfaces": _matching_surfaces(
+                    surface_counts,
+                    lambda value: surface_matches(value, expected)
+                    and not _exact_surface_match(value, expected),
                 ),
                 "closest_observed_surface": closest,
                 "a3_gemini_strict_hit": a3_strict_hit,
@@ -142,6 +165,7 @@ def build_dense_ocr_audit(
         )
 
     visible = tuple(row for row in case_rows if row["pixel_status"] == "visible")
+    paddle_exact_hits = sum(row["paddle_exact_normalized_hit"] for row in visible)
     paddle_strict_hits = sum(row["paddle_strict_hit"] for row in visible)
     paddle_alias_hits = sum(row["paddle_alias_aware_hit"] for row in visible)
     a3_strict_hits = sum(row["a3_gemini_strict_hit"] for row in visible)
@@ -210,6 +234,7 @@ def build_dense_ocr_audit(
             "pixel_absent_cases": sum(
                 row["pixel_status"] == "absent" for row in case_rows
             ),
+            "paddle_exact_normalized_hits": paddle_exact_hits,
             "paddle_strict_hits": paddle_strict_hits,
             "paddle_alias_aware_hits": paddle_alias_hits,
             "a3_gemini_strict_hits": a3_strict_hits,
@@ -217,6 +242,7 @@ def build_dense_ocr_audit(
         },
         "representation": {
             "paddle_dense": {
+                "exact_normalized_recall": _rate(paddle_exact_hits, visible_count),
                 "strict_recall": paddle_strict_recall,
                 "alias_aware_recall": _rate(paddle_alias_hits, visible_count),
             },
@@ -239,6 +265,12 @@ def build_dense_ocr_audit(
             ),
             "strict_target_matching_tracks": sum(
                 row["strict_matching_track_count"] for row in visible
+            ),
+            "exact_target_matching_tracks": sum(
+                row["exact_matching_track_count"] for row in visible
+            ),
+            "strict_substring_only_target_matching_tracks": sum(
+                row["strict_only_matching_track_count"] for row in visible
             ),
             "near_only_target_matching_tracks": sum(
                 row["near_only_matching_track_count"] for row in visible
@@ -315,6 +347,29 @@ def _near_surface_match(text: Any, expected_surfaces: Sequence[Any]) -> bool:
     return False
 
 
+def _exact_surface_match(text: Any, expected_surfaces: Sequence[Any]) -> bool:
+    observed = compact_surface(text)
+    return bool(observed) and observed in {
+        compact_surface(value) for value in expected_surfaces if compact_surface(value)
+    }
+
+
+def _matching_surfaces(
+    surface_counts: Mapping[str, int], predicate: Any, *, limit: int = 8
+) -> list[dict[str, Any]]:
+    return [
+        {"surface": text[:80], "count": int(count)}
+        for text, count in sorted(
+            (
+                (str(text), int(count))
+                for text, count in surface_counts.items()
+                if predicate(text)
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )[: int(limit)]
+    ]
+
+
 def _closest_surface(
     surface_counts: Mapping[str, int], expected_surfaces: Sequence[Any]
 ) -> dict[str, Any] | None:
@@ -387,7 +442,7 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
         f"- 决策：`{report['decision']}`",
         f"- Gate：`{str(report['structural_and_promotion_gate_passed']).lower()}`",
         f"- 可见像素 case：`{counts['pixel_visible_cases']}`；pixel-absent：`{counts['pixel_absent_cases']}`（不计 reader failure）",
-        f"- Paddle strict / alias-aware recall：`{counts['paddle_strict_hits']}/{counts['pixel_visible_cases']}` / `{counts['paddle_alias_aware_hits']}/{counts['pixel_visible_cases']}`",
+        f"- Paddle exact-normalized / strict / alias-aware recall：`{counts['paddle_exact_normalized_hits']}/{counts['pixel_visible_cases']}` / `{counts['paddle_strict_hits']}/{counts['pixel_visible_cases']}` / `{counts['paddle_alias_aware_hits']}/{counts['pixel_visible_cases']}`",
         f"- A3 Gemini strict / alias-aware recall：`{counts['a3_gemini_strict_hits']}/{counts['pixel_visible_cases']}` / `{counts['a3_gemini_alias_aware_hits']}/{counts['pixel_visible_cases']}`",
         f"- Recall（Paddle strict vs A3 strict）：`{paddle['strict_recall']:.3f}` vs `{a3['strict_recall']:.3f}`",
         f"- OCR 成本：`{cost['paddle_frames']}` frames，`{cost['paddle_reader_calls']}` local reader calls，`0` Gemini calls。A3 诊断为 `{cost['a3_selected_frames']}` frames / `{cost['a3_gemini_calls']}` Gemini calls；两者 scope 不同，不做直接成本比值。",
