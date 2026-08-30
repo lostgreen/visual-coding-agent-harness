@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from vcah.wp17_slot_runner import (
+    WP17_OCR_AGGREGATION_CONTRACT,
+    alias_current_evidence,
     build_asr_packet,
     build_ocr_packet,
     construction_prompt,
@@ -22,10 +24,20 @@ def test_packets_are_segment_scoped_compact_and_path_free() -> None:
                 "ui_regions": ["top"],
                 "support_frame_ids": ["f1", "f2"],
                 "max_confidence": "high",
+                "normalized_surface": "yin tiger",
                 "source_path": "/must/not/persist.mp4",
+            },
+            {
+                "evidence_id": "ocr:2",
+                "start_sec": 140.0,
+                "end_sec": 141.0,
+                "surface": "Yin Tiger",
+                "normalized_surface": "yin tiger",
+                "support_frame_ids": ["f3"],
             },
             {"evidence_id": "ocr:outside", "start_sec": 250.0, "end_sec": 251.0},
         ),
+        segment_id="segment-1",
         start_sec=100.0,
         end_sec=220.0,
     )
@@ -39,10 +51,36 @@ def test_packets_are_segment_scoped_compact_and_path_free() -> None:
         end_sec=220.0,
     )
 
-    assert len(ocr) == 1 and ocr[0]["local_time_range_sec"] == [10.0, 30.0]
+    assert len(ocr) == 1 and ocr[0]["local_time_range_sec"] == [10.0, 41.0]
+    assert ocr[0]["occurrence_ranges_sec"] == [[10.0, 30.0], [40.0, 41.0]]
+    assert ocr[0]["source_evidence_count"] == 2
+    assert ocr[0]["contract"] == WP17_OCR_AGGREGATION_CONTRACT
     assert "source_path" not in str(ocr)
     assert len(asr) == 1 and asr[0]["evidence_id"] == "asr:segment-1:0000"
     assert packet_digest(ocr) == packet_digest(ocr)
+
+
+def test_packet_local_aliases_are_short_unique_and_reversible() -> None:
+    frame_ids = frame_evidence_ids("segment-1", 2)
+    ocr = (
+        {
+            "evidence_id": "ocragg:segment-1:abc",
+            "surfaces": ["Yin Tiger"],
+        },
+    )
+    asr = ({"evidence_id": "asr:segment-1:0000", "text": "fight"},)
+
+    frames, aliased_ocr, aliased_asr, mapping = alias_current_evidence(
+        frame_ids,
+        ocr,
+        asr,
+    )
+
+    assert frames == ("f001", "f002")
+    assert aliased_ocr[0]["evidence_id"] == "o001"
+    assert aliased_asr[0]["evidence_id"] == "a001"
+    assert mapping["o001"] == "ocragg:segment-1:abc"
+    assert len(mapping) == 4
 
 
 def test_prompt_hides_evaluation_fields_and_freezes_arm_contract() -> None:

@@ -11,6 +11,7 @@ from vcah.wp17_slot_memory import (
     budget_token_count,
     parse_transaction_response,
     tail_budget_text,
+    validate_construction_output,
 )
 
 
@@ -183,3 +184,42 @@ def test_budget_tokenizer_and_response_parser_are_deterministic() -> None:
     assert budget_token_count(tail) == 3
     payload = _transaction()
     assert parse_transaction_response("```json\n" + json.dumps(payload) + "\n```") == payload
+
+
+def test_local_evidence_aliases_canonicalize_before_persistence() -> None:
+    payload = _transaction()
+    payload["observations"][0]["evidence_ids"] = ["f001"]
+
+    normalized = validate_construction_output(
+        payload,
+        arm="e1c0",
+        segment_id="segment-1",
+        allowed_evidence_ids=("f001",),
+        evidence_id_map={"f001": "frame:segment-1:0001"},
+    )
+
+    assert normalized["observations"][0]["evidence_ids"] == [
+        "frame:segment-1:0001"
+    ]
+
+
+def test_output_bounds_reject_unbounded_observation_transcription() -> None:
+    payload = _transaction()
+    payload["observations"] = [
+        {
+            "observation_id": f"obs-{index}",
+            "kind": "visible_text",
+            "fact": f"row {index}",
+            "evidence_ids": ["frame:1"],
+            "participants": [],
+        }
+        for index in range(17)
+    ]
+
+    with pytest.raises(SlotTransactionError, match="observations exceed"):
+        validate_construction_output(
+            payload,
+            arm="e1c0",
+            segment_id="segment-1",
+            allowed_evidence_ids=("frame:1",),
+        )

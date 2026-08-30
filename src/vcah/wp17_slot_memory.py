@@ -40,6 +40,11 @@ WP17_OBSERVATION_KINDS = (
     "activity",
     "location",
 )
+WP17_MAX_OBSERVATIONS = 16
+WP17_MAX_OBSERVATION_EVIDENCE_IDS = 6
+WP17_MAX_OBSERVATION_PARTICIPANTS = 12
+WP17_MAX_STRUCTURED_EVENT_ITEMS = 12
+WP17_MAX_OUTPUT_JSON_CHARS = 10_000
 _WORKING_STATUSES = {"active", "closed"}
 _TOKEN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.UNICODE)
 
@@ -82,8 +87,17 @@ def validate_observations(
     rows: Sequence[Mapping[str, Any]],
     *,
     allowed_evidence_ids: Sequence[str],
+    evidence_id_map: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], ...]:
+    if len(rows) > WP17_MAX_OBSERVATIONS:
+        raise SlotTransactionError(
+            f"observations exceed the frozen limit of {WP17_MAX_OBSERVATIONS}"
+        )
     allowed = {str(value) for value in allowed_evidence_ids}
+    canonical = {
+        str(key): str(value)
+        for key, value in dict(evidence_id_map or {}).items()
+    }
     normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in rows:
@@ -103,15 +117,24 @@ def validate_observations(
         )
         if not evidence_ids or not set(evidence_ids).issubset(allowed):
             raise SlotTransactionError("observation evidence must resolve inside the current packet")
+        if len(evidence_ids) > WP17_MAX_OBSERVATION_EVIDENCE_IDS:
+            raise SlotTransactionError(
+                "observation evidence IDs exceed the frozen per-observation limit"
+            )
+        canonical_evidence_ids = tuple(canonical.get(value, value) for value in evidence_ids)
         participants = tuple(
             dict.fromkeys(str(value).strip() for value in row.get("participants", ()) if str(value).strip())
         )
+        if len(participants) > WP17_MAX_OBSERVATION_PARTICIPANTS:
+            raise SlotTransactionError(
+                "observation participants exceed the frozen per-observation limit"
+            )
         normalized.append(
             {
                 "observation_id": observation_id,
                 "kind": kind,
                 "fact": fact,
-                "evidence_ids": list(evidence_ids),
+                "evidence_ids": list(canonical_evidence_ids),
                 "participants": list(participants),
             }
         )
@@ -125,6 +148,10 @@ def validate_structured_event_record(value: Mapping[str, Any]) -> dict[str, Any]
     for key in required_lists:
         if not isinstance(row.get(key), list):
             raise SlotTransactionError(f"structured_event_record.{key} must be a list")
+        if len(row[key]) > WP17_MAX_STRUCTURED_EVENT_ITEMS:
+            raise SlotTransactionError(
+                f"structured_event_record.{key} exceeds the frozen item limit"
+            )
     summary = str(row.get("summary", "") or "").strip()
     if not summary:
         raise SlotTransactionError("structured_event_record.summary is required")
@@ -156,12 +183,14 @@ class SlotMemoryState:
         *,
         segment_id: str,
         allowed_evidence_ids: Sequence[str],
+        evidence_id_map: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         if payload.get("contract") != WP17_SLOT_TRANSACTION_CONTRACT:
             raise SlotTransactionError("slot transaction contract mismatch")
         observations = validate_observations(
             tuple(payload.get("observations", ()) or ()),
             allowed_evidence_ids=allowed_evidence_ids,
+            evidence_id_map=evidence_id_map,
         )
         ser = validate_structured_event_record(
             dict(payload.get("structured_event_record", {}) or {})
@@ -512,10 +541,16 @@ def validate_construction_output(
     segment_id: str,
     allowed_evidence_ids: Sequence[str],
     state: SlotMemoryState | None = None,
+    evidence_id_map: Mapping[str, str] | None = None,
+    enforce_output_size: bool = True,
 ) -> dict[str, Any]:
     """Validate one arm output and apply state only for the E1C2 treatment."""
     normalized_arm = str(arm).strip().casefold()
     _reject_forbidden_model_keys(payload)
+    if enforce_output_size and len(_canonical_json(payload)) > WP17_MAX_OUTPUT_JSON_CHARS:
+        raise SlotTransactionError(
+            f"construction output exceeds {WP17_MAX_OUTPUT_JSON_CHARS} JSON characters"
+        )
     if payload.get("contract") != WP17_SLOT_TRANSACTION_CONTRACT:
         raise SlotTransactionError("construction output contract mismatch")
     if normalized_arm == "e1c2":
@@ -525,6 +560,7 @@ def validate_construction_output(
             payload,
             segment_id=str(segment_id),
             allowed_evidence_ids=allowed_evidence_ids,
+            evidence_id_map=evidence_id_map,
         )
     operations = tuple(payload.get("slot_operations", ()) or ())
     if operations:
@@ -532,6 +568,7 @@ def validate_construction_output(
     observations = validate_observations(
         tuple(payload.get("observations", ()) or ()),
         allowed_evidence_ids=allowed_evidence_ids,
+        evidence_id_map=evidence_id_map,
     )
     ser = validate_structured_event_record(
         dict(payload.get("structured_event_record", {}) or {})

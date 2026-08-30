@@ -17,6 +17,9 @@ from vcah.occurrence_negative_sidecar import file_sha256, safe_response_metadata
 from vcah.virtual_video import VirtualVideoWorkspace
 from vcah.wp17_slot_memory import (
     WP17_BUDGET_TOKENIZER,
+    WP17_MAX_OBSERVATIONS,
+    WP17_MAX_OUTPUT_JSON_CHARS,
+    WP17_MAX_STRUCTURED_EVENT_ITEMS,
     SlotMemoryState,
     SlotTransactionError,
     budget_token_count,
@@ -26,6 +29,9 @@ from vcah.wp17_slot_memory import (
 )
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
 from vcah.wp17_slot_runner import (
+    WP17_EVIDENCE_ALIAS_CONTRACT,
+    WP17_OCR_AGGREGATION_CONTRACT,
+    alias_current_evidence,
     build_asr_packet,
     build_ocr_packet,
     construction_prompt,
@@ -85,8 +91,8 @@ def run(args: argparse.Namespace) -> Path:
         raise ValueError("WP17 slot run selected no segments")
 
     run_manifest = {
-        "schema_version": "MMLifelongWP17SlotConstructionRunV1",
-        "contract": "WP17-3-slot-construction-run-v1",
+        "schema_version": "MMLifelongWP17SlotConstructionRunV2",
+        "contract": "WP17-3-slot-construction-run-v2",
         "mode": mode,
         "source_commit": str(args.source_commit),
         "protocol_manifest_sha256": file_sha256(protocol_path),
@@ -102,6 +108,13 @@ def run(args: argparse.Namespace) -> Path:
         "budget_tokenizer": WP17_BUDGET_TOKENIZER,
         "history_token_budget": history_budget,
         "image_preprocessing": preprocessing_policy,
+        "ocr_aggregation_contract": WP17_OCR_AGGREGATION_CONTRACT,
+        "evidence_alias_contract": WP17_EVIDENCE_ALIAS_CONTRACT,
+        "output_limits": {
+            "max_observations": WP17_MAX_OBSERVATIONS,
+            "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
+            "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,
+        },
         "segment_count": len(segments),
         "expected_result_count": expected_results,
         "model_call_hard_cap": hard_cap,
@@ -129,6 +142,9 @@ def run(args: argparse.Namespace) -> Path:
             "config_sha256",
             "actual_model",
             "max_completion_tokens",
+            "ocr_aggregation_contract",
+            "evidence_alias_contract",
+            "output_limits",
         ):
             if prior_manifest.get(key) != run_manifest.get(key):
                 raise RuntimeError(f"WP17 slot resume manifest mismatch: {key}")
@@ -151,8 +167,13 @@ def run(args: argparse.Namespace) -> Path:
             previous_caption = ""
         start = float(segment["virtual_start_sec"])
         end = float(segment["virtual_end_sec"])
-        ocr_packet = build_ocr_packet(evidence_rows, start_sec=start, end_sec=end)
-        asr_packet = build_asr_packet(
+        canonical_ocr_packet = build_ocr_packet(
+            evidence_rows,
+            segment_id=segment_id,
+            start_sec=start,
+            end_sec=end,
+        )
+        canonical_asr_packet = build_asr_packet(
             asr_cues,
             segment_id=segment_id,
             start_sec=start,
@@ -186,22 +207,30 @@ def run(args: argparse.Namespace) -> Path:
                 jpeg_quality=int(preprocessing_policy["jpeg_quality"]),
             )
             image_paths = tuple(frame.path for frame in frames)
-            frame_ids = frame_evidence_ids(segment_id, len(frames))
+            canonical_frame_ids = frame_evidence_ids(segment_id, len(frames))
+            (
+                prompt_frame_ids,
+                prompt_ocr_packet,
+                prompt_asr_packet,
+                evidence_alias_map,
+            ) = alias_current_evidence(
+                canonical_frame_ids,
+                canonical_ocr_packet,
+                canonical_asr_packet,
+            )
             image_labels = tuple(
                 f"local_time_sec={float(frame.virtual_time_sec) - start:.3f} evidence_id={evidence_id}"
-                for frame, evidence_id in zip(frames, frame_ids)
+                for frame, evidence_id in zip(frames, prompt_frame_ids)
             )
             frame_digest = _frame_packet_digest(image_paths)
             input_digests = {
                 "frame_packet": frame_digest,
-                "ocr_packet": packet_digest(ocr_packet),
-                "asr_packet": packet_digest(asr_packet),
+                "ocr_packet": packet_digest(prompt_ocr_packet),
+                "asr_packet": packet_digest(prompt_asr_packet),
+                "evidence_alias_map": stable_digest(evidence_alias_map),
             }
-            allowed_evidence_ids = (
-                tuple(frame_ids)
-                + tuple(str(row["evidence_id"]) for row in ocr_packet)
-                + tuple(str(row["evidence_id"]) for row in asr_packet)
-            )
+            prompt_evidence_ids = tuple(evidence_alias_map)
+            canonical_evidence_ids = tuple(evidence_alias_map.values())
 
             frozen_histories = {arm: histories[arm] for arm in histories}
             for arm in tuple(segment["arm_execution_order"]):
@@ -218,8 +247,9 @@ def run(args: argparse.Namespace) -> Path:
                             dict(prior["model_output"]),
                             arm=arm,
                             segment_id=segment_id,
-                            allowed_evidence_ids=allowed_evidence_ids,
+                            allowed_evidence_ids=canonical_evidence_ids,
                             state=slot_state if arm == "e1c2" else None,
+                            enforce_output_size=False,
                         )
                         if arm == "e1c2" and normalized.get("state_digest") != prior.get("state_digest"):
                             raise RuntimeError("WP17 slot resume state digest mismatch")
@@ -238,14 +268,15 @@ def run(args: argparse.Namespace) -> Path:
                     duration_sec=end - start,
                     image_paths=image_paths,
                     image_labels=image_labels,
-                    frame_ids=frame_ids,
-                    ocr_packet=ocr_packet,
-                    asr_packet=asr_packet,
+                    frame_ids=prompt_frame_ids,
+                    ocr_packet=prompt_ocr_packet,
+                    asr_packet=prompt_asr_packet,
                     history=history,
                     history_tokens=history_tokens,
                     history_limit=history_limit,
                     input_digests=input_digests,
-                    allowed_evidence_ids=allowed_evidence_ids,
+                    allowed_evidence_ids=prompt_evidence_ids,
+                    evidence_id_map=evidence_alias_map,
                     state=slot_state if arm == "e1c2" else None,
                     max_completion_tokens=max_completion_tokens,
                     remaining_calls=hard_cap - call_count,
@@ -262,6 +293,12 @@ def run(args: argparse.Namespace) -> Path:
                         "history_tokenizer": WP17_BUDGET_TOKENIZER,
                         "input_digests": input_digests,
                         "frame_count": len(frames),
+                        "ocr_source_evidence_count": sum(
+                            int(row.get("source_evidence_count", 0) or 0)
+                            for row in canonical_ocr_packet
+                        ),
+                        "ocr_aggregate_count": len(canonical_ocr_packet),
+                        "prompt_evidence_alias_count": len(evidence_alias_map),
                         "image_preprocessing": {
                             key: preprocessing[key]
                             for key in ("width", "height", "jpeg_quality")
@@ -311,6 +348,7 @@ def _run_one(
     history_limit: int,
     input_digests: Mapping[str, str],
     allowed_evidence_ids: Sequence[str],
+    evidence_id_map: Mapping[str, str],
     state: SlotMemoryState | None,
     max_completion_tokens: int,
     remaining_calls: int,
@@ -323,7 +361,7 @@ def _run_one(
         if consumed >= remaining_calls:
             return (
                 {
-                    "schema_version": "MMLifelongWP17SlotConstructionResultV1",
+                    "schema_version": "MMLifelongWP17SlotConstructionResultV2",
                     "segment_id": segment_id,
                     "arm": arm,
                     "status": "failed",
@@ -369,7 +407,7 @@ def _run_one(
             )
             return (
                 {
-                    "schema_version": "MMLifelongWP17SlotConstructionResultV1",
+                    "schema_version": "MMLifelongWP17SlotConstructionResultV2",
                     "segment_id": segment_id,
                     "arm": arm,
                     "status": "failed",
@@ -383,6 +421,9 @@ def _run_one(
         if parsed is None:
             validation_error = "response_not_json_object"
         else:
+            model_output_json_chars = len(
+                json.dumps(parsed, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            )
             try:
                 normalized = validate_construction_output(
                     parsed,
@@ -390,6 +431,7 @@ def _run_one(
                     segment_id=segment_id,
                     allowed_evidence_ids=allowed_evidence_ids,
                     state=state,
+                    evidence_id_map=evidence_id_map,
                 )
             except SlotTransactionError as exc:
                 validation_error = str(exc)
@@ -405,7 +447,7 @@ def _run_one(
                 )
                 return (
                     {
-                        "schema_version": "MMLifelongWP17SlotConstructionResultV1",
+                        "schema_version": "MMLifelongWP17SlotConstructionResultV2",
                         "segment_id": segment_id,
                         "arm": arm,
                         "status": "success",
@@ -419,6 +461,7 @@ def _run_one(
                                 "structured_event_record"
                             ],
                         },
+                        "model_output_json_chars": model_output_json_chars,
                         "state_digest": normalized.get("state_digest"),
                         "capsule": normalized.get("capsule"),
                         "lifecycle_events": normalized.get("lifecycle_events", []),
@@ -445,7 +488,7 @@ def _run_one(
         repair_error = validation_error
     return (
         {
-            "schema_version": "MMLifelongWP17SlotConstructionResultV1",
+            "schema_version": "MMLifelongWP17SlotConstructionResultV2",
             "segment_id": segment_id,
             "arm": arm,
             "status": "failed",
@@ -469,7 +512,7 @@ def _write_summary(
         status = str(row.get("status", "unknown"))
         statuses[status] = statuses.get(status, 0) + 1
     summary = {
-        "schema_version": "MMLifelongWP17SlotConstructionSummaryV1",
+        "schema_version": "MMLifelongWP17SlotConstructionSummaryV2",
         "expected_results": int(expected_results),
         "completed_results": len(results),
         "successes": statuses.get("success", 0),

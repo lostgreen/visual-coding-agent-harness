@@ -13,7 +13,13 @@ from vcah.occurrence_negative_sidecar import file_sha256
 from vcah.virtual_video import VirtualVideoWorkspace
 from vcah.wp17_slot_memory import SlotMemoryState, validate_construction_output
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
-from vcah.wp17_slot_runner import build_asr_packet, build_ocr_packet, frame_evidence_ids
+from vcah.wp17_slot_runner import (
+    WP17_EVIDENCE_ALIAS_CONTRACT,
+    WP17_OCR_AGGREGATION_CONTRACT,
+    build_asr_packet,
+    build_ocr_packet,
+    frame_evidence_ids,
+)
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -52,17 +58,17 @@ def run(args: argparse.Namespace) -> Path:
             slot_state = SlotMemoryState("e1c2", token_budget=600)
         start = float(segment["virtual_start_sec"])
         end = float(segment["virtual_end_sec"])
-        ocr_packet = build_ocr_packet(evidence_rows, start_sec=start, end_sec=end)
+        ocr_packet = build_ocr_packet(
+            evidence_rows,
+            segment_id=segment_id,
+            start_sec=start,
+            end_sec=end,
+        )
         asr_packet = build_asr_packet(
             asr_cues,
             segment_id=segment_id,
             start_sec=start,
             end_sec=end,
-        )
-        allowed = (
-            frame_evidence_ids(segment_id, int(segment["max_frames"]))
-            + tuple(str(row["evidence_id"]) for row in ocr_packet)
-            + tuple(str(row["evidence_id"]) for row in asr_packet)
         )
         by_arm = {}
         for arm in tuple(segment["arm_execution_order"]):
@@ -80,6 +86,11 @@ def run(args: argparse.Namespace) -> Path:
                     {"segment_id": segment_id, "arm": str(arm), "error": "non_success"}
                 )
                 continue
+            allowed = (
+                frame_evidence_ids(segment_id, int(row.get("frame_count", 0) or 0))
+                + tuple(str(value["evidence_id"]) for value in ocr_packet)
+                + tuple(str(value["evidence_id"]) for value in asr_packet)
+            )
             try:
                 normalized = validate_construction_output(
                     dict(row["model_output"]),
@@ -87,6 +98,7 @@ def run(args: argparse.Namespace) -> Path:
                     segment_id=segment_id,
                     allowed_evidence_ids=allowed,
                     state=slot_state if str(arm) == "e1c2" else None,
+                    enforce_output_size=False,
                 )
             except Exception as exc:
                 replay_errors.append(
@@ -150,6 +162,50 @@ def run(args: argparse.Namespace) -> Path:
         and all(
             row.get("image_preprocessing")
             == protocol["evidence_policy"]["frame_preprocessing"]
+            for row in result_rows
+        ),
+        "ocr_aggregation_contract_exact": run_manifest.get(
+            "ocr_aggregation_contract"
+        )
+        == WP17_OCR_AGGREGATION_CONTRACT
+        == protocol["evidence_policy"].get("ocr_aggregation_contract"),
+        "evidence_alias_contract_exact": run_manifest.get(
+            "evidence_alias_contract"
+        )
+        == WP17_EVIDENCE_ALIAS_CONTRACT
+        == protocol["evidence_policy"].get("evidence_alias_contract"),
+        "ocr_aggregation_accounted": all(
+            int(row.get("ocr_source_evidence_count", -1))
+            >= int(row.get("ocr_aggregate_count", 0))
+            >= 0
+            and int(row.get("prompt_evidence_alias_count", -1))
+            == int(row.get("frame_count", 0))
+            + int(row.get("ocr_aggregate_count", 0))
+            + len(
+                build_asr_packet(
+                    asr_cues,
+                    segment_id=str(row.get("segment_id", "")),
+                    start_sec=float(
+                        next(
+                            value["virtual_start_sec"]
+                            for value in segments
+                            if value["segment_id"] == row.get("segment_id")
+                        )
+                    ),
+                    end_sec=float(
+                        next(
+                            value["virtual_end_sec"]
+                            for value in segments
+                            if value["segment_id"] == row.get("segment_id")
+                        )
+                    ),
+                )
+            )
+            for row in result_rows
+        ),
+        "bounded_model_output_exact": all(
+            0 < int(row.get("model_output_json_chars", 0))
+            <= int(protocol["output_contract"]["max_json_chars"])
             for row in result_rows
         ),
         "result_count_exact": len(result_rows) == expected_results,

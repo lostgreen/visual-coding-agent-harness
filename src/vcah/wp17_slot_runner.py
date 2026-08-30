@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 from vcah.wp17_slot_memory import (
@@ -13,15 +14,27 @@ from vcah.wp17_slot_memory import (
 )
 
 
+WP17_OCR_AGGREGATION_CONTRACT = "WP17-segment-ocr-surface-aggregation-v1"
+WP17_EVIDENCE_ALIAS_CONTRACT = "WP17-local-evidence-alias-v1"
+_SPACE_RE = re.compile(r"\s+")
+
+
 def build_ocr_packet(
     evidence_rows: Sequence[Mapping[str, Any]],
     *,
+    segment_id: str,
     start_sec: float,
     end_sec: float,
 ) -> tuple[dict[str, Any], ...]:
+    """Aggregate repeated OCR tracks by normalized surface inside one segment.
+
+    The packet keeps disjoint local time ranges and aggregate lineage counts. The
+    canonical aggregate ID is deterministic; model-facing aliases are assigned
+    separately by :func:`alias_current_evidence`.
+    """
     start = float(start_sec)
     end = float(end_sec)
-    selected = []
+    selected: list[dict[str, Any]] = []
     for raw in evidence_rows:
         row = dict(raw)
         row_start = float(row.get("start_sec", 0.0) or 0.0)
@@ -36,9 +49,16 @@ def build_ocr_packet(
         canonical = str(row.get("surface", row.get("canonical_surface", "")) or "").strip()
         if canonical and canonical not in surfaces:
             surfaces = (canonical,) + surfaces
+        normalized_surface = str(row.get("normalized_surface", "") or "").strip()
+        if not normalized_surface:
+            normalized_surface = canonical or (surfaces[0] if surfaces else "")
+        normalized_surface = _SPACE_RE.sub(" ", normalized_surface).strip().casefold()
+        if not normalized_surface:
+            normalized_surface = f"__source__:{row['evidence_id']}"
         selected.append(
             {
-                "evidence_id": str(row["evidence_id"]),
+                "source_evidence_id": str(row["evidence_id"]),
+                "normalized_surface": normalized_surface,
                 "surfaces": list(dict.fromkeys(surfaces)),
                 "local_time_range_sec": [
                     round(max(0.0, row_start - start), 3),
@@ -46,13 +66,63 @@ def build_ocr_packet(
                 ],
                 "entity_types": [str(value) for value in row.get("entity_types", ())],
                 "ui_regions": [str(value) for value in row.get("ui_regions", ())],
-                "support_frame_count": len(tuple(row.get("support_frame_ids", ()) or ())),
+                "support_frame_ids": [
+                    str(value) for value in tuple(row.get("support_frame_ids", ()) or ())
+                ],
                 "confidence": str(row.get("max_confidence", "") or ""),
+            }
+        )
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in selected:
+        grouped.setdefault(str(row["normalized_surface"]), []).append(row)
+    packet = []
+    for normalized_surface, rows in sorted(grouped.items()):
+        digest = hashlib.sha256(normalized_surface.encode("utf-8")).hexdigest()[:16]
+        ranges = _merge_time_ranges(
+            tuple(tuple(value["local_time_range_sec"]) for value in rows)
+        )
+        packet.append(
+            {
+                "contract": WP17_OCR_AGGREGATION_CONTRACT,
+                "evidence_id": f"ocragg:{segment_id}:{digest}",
+                "surfaces": list(
+                    dict.fromkeys(
+                        surface
+                        for row in rows
+                        for surface in tuple(row.get("surfaces", ()) or ())
+                    )
+                ),
+                "local_time_range_sec": [ranges[0][0], ranges[-1][1]],
+                "occurrence_ranges_sec": [list(value) for value in ranges],
+                "entity_types": sorted(
+                    {
+                        value
+                        for row in rows
+                        for value in tuple(row.get("entity_types", ()) or ())
+                    }
+                ),
+                "ui_regions": sorted(
+                    {
+                        value
+                        for row in rows
+                        for value in tuple(row.get("ui_regions", ()) or ())
+                    }
+                ),
+                "source_evidence_count": len(rows),
+                "support_frame_count": len(
+                    {
+                        value
+                        for row in rows
+                        for value in tuple(row.get("support_frame_ids", ()) or ())
+                    }
+                ),
+                "confidence": max(str(row.get("confidence", "") or "") for row in rows),
             }
         )
     return tuple(
         sorted(
-            selected,
+            packet,
             key=lambda row: (
                 float(row["local_time_range_sec"][0]),
                 str(row["evidence_id"]),
@@ -93,6 +163,48 @@ def build_asr_packet(
 
 def frame_evidence_ids(segment_id: str, count: int) -> tuple[str, ...]:
     return tuple(f"frame:{segment_id}:{index:04d}" for index in range(1, int(count) + 1))
+
+
+def alias_current_evidence(
+    frame_ids: Sequence[str],
+    ocr_packet: Sequence[Mapping[str, Any]],
+    asr_packet: Sequence[Mapping[str, Any]],
+) -> tuple[
+    tuple[str, ...],
+    tuple[dict[str, Any], ...],
+    tuple[dict[str, Any], ...],
+    dict[str, str],
+]:
+    """Assign compact packet-local IDs while retaining a canonical ID map."""
+    alias_map: dict[str, str] = {}
+    aliased_frames = []
+    for index, canonical_id in enumerate(frame_ids, 1):
+        alias = f"f{index:03d}"
+        alias_map[alias] = str(canonical_id)
+        aliased_frames.append(alias)
+
+    def alias_rows(
+        prefix: str,
+        rows: Sequence[Mapping[str, Any]],
+    ) -> tuple[dict[str, Any], ...]:
+        aliased = []
+        for index, raw in enumerate(rows, 1):
+            row = dict(raw)
+            canonical_id = str(row.pop("evidence_id"))
+            alias = f"{prefix}{index:03d}"
+            if alias in alias_map:
+                raise ValueError(f"duplicate WP17 evidence alias: {alias}")
+            alias_map[alias] = canonical_id
+            row["evidence_id"] = alias
+            aliased.append(row)
+        return tuple(aliased)
+
+    return (
+        tuple(aliased_frames),
+        alias_rows("o", ocr_packet),
+        alias_rows("a", asr_packet),
+        alias_map,
+    )
 
 
 def packet_digest(value: Any) -> str:
@@ -183,7 +295,11 @@ def construction_prompt(
         "The image label immediately before each image is its frame evidence ID and local timestamp. "
         "Report only facts supported by a current frame/OCR/ASR evidence ID. History may help resolve "
         "continuity but cannot support a new observation by itself. Do not infer the hidden evaluation "
-        "question, answer, case identity, or official interval.\n"
+        "question, answer, case identity, or official interval. Cite only the exact short evidence IDs "
+        "listed in this packet (for example f001, o001, or a001); never invent or expand an ID. Keep at "
+        "most 16 observations, use at most 6 evidence IDs and 12 participants per observation, keep each "
+        "structured_event_record list at most 12 concise entries, and keep the full JSON under 10000 "
+        "characters. Preserve key events and state changes rather than transcribing every OCR row.\n"
         + slot_instruction
         + "\nAllowed slots: "
         + ", ".join(WP17_SLOT_NAMES)
@@ -202,6 +318,19 @@ def _number(row: Mapping[str, Any], *keys: str, default: float) -> float:
         if isinstance(row.get(key), (int, float)):
             return float(row[key])
     return float(default)
+
+
+def _merge_time_ranges(
+    ranges: Sequence[Sequence[float]],
+) -> tuple[tuple[float, float], ...]:
+    ordered = sorted((float(value[0]), float(value[1])) for value in ranges)
+    merged: list[list[float]] = []
+    for left, right in ordered:
+        if not merged or left > merged[-1][1]:
+            merged.append([left, right])
+        else:
+            merged[-1][1] = max(merged[-1][1], right)
+    return tuple((round(left, 3), round(right, 3)) for left, right in merged)
 
 
 def _canonical_json(value: Any) -> str:

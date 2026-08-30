@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-from vcah.wp17_slot_memory import WP17_BUDGET_TOKENIZER, WP17_SLOT_NAMES, WP17_SLOT_OPERATIONS
+from vcah.wp17_slot_memory import (
+    WP17_BUDGET_TOKENIZER,
+    WP17_MAX_OBSERVATIONS,
+    WP17_MAX_OUTPUT_JSON_CHARS,
+    WP17_MAX_STRUCTURED_EVENT_ITEMS,
+    WP17_SLOT_NAMES,
+    WP17_SLOT_OPERATIONS,
+)
 from vcah.wp17_slot_protocol import (
     WP17_3_ARMS,
     WP17_3_PROTOCOL_CONTRACT,
     build_wp17_3_protocol_manifest,
+)
+from vcah.wp17_slot_runner import (
+    WP17_EVIDENCE_ALIAS_CONTRACT,
+    WP17_OCR_AGGREGATION_CONTRACT,
 )
 
 
@@ -52,7 +63,12 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "logical_roles_require_separate_calls": False,
             "default_call_strategy": "single_call_fusion",
         },
-        "evidence_policy": {},
+        "evidence_policy": {
+            "ocr_aggregation_contract": WP17_OCR_AGGREGATION_CONTRACT,
+            "source_lineage_preserved": True,
+            "evidence_alias_contract": WP17_EVIDENCE_ALIAS_CONTRACT,
+            "aliases_canonicalized_before_persistence": True,
+        },
         "state_policy": {
             "history_token_budget": 600,
             "budget_tokenizer": WP17_BUDGET_TOKENIZER,
@@ -61,7 +77,11 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "operations": list(WP17_SLOT_OPERATIONS),
             "archive_evict_delete_long_term_memory": False,
         },
-        "output_contract": {},
+        "output_contract": {
+            "max_observations": WP17_MAX_OBSERVATIONS,
+            "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
+            "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,
+        },
         "structural_gates": [],
         "construction_endpoints": [],
         "development_decisions": {},

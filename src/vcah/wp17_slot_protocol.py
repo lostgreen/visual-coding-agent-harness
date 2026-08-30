@@ -6,11 +6,22 @@ import json
 import math
 from typing import Any, Mapping
 
-from vcah.wp17_slot_memory import WP17_BUDGET_TOKENIZER, WP17_SLOT_NAMES, WP17_SLOT_OPERATIONS
+from vcah.wp17_slot_memory import (
+    WP17_BUDGET_TOKENIZER,
+    WP17_MAX_OBSERVATIONS,
+    WP17_MAX_OUTPUT_JSON_CHARS,
+    WP17_MAX_STRUCTURED_EVENT_ITEMS,
+    WP17_SLOT_NAMES,
+    WP17_SLOT_OPERATIONS,
+)
+from vcah.wp17_slot_runner import (
+    WP17_EVIDENCE_ALIAS_CONTRACT,
+    WP17_OCR_AGGREGATION_CONTRACT,
+)
 
 
-WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v1"
-WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v1"
+WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v2"
+WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v2"
 WP17_3_ARMS = ("e1c0", "e1c1", "e1c2")
 
 
@@ -83,6 +94,8 @@ def build_wp17_3_protocol_manifest(
     expected_sha = dict(scope.get("expected_input_sha256", {}) or {})
     matched = dict(protocol.get("matched_control", {}) or {})
     state_policy = dict(protocol.get("state_policy", {}) or {})
+    evidence_policy = dict(protocol.get("evidence_policy", {}) or {})
+    output_contract = dict(protocol.get("output_contract", {}) or {})
     visibility = dict(protocol.get("construction_input_visibility", {}) or {})
     serialized_segments = json.dumps(segments, ensure_ascii=False)
     checks = {
@@ -145,6 +158,24 @@ def build_wp17_3_protocol_manifest(
         "slot_schema_exact": tuple(state_policy.get("slots", ())) == WP17_SLOT_NAMES,
         "slot_operations_exact": tuple(state_policy.get("operations", ()))
         == WP17_SLOT_OPERATIONS,
+        "ocr_surface_aggregation_exact": evidence_policy.get(
+            "ocr_aggregation_contract"
+        )
+        == WP17_OCR_AGGREGATION_CONTRACT
+        and evidence_policy.get("source_lineage_preserved") is True,
+        "packet_local_evidence_alias_exact": evidence_policy.get(
+            "evidence_alias_contract"
+        )
+        == WP17_EVIDENCE_ALIAS_CONTRACT
+        and evidence_policy.get("aliases_canonicalized_before_persistence") is True,
+        "bounded_output_contract_exact": int(
+            output_contract.get("max_observations", 0)
+        )
+        == WP17_MAX_OBSERVATIONS
+        and int(output_contract.get("max_structured_event_items_per_field", 0))
+        == WP17_MAX_STRUCTURED_EVENT_ITEMS
+        and int(output_contract.get("max_json_chars", 0))
+        == WP17_MAX_OUTPUT_JSON_CHARS,
         "no_slot_count_cap": state_policy.get("slot_count_cap") is None,
         "archive_evict_preserve_long_term": state_policy.get(
             "archive_evict_delete_long_term_memory"
@@ -161,7 +192,7 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV1",
+        "schema_version": "MMLifelongWP17SlotMemory2minManifestV2",
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"
@@ -183,9 +214,9 @@ def build_wp17_3_protocol_manifest(
         "arms": [dict(row) for row in protocol["arms"]],
         "matched_control": matched,
         "model_policy": dict(protocol["model_policy"]),
-        "evidence_policy": dict(protocol["evidence_policy"]),
+        "evidence_policy": evidence_policy,
         "state_policy": state_policy,
-        "output_contract": dict(protocol["output_contract"]),
+        "output_contract": output_contract,
         "structural_gates": list(protocol["structural_gates"]),
         "construction_endpoints": list(protocol["construction_endpoints"]),
         "development_decisions": dict(protocol["development_decisions"]),
@@ -197,7 +228,10 @@ def build_wp17_3_protocol_manifest(
         "provenance": {
             "source_commit": str(source_commit),
             "input_sha256": dict(input_sha256),
-            "supersedes_runtime_policy_only": "WP17-2 state_policy",
+            "supersedes_protocol": protocol.get("provenance", {}).get(
+                "supersedes_protocol"
+            ),
+            "repair_scope": protocol.get("provenance", {}).get("repair_scope"),
             "preserves_frozen_30s_protocol": True,
         },
     }
