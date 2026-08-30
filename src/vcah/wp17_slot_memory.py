@@ -474,14 +474,26 @@ class SlotMemoryState:
 
     def _enforce_budget(self, *, segment_id: str) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
-        while not self.capsule()["within_budget"]:
+        while True:
+            capsule = self.capsule()
+            if capsule["within_budget"]:
+                break
             eligible = [
                 (name, record)
                 for name, record in self.records.items()
                 if record.get("status") == "closed"
             ]
             if not eligible:
-                raise SlotTransactionError("active slot capsule exceeds the frozen token budget")
+                active_count = sum(
+                    record.get("status") == "active" for record in self.records.values()
+                )
+                raise SlotTransactionError(
+                    "active slot capsule uses "
+                    f"{capsule['token_count']} tokens across {active_count} active slots and "
+                    f"exceeds the frozen {self.token_budget}-token budget; keep segment-local "
+                    "details in structured_event_record, write fewer working slots, and shorten "
+                    "slot values"
+                )
             name, prior = min(
                 eligible,
                 key=lambda item: (

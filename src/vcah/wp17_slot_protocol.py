@@ -20,8 +20,8 @@ from vcah.wp17_slot_runner import (
 )
 
 
-WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v2"
-WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v2"
+WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v3"
+WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v3"
 WP17_3_ARMS = ("e1c0", "e1c1", "e1c2")
 
 
@@ -154,6 +154,10 @@ def build_wp17_3_protocol_manifest(
         )
         == "single_call_fusion",
         "token_budget_exact": int(state_policy.get("history_token_budget", 0)) == 600,
+        "capsule_soft_target_exact": int(
+            state_policy.get("capsule_soft_target_tokens", 0)
+        )
+        == 400,
         "tokenizer_exact": state_policy.get("budget_tokenizer") == WP17_BUDGET_TOKENIZER,
         "slot_schema_exact": tuple(state_policy.get("slots", ())) == WP17_SLOT_NAMES,
         "slot_operations_exact": tuple(state_policy.get("operations", ()))
@@ -192,7 +196,7 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV2",
+        "schema_version": "MMLifelongWP17SlotMemory2minManifestV3",
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"

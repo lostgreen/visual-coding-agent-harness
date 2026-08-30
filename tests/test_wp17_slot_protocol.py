@@ -71,6 +71,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
         },
         "state_policy": {
             "history_token_budget": 600,
+            "capsule_soft_target_tokens": 400,
             "budget_tokenizer": WP17_BUDGET_TOKENIZER,
             "slot_count_cap": None,
             "slots": list(WP17_SLOT_NAMES),

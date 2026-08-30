@@ -24,3 +24,17 @@ Validate the question-blind 120-second `E1C0/E1C1/E1C2` construction transaction
 1. Run focused tests and the full local/remote suites.
 2. Freeze protocol v2 to a new zero-call root.
 3. Launch a new 3-segment canary root and require 9/9 successful independently replayable results.
+
+## Protocol-v2 Result
+
+- Commit `dbebdb3` fixed evidence addressability and reduced the first canary segment from 610 OCR rows to 260 aggregates.
+- `E1C0` and `E1C1` each passed on their first model call.
+- `E1C2` stopped after two deterministic rejections: both responses finished normally, but the active slot capsule exceeded the unchanged 600-token hard budget.
+- Root: `/m2v_intern/xuboshen/zgw/mger_runs/mmlifelong-wp17-3-slot-canary3-dbebdb3-20260830`.
+- No endpoint values were produced or inspected. The v2 root is structural-debug evidence only.
+
+## Protocol-v3 Repair
+
+- Preserve the 600-token hard gate and all experiment inputs.
+- Define the slot capsule as sparse cross-segment working memory; keep segment-local detail in the structured event record.
+- Freeze a 400-token soft target and return actual capsule token/active-slot counts in deterministic retry feedback.

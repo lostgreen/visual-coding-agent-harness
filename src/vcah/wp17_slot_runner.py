@@ -236,7 +236,11 @@ def construction_prompt(
             "segment; retain/archive/evict cannot rewrite values. active_participants value must be "
             '{"event_ref":"<active encounter event_id>","participants":[...]}. '
             "active_encounter value must contain event_id. Do not put merely visible entities into "
-            "active_participants."
+            "active_participants. The slot capsule is sparse cross-segment working memory, not a copy "
+            "of the current event record: do not instantiate every allowed slot, keep segment-local "
+            "details only in structured_event_record, and use terse names/IDs/states as slot values. "
+            "The serialized capsule must remain within 600 protocol tokens; target at most 400 tokens "
+            "before runtime overhead."
         )
     )
     repair = "" if not repair_error else (
