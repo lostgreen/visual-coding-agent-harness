@@ -15,6 +15,7 @@ from vcah.wp17_slot_memory import (
     WP17_SLOT_CAPSULE_CONTRACT,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
+    WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
 )
 from vcah.wp17_slot_runner import (
     WP17_EVIDENCE_ALIAS_CONTRACT,
@@ -22,8 +23,8 @@ from vcah.wp17_slot_runner import (
 )
 
 
-WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v5"
-WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v5"
+WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v6"
+WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v6"
 WP17_3_ARMS = ("e1c0", "e1c1", "e1c2")
 
 
@@ -181,7 +182,10 @@ def build_wp17_3_protocol_manifest(
         and int(output_contract.get("max_structured_event_items_per_field", 0))
         == WP17_MAX_STRUCTURED_EVENT_ITEMS
         and int(output_contract.get("max_json_chars", 0))
-        == WP17_MAX_OUTPUT_JSON_CHARS,
+        == WP17_MAX_OUTPUT_JSON_CHARS
+        and output_contract.get("max_evidence_ids_per_observation") is None
+        and int(output_contract.get("target_evidence_ids_per_observation", 0))
+        == WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
         "deterministic_repair_contract_exact": state_policy.get(
             "slot_operation_observation_ids_reference_observation_ids"
         )
@@ -212,7 +216,7 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV5",
+        "schema_version": "MMLifelongWP17SlotMemory2minManifestV6",
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"

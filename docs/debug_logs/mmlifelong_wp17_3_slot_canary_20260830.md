@@ -67,3 +67,17 @@ Validate the question-blind 120-second `E1C0/E1C1/E1C2` construction transaction
 - Project model-visible working-capsule provenance to deterministic count and SHA256 digest fields; do not copy raw evidence IDs into history context.
 - Keep the 600-token hard budget, 400-token soft target, slot values, lifecycle, evidence packets, model, retry cap, and endpoint definitions unchanged.
 - Independently replay and compare every persisted capsule against the deterministic projection.
+
+## Protocol-v5 Result
+
+- Commit `ca44421` passed the local and remote suites (`662/662`).
+- Zero-model replay reduced the same first-segment E1C2 capsule from 392 to 282 tokens with an identical state digest, all 20 state provenance links retained, and no raw evidence IDs in working context.
+- The fresh canary passed the first segment, then stopped on second-segment `E1C1`: both attempts cited more than six valid current-packet evidence IDs for one observation.
+- Root: `/m2v_intern/xuboshen/zgw/mger_runs/mmlifelong-wp17-3-slot-canary3-ca44421-20260830`.
+- No endpoint values were produced or inspected. The v5 root is structural-debug evidence only.
+
+## Protocol-v6 Repair
+
+- Keep all current-packet evidence IDs and canonicalize them without truncation.
+- Change six evidence IDs per observation from an arbitrary hard rejection to a prompt soft target; the 16-observation and 10,000-character global bounds remain hard.
+- Preserve packet membership validation, complete provenance, capsule projection, model, three-arm inputs, call caps, and endpoint definitions.

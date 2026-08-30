@@ -265,6 +265,21 @@ def test_output_bounds_reject_unbounded_observation_transcription() -> None:
         )
 
 
+def test_observation_keeps_valid_support_beyond_six_ids_without_truncation() -> None:
+    evidence_ids = tuple(f"frame:{index}" for index in range(1, 9))
+    payload = _transaction()
+    payload["observations"][0]["evidence_ids"] = list(evidence_ids)
+
+    normalized = validate_construction_output(
+        payload,
+        arm="e1c0",
+        segment_id="segment-1",
+        allowed_evidence_ids=evidence_ids,
+    )
+
+    assert normalized["observations"][0]["evidence_ids"] == list(evidence_ids)
+
+
 def test_ser_singletons_normalize_without_semantic_inference() -> None:
     payload = _transaction()
     payload["structured_event_record"]["entities"] = {"name": "boss"}

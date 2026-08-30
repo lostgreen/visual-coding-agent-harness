@@ -8,6 +8,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.wp17_slot_memory import (
+    WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
     WP17_SLOT_TRANSACTION_CONTRACT,
@@ -305,7 +306,9 @@ def construction_prompt(
         "continuity but cannot support a new observation by itself. Do not infer the hidden evaluation "
         "question, answer, case identity, or official interval. Cite only the exact short evidence IDs "
         "listed in this packet (for example f001, o001, or a001); never invent or expand an ID. Keep at "
-        "most 16 observations, use at most 6 evidence IDs and 12 participants per observation, keep each "
+        f"most 16 observations, target at most {WP17_TARGET_OBSERVATION_EVIDENCE_IDS} directly useful "
+        "evidence IDs per observation without dropping valid additional support, use at most 12 "
+        "participants per observation, keep each "
         "structured_event_record list at most 12 concise entries, and keep the full JSON under 10000 "
         "characters. Preserve key events and state changes rather than transcribing every OCR row.\n"
         + slot_instruction

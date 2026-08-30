@@ -9,6 +9,7 @@ from vcah.wp17_slot_memory import (
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
 )
 from vcah.wp17_slot_protocol import (
     WP17_3_ARMS,
@@ -90,6 +91,8 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "max_observations": WP17_MAX_OBSERVATIONS,
             "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
             "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,
+            "max_evidence_ids_per_observation": None,
+            "target_evidence_ids_per_observation": WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
         },
         "structural_gates": [],
         "construction_endpoints": [],

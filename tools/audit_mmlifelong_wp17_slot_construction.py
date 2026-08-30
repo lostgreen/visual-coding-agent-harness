@@ -218,7 +218,17 @@ def run(args: argparse.Namespace) -> Path:
             0 < int(row.get("model_output_json_chars", 0))
             <= int(protocol["output_contract"]["max_json_chars"])
             for row in result_rows
-        ),
+        )
+        and run_manifest.get("output_limits", {}).get(
+            "max_evidence_ids_per_observation"
+        )
+        is None
+        and int(
+            run_manifest.get("output_limits", {}).get(
+                "target_evidence_ids_per_observation", 0
+            )
+        )
+        == int(protocol["output_contract"]["target_evidence_ids_per_observation"]),
         "result_count_exact": len(result_rows) == expected_results,
         "all_results_success": len(result_rows) == expected_results
         and all(row.get("status") == "success" for row in result_rows),

@@ -100,5 +100,6 @@ def test_prompt_hides_evaluation_fields_and_freezes_arm_contract() -> None:
     assert "do not instantiate every allowed slot" in prompt
     assert "never a frame/OCR/ASR evidence ID" in prompt
     assert "target at most 400 tokens" in prompt
+    assert "target at most 6 directly useful evidence IDs" in prompt
     assert "official interval" in prompt
     assert "slot_capsule" in prompt

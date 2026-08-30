@@ -22,6 +22,7 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
     SlotMemoryState,
     SlotTransactionError,
     budget_token_count,
@@ -116,6 +117,8 @@ def run(args: argparse.Namespace) -> Path:
         "evidence_alias_contract": WP17_EVIDENCE_ALIAS_CONTRACT,
         "output_limits": {
             "max_observations": WP17_MAX_OBSERVATIONS,
+            "target_evidence_ids_per_observation": WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
+            "max_evidence_ids_per_observation": None,
             "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
             "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,
         },

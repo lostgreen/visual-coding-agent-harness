@@ -42,7 +42,7 @@ WP17_OBSERVATION_KINDS = (
     "location",
 )
 WP17_MAX_OBSERVATIONS = 16
-WP17_MAX_OBSERVATION_EVIDENCE_IDS = 6
+WP17_TARGET_OBSERVATION_EVIDENCE_IDS = 6
 WP17_MAX_OBSERVATION_PARTICIPANTS = 12
 WP17_MAX_STRUCTURED_EVENT_ITEMS = 12
 WP17_MAX_OUTPUT_JSON_CHARS = 10_000
@@ -118,10 +118,6 @@ def validate_observations(
         )
         if not evidence_ids or not set(evidence_ids).issubset(allowed):
             raise SlotTransactionError("observation evidence must resolve inside the current packet")
-        if len(evidence_ids) > WP17_MAX_OBSERVATION_EVIDENCE_IDS:
-            raise SlotTransactionError(
-                "observation evidence IDs exceed the frozen per-observation limit"
-            )
         canonical_evidence_ids = tuple(canonical.get(value, value) for value in evidence_ids)
         participants = tuple(
             dict.fromkeys(str(value).strip() for value in row.get("participants", ()) if str(value).strip())
