@@ -38,3 +38,16 @@ Validate the question-blind 120-second `E1C0/E1C1/E1C2` construction transaction
 - Preserve the 600-token hard gate and all experiment inputs.
 - Define the slot capsule as sparse cross-segment working memory; keep segment-local detail in the structured event record.
 - Freeze a 400-token soft target and return actual capsule token/active-slot counts in deterministic retry feedback.
+
+## Protocol-v3 Result
+
+- Commit `87aa29c` passed first-segment `E1C0/E1C1/E1C2` in three calls; the sparse slot instruction resolved the capsule-budget blocker.
+- On the second segment, `E1C1` recovered once and succeeded. `E1C2` then stopped after two schema-level rejections: an operation referenced a non-observation ID, followed by one SER field encoded as a singleton instead of a list.
+- Root: `/m2v_intern/xuboshen/zgw/mger_runs/mmlifelong-wp17-3-slot-canary3-87aa29c-20260830`.
+- No endpoint values were produced or inspected. The v3 root is structural-debug evidence only.
+
+## Protocol-v4 Repair
+
+- Explicitly bind `slot_operations.observation_ids` to IDs from the current `observations` array, never evidence IDs.
+- Include unknown and valid observation IDs in deterministic retry feedback.
+- Mechanically normalize SER string/object/null singletons to lists; no facts, evidence, or slot values are inferred.

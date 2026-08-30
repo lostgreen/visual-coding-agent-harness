@@ -233,7 +233,9 @@ def construction_prompt(
             "Maintain the working slots using only the allowed operations. Every slot currently present "
             "in history.slots must receive exactly one operation in this segment. Use expected_version "
             "from history.versions (0 when absent). write/update/close require observation_ids from this "
-            "segment; retain/archive/evict cannot rewrite values. active_participants value must be "
+            "segment; each slot_operations.observation_ids entry must exactly copy an observation_id "
+            "from the observations array, never a frame/OCR/ASR evidence ID. retain/archive/evict cannot "
+            "rewrite values. active_participants value must be "
             '{"event_ref":"<active encounter event_id>","participants":[...]}. '
             "active_encounter value must contain event_id. Do not put merely visible entities into "
             "active_participants. The slot capsule is sparse cross-segment working memory, not a copy "
@@ -244,7 +246,9 @@ def construction_prompt(
         )
     )
     repair = "" if not repair_error else (
-        "\nThe previous response was rejected by the deterministic validator. Repair only this error: "
+        "\nThe previous response was rejected by the deterministic validator. Return a complete JSON "
+        "object with every required field (not a patch), preserve all array field types, and repair this "
+        "error: "
         + str(repair_error)[:280]
     )
     schema = {

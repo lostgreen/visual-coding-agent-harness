@@ -223,3 +223,39 @@ def test_output_bounds_reject_unbounded_observation_transcription() -> None:
             segment_id="segment-1",
             allowed_evidence_ids=("frame:1",),
         )
+
+
+def test_ser_singletons_normalize_without_semantic_inference() -> None:
+    payload = _transaction()
+    payload["structured_event_record"]["entities"] = {"name": "boss"}
+    payload["structured_event_record"]["relations"] = None
+
+    normalized = validate_construction_output(
+        payload,
+        arm="e1c0",
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+
+    assert normalized["structured_event_record"]["entities"] == [{"name": "boss"}]
+    assert normalized["structured_event_record"]["relations"] == []
+
+
+def test_unknown_slot_observation_feedback_lists_valid_ids() -> None:
+    state = SlotMemoryState("e1c2")
+    payload = _transaction(
+        {
+            "operation": "write",
+            "slot": "current_activity",
+            "expected_version": 0,
+            "value": {"activity": "fight"},
+            "observation_ids": ["frame:1"],
+        }
+    )
+
+    with pytest.raises(SlotTransactionError, match="valid observation IDs.*obs-1"):
+        state.apply(
+            payload,
+            segment_id="segment-1",
+            allowed_evidence_ids=("frame:1",),
+        )

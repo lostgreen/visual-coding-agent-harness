@@ -146,8 +146,18 @@ def validate_structured_event_record(value: Mapping[str, Any]) -> dict[str, Any]
     _reject_forbidden_model_keys(row)
     required_lists = ("entities", "events", "state_changes", "relations", "occurrence_refs")
     for key in required_lists:
-        if not isinstance(row.get(key), list):
-            raise SlotTransactionError(f"structured_event_record.{key} must be a list")
+        if key not in row:
+            raise SlotTransactionError(f"structured_event_record.{key} is required")
+        if not isinstance(row[key], list):
+            singleton = row[key]
+            if singleton is None or singleton == "":
+                row[key] = []
+            elif isinstance(singleton, (Mapping, str, int, float, bool)):
+                row[key] = [deepcopy(singleton)]
+            else:
+                raise SlotTransactionError(
+                    f"structured_event_record.{key} must be a list or singleton"
+                )
         if len(row[key]) > WP17_MAX_STRUCTURED_EVENT_ITEMS:
             raise SlotTransactionError(
                 f"structured_event_record.{key} exceeds the frozen item limit"
@@ -349,8 +359,15 @@ class SlotMemoryState:
                     if str(value).strip()
                 )
             )
-            if not set(observation_ids).issubset(observations_by_id):
-                raise SlotTransactionError("slot operation references an unknown observation")
+            unknown_observation_ids = sorted(
+                set(observation_ids) - set(observations_by_id)
+            )
+            if unknown_observation_ids:
+                raise SlotTransactionError(
+                    "slot operation references unknown observation IDs "
+                    f"{unknown_observation_ids}; valid observation IDs are "
+                    f"{sorted(observations_by_id)}"
+                )
             if operation in {"write", "update", "close"} and not observation_ids:
                 raise SlotTransactionError(f"{operation} requires current observations")
             if operation in {"write", "update"} and "value" not in row:

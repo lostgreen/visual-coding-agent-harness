@@ -72,6 +72,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
         "state_policy": {
             "history_token_budget": 600,
             "capsule_soft_target_tokens": 400,
+            "slot_operation_observation_ids_reference_observation_ids": True,
             "budget_tokenizer": WP17_BUDGET_TOKENIZER,
             "slot_count_cap": None,
             "slots": list(WP17_SLOT_NAMES),
@@ -79,6 +80,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "archive_evict_delete_long_term_memory": False,
         },
         "output_contract": {
+            "structured_event_singletons_normalized_to_lists": True,
             "max_observations": WP17_MAX_OBSERVATIONS,
             "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
             "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,

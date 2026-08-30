@@ -20,8 +20,8 @@ from vcah.wp17_slot_runner import (
 )
 
 
-WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v3"
-WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v3"
+WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v4"
+WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v4"
 WP17_3_ARMS = ("e1c0", "e1c1", "e1c2")
 
 
@@ -180,6 +180,12 @@ def build_wp17_3_protocol_manifest(
         == WP17_MAX_STRUCTURED_EVENT_ITEMS
         and int(output_contract.get("max_json_chars", 0))
         == WP17_MAX_OUTPUT_JSON_CHARS,
+        "deterministic_repair_contract_exact": state_policy.get(
+            "slot_operation_observation_ids_reference_observation_ids"
+        )
+        is True
+        and output_contract.get("structured_event_singletons_normalized_to_lists")
+        is True,
         "no_slot_count_cap": state_policy.get("slot_count_cap") is None,
         "archive_evict_preserve_long_term": state_policy.get(
             "archive_evict_delete_long_term_memory"
@@ -196,7 +202,7 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV3",
+        "schema_version": "MMLifelongWP17SlotMemory2minManifestV4",
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"
