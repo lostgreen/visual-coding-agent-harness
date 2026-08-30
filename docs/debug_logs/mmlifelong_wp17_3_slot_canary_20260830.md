@@ -81,3 +81,16 @@ Validate the question-blind 120-second `E1C0/E1C1/E1C2` construction transaction
 - Keep all current-packet evidence IDs and canonicalize them without truncation.
 - Change six evidence IDs per observation from an arbitrary hard rejection to a prompt soft target; the 16-observation and 10,000-character global bounds remain hard.
 - Preserve packet membership validation, complete provenance, capsule projection, model, three-arm inputs, call caps, and endpoint definitions.
+
+## Protocol-v6 Result
+
+- Commit `aa25e2c` passed the local and remote suites (`663/663`).
+- The fresh canary passed both first and second segments in six calls; this validates extended evidence retention and compact capsule lineage across one state transition.
+- Third-segment `E1C2` stopped because both attempts omitted the `structured_event_record.entities` list key.
+- Root: `/m2v_intern/xuboshen/zgw/mger_runs/mmlifelong-wp17-3-slot-canary3-aa25e2c-20260830`.
+- No endpoint values were produced or inspected. The v6 root is structural-debug evidence only.
+
+## Protocol-v7 Repair
+
+- Mechanically normalize any missing SER collection field to an empty list, without adding entities, events, relations, state changes, or occurrence references.
+- Keep the natural-language summary required and retain every semantic/state/provenance validation rule.

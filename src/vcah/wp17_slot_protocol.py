@@ -23,8 +23,8 @@ from vcah.wp17_slot_runner import (
 )
 
 
-WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v6"
-WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v6"
+WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v7"
+WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v7"
 WP17_3_ARMS = ("e1c0", "e1c1", "e1c2")
 
 
@@ -191,6 +191,8 @@ def build_wp17_3_protocol_manifest(
         )
         is True
         and output_contract.get("structured_event_singletons_normalized_to_lists")
+        is True
+        and output_contract.get("structured_event_missing_lists_normalized_to_empty")
         is True,
         "capsule_provenance_projection_exact": state_policy.get(
             "capsule_contract"
@@ -216,7 +218,7 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV6",
+        "schema_version": "MMLifelongWP17SlotMemory2minManifestV7",
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"

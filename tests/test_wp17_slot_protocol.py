@@ -88,6 +88,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
         },
         "output_contract": {
             "structured_event_singletons_normalized_to_lists": True,
+            "structured_event_missing_lists_normalized_to_empty": True,
             "max_observations": WP17_MAX_OBSERVATIONS,
             "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
             "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,

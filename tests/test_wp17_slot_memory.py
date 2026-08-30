@@ -293,6 +293,22 @@ def test_ser_singletons_normalize_without_semantic_inference() -> None:
     )
 
     assert normalized["structured_event_record"]["entities"] == [{"name": "boss"}]
+
+
+def test_ser_missing_list_fields_normalize_to_empty_without_inference() -> None:
+    payload = _transaction()
+    del payload["structured_event_record"]["entities"]
+    del payload["structured_event_record"]["relations"]
+
+    normalized = validate_construction_output(
+        payload,
+        arm="e1c0",
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+
+    assert normalized["structured_event_record"]["entities"] == []
+    assert normalized["structured_event_record"]["relations"] == []
     assert normalized["structured_event_record"]["relations"] == []
 
 

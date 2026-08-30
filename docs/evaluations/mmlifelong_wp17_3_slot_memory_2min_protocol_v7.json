@@ -1,0 +1,167 @@
+{
+  "schema_version": "MMLifelongWP17SlotMemory2minProtocolV7",
+  "contract": "WP17-3-slot-memory-2min-protocol-v7",
+  "frozen_date": "2026-08-30",
+  "protocol_frozen_before_wp17_3_outcomes": true,
+  "endpoint_values_are_structural_gates": false,
+  "scope": {
+    "timeline": "frozen10_plus_0115_local_timeline",
+    "segment_duration_sec": 120.0,
+    "frame_sampling_fps": 1.0,
+    "max_frames_per_segment": 120,
+    "expected_segment_count": 121,
+    "expected_base_calls": 363,
+    "retry_fraction_cap": 0.1,
+    "model_call_hard_cap": 400,
+    "canary_chain_case_id": "mmlifelong-game-test-0115",
+    "expected_canary_segment_count": 3,
+    "canary_model_call_hard_cap": 12,
+    "expected_input_sha256": {
+      "dense_audit": "d6303fcac29de37a6ba463c3a6ce4ff4846077a0e8dbd8f416abbefd4371e8c1",
+      "dense_report": "4a0395f11b6552f22914b9fcedb5fbe9dd2db1ec3d82dd6de9edc756cd540d21",
+      "timeline": "081f7e2ed1511c2878efab1f8b44ba7a0e56716d0e9812807f01b46e42e5f354"
+    },
+    "day_test140_accessed": false,
+    "week_outcomes_accessed": false
+  },
+  "construction_input_visibility": {
+    "question": false,
+    "options": false,
+    "gold_answer": false,
+    "official_intervals": false,
+    "evaluation_aliases": false,
+    "case_ids": false
+  },
+  "arms": [
+    {"arm": "e1c0"},
+    {"arm": "e1c1"},
+    {"arm": "e1c2"}
+  ],
+  "matched_control": {
+    "same_frame_packet_all_arms": true,
+    "same_asr_packet_all_arms": true,
+    "same_ocr_packet_all_arms": true,
+    "state_stores_are_arm_isolated": true,
+    "stateful_arms_run_in_timeline_order": true,
+    "cross_treatment_response_replay": false
+  },
+  "model_policy": {
+    "config": "configs/local_gemini25_pro_ppio.yaml",
+    "api": "planner_api",
+    "actual_model": "pa/gmn-2.5-pr",
+    "default_call_strategy": "single_call_fusion",
+    "logical_stages": [
+      "perception_observations",
+      "slot_maintenance"
+    ],
+    "logical_roles_require_separate_calls": false,
+    "max_completion_tokens_minimum": 4096,
+    "reasoning_usage_metadata_required": true
+  },
+  "evidence_policy": {
+    "current_visual_frames": "uniform 1fps over the current 120s segment",
+    "frame_preprocessing": {
+      "width": 640,
+      "height": 360,
+      "jpeg_quality": 75
+    },
+    "ocr_source": "frozen WP17-1 PaddleOCR track/evidence store",
+    "ocr_selection": "all overlapping tracks grouped by normalized surface within the current segment",
+    "ocr_aggregation_contract": "WP17-segment-ocr-surface-aggregation-v1",
+    "source_lineage_preserved": true,
+    "disjoint_occurrence_ranges_preserved": true,
+    "evidence_alias_contract": "WP17-local-evidence-alias-v1",
+    "aliases_canonicalized_before_persistence": true,
+    "asr_selection": "all frozen cues overlapping the current segment",
+    "gold_alias_injection": false,
+    "source_paths_persisted": false,
+    "temporary_frames_retained": false
+  },
+  "state_policy": {
+    "arms": ["e1c2"],
+    "history_token_budget": 600,
+    "capsule_soft_target_tokens": 400,
+    "budget_tokenizer": "VCAH-unicode-budget-tokenizer-v1",
+    "slot_count_cap": null,
+    "capsule_contract": "WP17-slot-memory-capsule-v2",
+    "capsule_provenance_projection_contract": "WP17-slot-capsule-provenance-summary-v1",
+    "working_capsule_contains_raw_provenance_ids": false,
+    "full_provenance_preserved_in_state_and_ledger": true,
+    "slot_operation_observation_ids_reference_observation_ids": true,
+    "slots": [
+      "location",
+      "active_encounter",
+      "active_participants",
+      "equipped_or_held_item",
+      "recent_state_change",
+      "occurrence_counter",
+      "current_activity"
+    ],
+    "operations": [
+      "write",
+      "update",
+      "retain",
+      "close",
+      "archive",
+      "evict"
+    ],
+    "archive_evict_delete_long_term_memory": false
+  },
+  "output_contract": {
+    "transaction": "WP17-slot-memory-transaction-v1",
+    "structured_event_singletons_normalized_to_lists": true,
+    "structured_event_missing_lists_normalized_to_empty": true,
+    "max_observations": 16,
+    "target_evidence_ids_per_observation": 6,
+    "max_evidence_ids_per_observation": null,
+    "max_participants_per_observation": 12,
+    "max_structured_event_items_per_field": 12,
+    "max_json_chars": 10000,
+    "raw_model_response_persisted": false,
+    "response_sha256_persisted": true
+  },
+  "structural_gates": [
+    "exact consecutive 3-segment canary chain",
+    "question/gold/official-interval/case-id blind",
+    "actual model/provider/config exact",
+    "current packets are identical across arms",
+    "all cited evidence resolves inside the current packet",
+    "valid extra evidence support is never truncated",
+    "missing SER collections normalize to empty without semantic inference",
+    "16 observations and 10000 JSON characters remain hard global bounds",
+    "working capsule uses provenance count/digest while state and ledger retain full lineage",
+    "slot transactions and lifecycle independently replay",
+    "capsule remains within 600 tokens",
+    "C1 token limit matches the prior C2 capsule",
+    "zero terminal transaction failures",
+    "endpoint values are not gates"
+  ],
+  "construction_endpoints": [
+    "anchor_representation_coverage",
+    "canonical_entity_coverage",
+    "relation_state_coverage",
+    "occurrence_coverage",
+    "ordinal_accuracy",
+    "provenance_validity",
+    "unsupported_state_write_rate",
+    "history_context_token_distribution",
+    "slot_churn_rate",
+    "model_and_storage_cost"
+  ],
+  "development_decisions": {
+    "primary_effect": "E1C2-E1C1",
+    "go": "slot-over-free improves at least two preregistered representation/state endpoints without provenance or unsupported-write degradation",
+    "no_go": "slot-over-free is approximately zero or worsens provenance/unsupported writes",
+    "go_next": "complete remaining factorial arms and lifecycle ablations",
+    "no_go_next": "simplify to dense evidence plus bounded previous-caption context"
+  },
+  "provenance": {
+    "parent_dense_data_commit": "196a7fa",
+    "parent_dense_audit_commit": "10d0349",
+    "parent_30s_protocol_commit": "cbf21d1",
+    "week_split_commit": "34c0e64",
+    "supersedes_protocol": "mmlifelong_wp17_3_slot_memory_2min_protocol_v6.json",
+    "repair_scope": "endpoint-blind mechanical normalization of omitted SER collection keys to empty lists after v6 passed two full segments and exposed repeated JSON schema omission",
+    "frozen_30s_protocol_modified": false
+  }
+}

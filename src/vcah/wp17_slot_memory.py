@@ -144,7 +144,7 @@ def validate_structured_event_record(value: Mapping[str, Any]) -> dict[str, Any]
     required_lists = ("entities", "events", "state_changes", "relations", "occurrence_refs")
     for key in required_lists:
         if key not in row:
-            raise SlotTransactionError(f"structured_event_record.{key} is required")
+            row[key] = []
         if not isinstance(row[key], list):
             singleton = row[key]
             if singleton is None or singleton == "":
