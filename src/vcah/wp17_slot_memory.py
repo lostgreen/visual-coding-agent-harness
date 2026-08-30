@@ -12,7 +12,8 @@ from typing import Any, Mapping, Sequence
 
 WP17_SLOT_TRANSACTION_CONTRACT = "WP17-slot-memory-transaction-v1"
 WP17_SLOT_STATE_CONTRACT = "WP17-slot-memory-state-v1"
-WP17_SLOT_CAPSULE_CONTRACT = "WP17-slot-memory-capsule-v1"
+WP17_SLOT_CAPSULE_CONTRACT = "WP17-slot-memory-capsule-v2"
+WP17_CAPSULE_PROVENANCE_CONTRACT = "WP17-slot-capsule-provenance-summary-v1"
 WP17_BUDGET_TOKENIZER = "VCAH-unicode-budget-tokenizer-v1"
 WP17_SLOT_NAMES = (
     "location",
@@ -273,7 +274,10 @@ class SlotMemoryState:
                 "version": int(record["version"]),
                 "status": str(record["status"]),
                 "value": deepcopy(record["value"]),
-                "provenance": list(record["provenance"]),
+                "provenance_count": len(record["provenance"]),
+                "provenance_digest": hashlib.sha256(
+                    _canonical_json(list(record["provenance"])).encode("utf-8")
+                ).hexdigest(),
                 "last_verified_segment_id": str(record["last_verified_segment_id"]),
             }
             for name, record in sorted(self.records.items())
@@ -284,10 +288,15 @@ class SlotMemoryState:
             for name, record in sorted(self.records.items())
         }
         context = "" if not slots and not versions else _canonical_json(
-            {"slots": slots, "versions": versions}
+            {
+                "provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
+                "slots": slots,
+                "versions": versions,
+            }
         )
         payload = {
             "contract": WP17_SLOT_CAPSULE_CONTRACT,
+            "provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
             "arm": self.arm,
             "slots": slots,
             "versions": versions,

@@ -17,9 +17,11 @@ from vcah.occurrence_negative_sidecar import file_sha256, safe_response_metadata
 from vcah.virtual_video import VirtualVideoWorkspace
 from vcah.wp17_slot_memory import (
     WP17_BUDGET_TOKENIZER,
+    WP17_CAPSULE_PROVENANCE_CONTRACT,
     WP17_MAX_OBSERVATIONS,
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
+    WP17_SLOT_CAPSULE_CONTRACT,
     SlotMemoryState,
     SlotTransactionError,
     budget_token_count,
@@ -91,8 +93,8 @@ def run(args: argparse.Namespace) -> Path:
         raise ValueError("WP17 slot run selected no segments")
 
     run_manifest = {
-        "schema_version": "MMLifelongWP17SlotConstructionRunV2",
-        "contract": "WP17-3-slot-construction-run-v2",
+        "schema_version": "MMLifelongWP17SlotConstructionRunV3",
+        "contract": "WP17-3-slot-construction-run-v3",
         "mode": mode,
         "source_commit": str(args.source_commit),
         "protocol_manifest_sha256": file_sha256(protocol_path),
@@ -107,6 +109,8 @@ def run(args: argparse.Namespace) -> Path:
         "response_format": {"type": "json_object"},
         "budget_tokenizer": WP17_BUDGET_TOKENIZER,
         "history_token_budget": history_budget,
+        "slot_capsule_contract": WP17_SLOT_CAPSULE_CONTRACT,
+        "capsule_provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
         "image_preprocessing": preprocessing_policy,
         "ocr_aggregation_contract": WP17_OCR_AGGREGATION_CONTRACT,
         "evidence_alias_contract": WP17_EVIDENCE_ALIAS_CONTRACT,
@@ -144,6 +148,8 @@ def run(args: argparse.Namespace) -> Path:
             "max_completion_tokens",
             "ocr_aggregation_contract",
             "evidence_alias_contract",
+            "slot_capsule_contract",
+            "capsule_provenance_projection_contract",
             "output_limits",
         ):
             if prior_manifest.get(key) != run_manifest.get(key):

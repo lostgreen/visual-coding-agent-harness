@@ -51,3 +51,19 @@ Validate the question-blind 120-second `E1C0/E1C1/E1C2` construction transaction
 - Explicitly bind `slot_operations.observation_ids` to IDs from the current `observations` array, never evidence IDs.
 - Include unknown and valid observation IDs in deterministic retry feedback.
 - Mechanically normalize SER string/object/null singletons to lists; no facts, evidence, or slot values are inferred.
+
+## Protocol-v4 Result
+
+- Commit `7ba13a9` passed the local and remote suites (`661/661`).
+- The fresh canary stopped after four successes and one `E1C2` terminal validation failure.
+- Compact fingerprint: attempt 1 exceeded the six-evidence-per-observation bound; attempt 2 reduced evidence references but produced six active slots whose capsule used 852/600 tokens.
+- Endpoint-blind accounting found the first `E1C2` capsule already used 392 tokens with four slots because each slot repeated five full canonical evidence IDs. State and lifecycle ledger already preserve that complete lineage.
+- Root: `/m2v_intern/xuboshen/zgw/mger_runs/mmlifelong-wp17-3-slot-canary3-7ba13a9-20260830`.
+- No endpoint values were produced or inspected. The v4 root is structural-debug evidence only.
+
+## Protocol-v5 Repair
+
+- Preserve complete canonical provenance in state records and the append-only lifecycle ledger.
+- Project model-visible working-capsule provenance to deterministic count and SHA256 digest fields; do not copy raw evidence IDs into history context.
+- Keep the 600-token hard budget, 400-token soft target, slot values, lifecycle, evidence packets, model, retry cap, and endpoint definitions unchanged.
+- Independently replay and compare every persisted capsule against the deterministic projection.

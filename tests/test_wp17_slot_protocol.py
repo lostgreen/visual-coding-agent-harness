@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from vcah.wp17_slot_memory import (
     WP17_BUDGET_TOKENIZER,
+    WP17_CAPSULE_PROVENANCE_CONTRACT,
     WP17_MAX_OBSERVATIONS,
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
+    WP17_SLOT_CAPSULE_CONTRACT,
 )
 from vcah.wp17_slot_protocol import (
     WP17_3_ARMS,
@@ -78,6 +80,10 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "slots": list(WP17_SLOT_NAMES),
             "operations": list(WP17_SLOT_OPERATIONS),
             "archive_evict_delete_long_term_memory": False,
+            "capsule_contract": WP17_SLOT_CAPSULE_CONTRACT,
+            "capsule_provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
+            "working_capsule_contains_raw_provenance_ids": False,
+            "full_provenance_preserved_in_state_and_ledger": True,
         },
         "output_contract": {
             "structured_event_singletons_normalized_to_lists": True,

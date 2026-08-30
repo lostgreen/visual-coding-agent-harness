@@ -11,7 +11,12 @@ from typing import Any, Mapping
 
 from vcah.occurrence_negative_sidecar import file_sha256
 from vcah.virtual_video import VirtualVideoWorkspace
-from vcah.wp17_slot_memory import SlotMemoryState, validate_construction_output
+from vcah.wp17_slot_memory import (
+    WP17_CAPSULE_PROVENANCE_CONTRACT,
+    WP17_SLOT_CAPSULE_CONTRACT,
+    SlotMemoryState,
+    validate_construction_output,
+)
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
 from vcah.wp17_slot_runner import (
     WP17_EVIDENCE_ALIAS_CONTRACT,
@@ -113,6 +118,10 @@ def run(args: argparse.Namespace) -> Path:
                 replay_errors.append(
                     {"segment_id": segment_id, "arm": str(arm), "error": "state_digest"}
                 )
+            if str(arm) == "e1c2" and normalized.get("capsule") != row.get("capsule"):
+                replay_errors.append(
+                    {"segment_id": segment_id, "arm": str(arm), "error": "capsule"}
+                )
         if "e1c1" in by_arm and "e1c2" in by_arm:
             context_pairs.append(
                 {
@@ -157,6 +166,8 @@ def run(args: argparse.Namespace) -> Path:
         == protocol["model_policy"]["actual_model"],
         "source_commit_exact": run_manifest.get("source_commit")
         == protocol.get("provenance", {}).get("source_commit"),
+        "run_contract_exact": run_manifest.get("contract")
+        == "WP17-3-slot-construction-run-v3",
         "frame_preprocessing_exact": run_manifest.get("image_preprocessing")
         == protocol["evidence_policy"]["frame_preprocessing"]
         and all(
@@ -235,6 +246,29 @@ def run(args: argparse.Namespace) -> Path:
             or (
                 row["capsule"].get("within_budget") is True
                 and int(row["capsule"].get("token_count", 601)) <= 600
+            )
+            for row in result_rows
+        ),
+        "capsule_provenance_projection_exact": run_manifest.get(
+            "slot_capsule_contract"
+        )
+        == WP17_SLOT_CAPSULE_CONTRACT
+        == protocol["state_policy"].get("capsule_contract")
+        and run_manifest.get("capsule_provenance_projection_contract")
+        == WP17_CAPSULE_PROVENANCE_CONTRACT
+        == protocol["state_policy"].get("capsule_provenance_projection_contract")
+        and all(
+            row.get("capsule") is None
+            or (
+                row["capsule"].get("contract") == WP17_SLOT_CAPSULE_CONTRACT
+                and row["capsule"].get("provenance_projection_contract")
+                == WP17_CAPSULE_PROVENANCE_CONTRACT
+                and all(
+                    "provenance" not in slot
+                    and int(slot.get("provenance_count", -1)) >= 0
+                    and len(str(slot.get("provenance_digest", ""))) == 64
+                    for slot in tuple(row["capsule"].get("slots", ()) or ())
+                )
             )
             for row in result_rows
         ),

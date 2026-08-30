@@ -5,6 +5,7 @@ import json
 import pytest
 
 from vcah.wp17_slot_memory import (
+    WP17_CAPSULE_PROVENANCE_CONTRACT,
     WP17_SLOT_TRANSACTION_CONTRACT,
     SlotMemoryState,
     SlotTransactionError,
@@ -72,6 +73,18 @@ def test_slot_transaction_validates_observations_before_ops_and_binds_participan
     assert result["capsule"]["within_budget"] is True
     assert state.records["active_encounter"]["version"] == 1
     assert state.records["active_participants"]["provenance"] == ["frame:1"]
+    capsule_slot = next(
+        row
+        for row in result["capsule"]["slots"]
+        if row["slot"] == "active_participants"
+    )
+    assert capsule_slot["provenance_count"] == 1
+    assert len(capsule_slot["provenance_digest"]) == 64
+    assert "provenance" not in capsule_slot
+    assert (
+        result["capsule"]["provenance_projection_contract"]
+        == WP17_CAPSULE_PROVENANCE_CONTRACT
+    )
 
 
 def test_working_slots_require_explicit_lifecycle_and_retain_cannot_rewrite() -> None:
@@ -176,6 +189,33 @@ def test_active_capsule_over_budget_fails_without_silent_truncation() -> None:
             allowed_evidence_ids=("frame:1",),
         )
     assert state.digest() == digest_before
+
+
+def test_capsule_summarizes_lineage_but_state_and_ledger_keep_full_provenance() -> None:
+    evidence_ids = tuple(f"frame:segment-1:{index:04d}" for index in range(1, 7))
+    payload = _transaction(
+        {
+            "operation": "write",
+            "slot": "current_activity",
+            "expected_version": 0,
+            "value": {"activity": "walking"},
+            "observation_ids": ["obs-1"],
+        }
+    )
+    payload["observations"][0]["evidence_ids"] = list(evidence_ids)
+    state = SlotMemoryState("e1c2", token_budget=600)
+
+    result = state.apply(
+        payload,
+        segment_id="segment-1",
+        allowed_evidence_ids=evidence_ids,
+    )
+
+    capsule_slot = result["capsule"]["slots"][0]
+    assert capsule_slot["provenance_count"] == 6
+    assert not any(value in result["capsule"]["context"] for value in evidence_ids)
+    assert state.records["current_activity"]["provenance"] == list(evidence_ids)
+    assert state.ledger[-1]["provenance"] == list(evidence_ids)
 
 
 def test_budget_tokenizer_and_response_parser_are_deterministic() -> None:
