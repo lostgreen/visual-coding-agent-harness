@@ -21,6 +21,11 @@ from vcah.wp17_slot_memory import (
     validate_construction_output,
 )
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
+from vcah.wp17_slot_continuation import (
+    WP17_SLOT_CONTINUATION_CONTRACT,
+    build_continuation_entries,
+    index_continuation_entries,
+)
 from vcah.wp17_slot_runner import (
     WP17_EVIDENCE_ALIAS_CONTRACT,
     WP17_OCR_AGGREGATION_CONTRACT,
@@ -40,6 +45,16 @@ def run(args: argparse.Namespace) -> Path:
     run_root = Path(args.run_root)
     run_manifest = _read_json(run_root / "run_manifest.json")
     summary = _read_json(run_root / "run_summary.json")
+    continuation_declared = bool(protocol.get("continuation"))
+    continuation_values = (
+        args.parent_run_root,
+        args.continuation_plan,
+        args.expected_continuation_plan_sha256,
+    )
+    if continuation_declared != all(continuation_values):
+        raise ValueError("WP17 continuation audit inputs do not match protocol")
+    if any(continuation_values) and not all(continuation_values):
+        raise ValueError("WP17 continuation audit inputs are incomplete")
     mode = str(run_manifest["mode"])
     all_segments = tuple(dict(row) for row in protocol["segments"])
     if mode == "canary":
@@ -48,6 +63,39 @@ def run(args: argparse.Namespace) -> Path:
     else:
         segments = all_segments
     expected_results = len(segments) * 3
+
+    continuation_errors: list[dict[str, str]] = []
+    continuation_plan: dict[str, Any] | None = None
+    continuation_entries: dict[tuple[str, str], dict[str, Any]] = {}
+    parent_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    continuation_plan_sha = ""
+    parent_root: Path | None = None
+    if continuation_declared:
+        parent_root = Path(args.parent_run_root)
+        continuation_plan_path = Path(args.continuation_plan)
+        continuation_plan_sha = file_sha256(continuation_plan_path)
+        if continuation_plan_sha != str(args.expected_continuation_plan_sha256):
+            raise ValueError("WP17 continuation audit plan SHA mismatch")
+        continuation_plan = _read_json(continuation_plan_path)
+        continuation_entries = index_continuation_entries(continuation_plan)
+        for segment in segments:
+            segment_id = str(segment["segment_id"])
+            for arm in ("e1c0", "e1c1", "e1c2"):
+                path = parent_root / "segments" / segment_id / f"{arm}.json"
+                parent_rows[(segment_id, arm)] = _read_json(path)
+        expected_actions = {
+            (str(row["segment_id"]), str(row["arm"])): dict(row)
+            for row in build_continuation_entries(segments, parent_rows)
+        }
+        for key, expected in expected_actions.items():
+            actual = continuation_entries.get(key, {})
+            if (
+                actual.get("action") != expected.get("action")
+                or actual.get("reasons") != expected.get("reasons")
+            ):
+                continuation_errors.append(
+                    {"segment_id": key[0], "arm": key[1], "error": "dependency_plan"}
+                )
 
     workspace = VirtualVideoWorkspace.load(Path(args.workspace_root))
     asr_cues = workspace.read_asr_virtual_cues()
@@ -189,6 +237,67 @@ def run(args: argparse.Namespace) -> Path:
         ) or {})
         for row in result_rows
     ]
+    if continuation_declared:
+        assert continuation_plan is not None and parent_root is not None
+        result_by_key = {
+            (str(row.get("segment_id", "")), str(row.get("arm", ""))): row
+            for row in result_rows
+        }
+        for key, entry in continuation_entries.items():
+            row = result_by_key.get(key)
+            if row is None:
+                continuation_errors.append(
+                    {"segment_id": key[0], "arm": key[1], "error": "missing_result"}
+                )
+                continue
+            provenance = dict(row.get("continuation_provenance", {}) or {})
+            parent_path = parent_root / "segments" / key[0] / f"{key[1]}.json"
+            parent_sha = file_sha256(parent_path)
+            if (
+                parent_sha != entry.get("parent_result_sha256")
+                or provenance.get("action") != entry.get("action")
+                or provenance.get("plan_sha256") != continuation_plan_sha
+                or provenance.get("parent_result_sha256") != parent_sha
+            ):
+                continuation_errors.append(
+                    {"segment_id": key[0], "arm": key[1], "error": "row_provenance"}
+                )
+                continue
+            if entry.get("action") == "reuse":
+                copied = dict(row)
+                copied.pop("continuation_provenance", None)
+                if copied != parent_rows[key]:
+                    continuation_errors.append(
+                        {"segment_id": key[0], "arm": key[1], "error": "reuse_mutated"}
+                    )
+
+        declared = dict(protocol.get("continuation", {}) or {})
+        run_continuation = dict(run_manifest.get("continuation", {}) or {})
+        summary_continuation = dict(summary.get("continuation", {}) or {})
+        plan_counts = dict(continuation_plan.get("counts", {}) or {})
+        parent_manifest_path = parent_root / "run_manifest.json"
+        parent_summary_path = parent_root / "run_summary.json"
+        if not (
+            declared.get("contract") == WP17_SLOT_CONTINUATION_CONTRACT
+            and declared.get("plan_sha256") == continuation_plan_sha
+            and run_continuation.get("contract") == WP17_SLOT_CONTINUATION_CONTRACT
+            and run_continuation.get("plan_sha256") == continuation_plan_sha
+            and file_sha256(parent_manifest_path)
+            == continuation_plan.get("parent_run_manifest_sha256")
+            == run_continuation.get("parent_run_manifest_sha256")
+            and file_sha256(parent_summary_path)
+            == continuation_plan.get("parent_run_summary_sha256")
+            == run_continuation.get("parent_run_summary_sha256")
+            and int(summary_continuation.get("reused_results", -1))
+            == int(plan_counts.get("reuse", -2))
+            and int(summary_continuation.get("rerun_results", -1))
+            == int(plan_counts.get("rerun", -2))
+            and int(summary_continuation.get("continuation_model_calls", -1))
+            == int(summary.get("model_calls", -2))
+        ):
+            continuation_errors.append(
+                {"segment_id": "run", "arm": "all", "error": "run_provenance"}
+            )
     all_serialized = json.dumps(
         {"manifest": run_manifest, "summary": summary, "results": result_rows},
         ensure_ascii=False,
@@ -420,6 +529,7 @@ def run(args: argparse.Namespace) -> Path:
             "endpoint_values_not_structural_gates"
         )
         is True,
+        "continuation_provenance_exact": not continuation_errors,
     }
     gates["structural_gate_passed"] = all(gates.values())
     report = {
@@ -457,6 +567,7 @@ def run(args: argparse.Namespace) -> Path:
                 for row in result_rows
                 for event in tuple(row.get("lifecycle_events", ()) or ())
             ),
+            "continuation_provenance_errors": len(continuation_errors),
         },
         "context_budget": {
             "c1_mean_tokens": round(c1_mean, 3),
@@ -467,6 +578,7 @@ def run(args: argparse.Namespace) -> Path:
         },
         "replay_error_fingerprints": replay_errors[:5],
         "history_replay_error_fingerprints": history_replay_errors[:5],
+        "continuation_error_fingerprints": continuation_errors[:5],
         "capsule_overhead": {
             "mean_share": round(
                 mean(
@@ -557,6 +669,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--dense-root", required=True)
     parser.add_argument("--out-root", required=True)
+    parser.add_argument("--parent-run-root")
+    parser.add_argument("--continuation-plan")
+    parser.add_argument("--expected-continuation-plan-sha256")
     return parser.parse_args()
 
 

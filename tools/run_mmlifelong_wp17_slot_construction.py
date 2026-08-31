@@ -33,6 +33,10 @@ from vcah.wp17_slot_memory import (
     validate_construction_output,
 )
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
+from vcah.wp17_slot_continuation import (
+    WP17_SLOT_CONTINUATION_CONTRACT,
+    index_continuation_entries,
+)
 from vcah.wp17_slot_runner import (
     WP17_EVIDENCE_ALIAS_CONTRACT,
     WP17_OCR_AGGREGATION_CONTRACT,
@@ -56,6 +60,51 @@ def run(args: argparse.Namespace) -> Path:
         raise RuntimeError("WP17-3 protocol structural gate did not pass")
     if str(args.source_commit) != str(protocol.get("provenance", {}).get("source_commit", "")):
         raise ValueError("WP17-3 runtime source commit mismatch")
+    continuation_values = (
+        args.parent_run_root,
+        args.continuation_plan,
+        args.expected_continuation_plan_sha256,
+    )
+    if any(continuation_values) and not all(continuation_values):
+        raise ValueError("WP17 continuation requires parent root, plan, and expected plan SHA")
+    continuation_plan: dict[str, Any] | None = None
+    continuation_entries: dict[tuple[str, str], dict[str, Any]] = {}
+    continuation_plan_sha = ""
+    parent_root: Path | None = None
+    parent_manifest_path: Path | None = None
+    parent_summary_path: Path | None = None
+    parent_summary: dict[str, Any] = {}
+    if all(continuation_values):
+        parent_root = Path(args.parent_run_root)
+        parent_manifest_path = parent_root / "run_manifest.json"
+        parent_summary_path = parent_root / "run_summary.json"
+        continuation_plan_path = Path(args.continuation_plan)
+        continuation_plan_sha = file_sha256(continuation_plan_path)
+        if continuation_plan_sha != str(args.expected_continuation_plan_sha256):
+            raise ValueError("WP17 continuation plan SHA mismatch")
+        continuation_plan = _read_json(continuation_plan_path)
+        continuation_entries = index_continuation_entries(continuation_plan)
+        continuation_contract = dict(protocol.get("continuation", {}) or {})
+        if continuation_contract.get("contract") != WP17_SLOT_CONTINUATION_CONTRACT:
+            raise ValueError("WP17 continuation protocol contract mismatch")
+        if continuation_contract.get("plan_sha256") != continuation_plan_sha:
+            raise ValueError("WP17 continuation protocol/plan mismatch")
+        if continuation_plan.get("source_commit") != str(args.source_commit):
+            raise ValueError("WP17 continuation plan source commit mismatch")
+        if file_sha256(parent_manifest_path) != continuation_plan.get(
+            "parent_run_manifest_sha256"
+        ):
+            raise ValueError("WP17 continuation parent manifest SHA mismatch")
+        if file_sha256(parent_summary_path) != continuation_plan.get(
+            "parent_run_summary_sha256"
+        ):
+            raise ValueError("WP17 continuation parent summary SHA mismatch")
+        parent_manifest = _read_json(parent_manifest_path)
+        if parent_manifest.get("protocol_manifest_sha256") != continuation_plan.get(
+            "parent_protocol_sha256"
+        ):
+            raise ValueError("WP17 continuation parent protocol provenance mismatch")
+        parent_summary = _read_json(parent_summary_path)
     mode = str(args.mode).strip().casefold()
     if mode not in {"canary", "full"}:
         raise ValueError("mode must be canary or full")
@@ -94,6 +143,14 @@ def run(args: argparse.Namespace) -> Path:
     expected_results = len(segments) * int(protocol["counts"]["arms"])
     if not segments:
         raise ValueError("WP17 slot run selected no segments")
+    if continuation_plan is not None:
+        expected_continuation_keys = {
+            (str(segment["segment_id"]), arm)
+            for segment in segments
+            for arm in ("e1c0", "e1c1", "e1c2")
+        }
+        if set(continuation_entries) != expected_continuation_keys:
+            raise ValueError("WP17 continuation plan does not cover every result")
 
     run_manifest = {
         "schema_version": "MMLifelongWP17SlotConstructionRunV4",
@@ -148,6 +205,28 @@ def run(args: argparse.Namespace) -> Path:
         "day_test140_accessed": False,
         "week_outcomes_accessed": False,
     }
+    if continuation_plan is not None:
+        run_manifest["continuation"] = {
+            "contract": WP17_SLOT_CONTINUATION_CONTRACT,
+            "plan_sha256": continuation_plan_sha,
+            "parent_protocol_sha256": continuation_plan.get(
+                "parent_protocol_sha256"
+            ),
+            "parent_run_manifest_sha256": continuation_plan.get(
+                "parent_run_manifest_sha256"
+            ),
+            "parent_run_summary_sha256": continuation_plan.get(
+                "parent_run_summary_sha256"
+            ),
+            "parent_source_commit": continuation_plan.get("parent_source_commit"),
+            "parent_model_calls": int(parent_summary.get("model_calls", 0) or 0),
+            "planned_reuse_results": int(
+                continuation_plan.get("counts", {}).get("reuse", 0)
+            ),
+            "planned_rerun_results": int(
+                continuation_plan.get("counts", {}).get("rerun", 0)
+            ),
+        }
     manifest_path = out_root / "run_manifest.json"
     if manifest_path.is_file():
         prior_manifest = _read_json(manifest_path)
@@ -170,6 +249,7 @@ def run(args: argparse.Namespace) -> Path:
             "transaction_abstain_ser_endpoint_eligible",
             "capsule_provenance_projection_contract",
             "output_limits",
+            "continuation",
         ):
             if prior_manifest.get(key) != run_manifest.get(key):
                 raise RuntimeError(f"WP17 slot resume manifest mismatch: {key}")
@@ -268,34 +348,70 @@ def run(args: argparse.Namespace) -> Path:
                 if args.resume and result_path.is_file():
                     prior = _read_json(result_path)
                     if prior.get("status") == "success":
-                        if prior.get("input_digests") != input_digests or prior.get("history_digest") != history_digest:
-                            raise RuntimeError("WP17 slot resume input/history digest mismatch")
-                        if prior.get("slot_transaction_abstained") is True:
-                            normalized = validate_construction_base(
-                                dict(prior["model_output"]),
-                                allowed_evidence_ids=canonical_evidence_ids,
-                                enforce_output_size=False,
-                            )
-                            normalized["state_digest"] = slot_state.digest()
-                        else:
-                            normalized = validate_construction_output(
-                                dict(prior["model_output"]),
-                                arm=arm,
-                                segment_id=segment_id,
-                                allowed_evidence_ids=canonical_evidence_ids,
-                                state=slot_state if arm == "e1c2" else None,
-                                enforce_output_size=False,
-                            )
-                        if arm == "e1c2" and normalized.get("state_digest") != prior.get("state_digest"):
-                            raise RuntimeError("WP17 slot resume state digest mismatch")
+                        normalized = _replay_success_row(
+                            prior,
+                            arm=arm,
+                            segment_id=segment_id,
+                            input_digests=input_digests,
+                            history_digest=history_digest,
+                            allowed_evidence_ids=canonical_evidence_ids,
+                            state=slot_state if arm == "e1c2" else None,
+                        )
                         if arm == "e1c1":
                             previous_caption = str(
                                 normalized["structured_event_record"]["summary"]
                             )
                             c1_chain_gap = False
                         results[(segment_id, arm)] = prior
-                        _write_summary(out_root, results, expected_results, call_count, hard_cap)
+                        _write_summary(
+                            out_root,
+                            results,
+                            expected_results,
+                            call_count,
+                            hard_cap,
+                            continuation=run_manifest.get("continuation"),
+                        )
                         continue
+
+                continuation_entry = continuation_entries.get((segment_id, arm))
+                if continuation_entry and continuation_entry["action"] == "reuse":
+                    assert parent_root is not None
+                    parent_path = parent_root / "segments" / segment_id / f"{arm}.json"
+                    parent_sha = file_sha256(parent_path)
+                    if parent_sha != continuation_entry.get("parent_result_sha256"):
+                        raise RuntimeError("WP17 continuation parent result SHA mismatch")
+                    parent_row = _read_json(parent_path)
+                    normalized = _replay_success_row(
+                        parent_row,
+                        arm=arm,
+                        segment_id=segment_id,
+                        input_digests=input_digests,
+                        history_digest=history_digest,
+                        allowed_evidence_ids=canonical_evidence_ids,
+                        state=slot_state if arm == "e1c2" else None,
+                    )
+                    reused = dict(parent_row)
+                    reused["continuation_provenance"] = {
+                        "action": "reuse",
+                        "plan_sha256": continuation_plan_sha,
+                        "parent_result_sha256": parent_sha,
+                    }
+                    _write_json_atomic(result_path, reused)
+                    if arm == "e1c1":
+                        previous_caption = str(
+                            normalized["structured_event_record"]["summary"]
+                        )
+                        c1_chain_gap = False
+                    results[(segment_id, arm)] = reused
+                    _write_summary(
+                        out_root,
+                        results,
+                        expected_results,
+                        call_count,
+                        hard_cap,
+                        continuation=run_manifest.get("continuation"),
+                    )
+                    continue
 
                 result, consumed = _run_one(
                     client=client,
@@ -348,6 +464,15 @@ def run(args: argparse.Namespace) -> Path:
                         "source_paths_persisted": False,
                     }
                 )
+                if continuation_entry:
+                    result["continuation_provenance"] = {
+                        "action": "rerun",
+                        "plan_sha256": continuation_plan_sha,
+                        "parent_result_sha256": continuation_entry.get(
+                            "parent_result_sha256"
+                        ),
+                        "reasons": list(continuation_entry.get("reasons", ())),
+                    }
                 _write_json_atomic(result_path, result)
                 results[(segment_id, arm)] = result
                 if arm == "e1c1":
@@ -359,14 +484,28 @@ def run(args: argparse.Namespace) -> Path:
                     else:
                         previous_caption = ""
                         c1_chain_gap = True
-                _write_summary(out_root, results, expected_results, call_count, hard_cap)
+                _write_summary(
+                    out_root,
+                    results,
+                    expected_results,
+                    call_count,
+                    hard_cap,
+                    continuation=run_manifest.get("continuation"),
+                )
                 print(
                     "WP17_SLOT_DONE "
                     f"completed={sum(row.get('status') == 'success' for row in results.values())}/{expected_results} "
                     f"segment={segment_id} arm={arm} status={result['status']} calls={call_count}/{hard_cap}",
                     flush=True,
                 )
-    summary_path = _write_summary(out_root, results, expected_results, call_count, hard_cap)
+    summary_path = _write_summary(
+        out_root,
+        results,
+        expected_results,
+        call_count,
+        hard_cap,
+        continuation=run_manifest.get("continuation"),
+    )
     if sum(row.get("status") == "success" for row in results.values()) != expected_results:
         raise SystemExit(1)
     return summary_path
@@ -632,6 +771,8 @@ def _write_summary(
     expected_results: int,
     model_calls: int,
     hard_cap: int,
+    *,
+    continuation: Mapping[str, Any] | None = None,
 ) -> Path:
     statuses: dict[str, int] = {}
     for row in results.values():
@@ -660,9 +801,74 @@ def _write_summary(
         "illegal_operation_attempts": illegal_operations,
         "complete": statuses.get("success", 0) == int(expected_results),
     }
+    if continuation is not None:
+        reused = sum(
+            row.get("continuation_provenance", {}).get("action") == "reuse"
+            for row in results.values()
+        )
+        rerun = sum(
+            row.get("continuation_provenance", {}).get("action") == "rerun"
+            for row in results.values()
+        )
+        parent_calls = int(continuation.get("parent_model_calls", 0) or 0)
+        summary["continuation"] = {
+            "contract": WP17_SLOT_CONTINUATION_CONTRACT,
+            "plan_sha256": continuation.get("plan_sha256"),
+            "reused_results": reused,
+            "rerun_results": rerun,
+            "planned_reuse_results": int(
+                continuation.get("planned_reuse_results", 0) or 0
+            ),
+            "planned_rerun_results": int(
+                continuation.get("planned_rerun_results", 0) or 0
+            ),
+            "parent_model_calls": parent_calls,
+            "continuation_model_calls": int(model_calls),
+            "total_experiment_model_calls": parent_calls + int(model_calls),
+        }
     path = Path(out_root) / "run_summary.json"
     _write_json_atomic(path, summary)
     return path
+
+
+def _replay_success_row(
+    prior: Mapping[str, Any],
+    *,
+    arm: str,
+    segment_id: str,
+    input_digests: Mapping[str, str],
+    history_digest: str,
+    allowed_evidence_ids: Sequence[str],
+    state: SlotMemoryState | None,
+) -> dict[str, Any]:
+    if prior.get("status") != "success":
+        raise RuntimeError("WP17 continuation cannot reuse a non-success result")
+    if (
+        prior.get("input_digests") != dict(input_digests)
+        or prior.get("history_digest") != history_digest
+    ):
+        raise RuntimeError("WP17 slot replay input/history digest mismatch")
+    if prior.get("slot_transaction_abstained") is True:
+        normalized = validate_construction_base(
+            dict(prior["model_output"]),
+            allowed_evidence_ids=allowed_evidence_ids,
+            enforce_output_size=False,
+        )
+        if arm != "e1c2" or state is None:
+            raise RuntimeError("WP17 transaction abstain is only valid for E1C2")
+        normalized["state_digest"] = state.digest()
+    else:
+        normalized = validate_construction_output(
+            dict(prior["model_output"]),
+            arm=arm,
+            segment_id=segment_id,
+            allowed_evidence_ids=allowed_evidence_ids,
+            state=state,
+            enforce_output_size=False,
+        )
+    if arm == "e1c2" and normalized.get("state_digest") != prior.get("state_digest"):
+        raise RuntimeError("WP17 slot replay state digest mismatch")
+    return dict(normalized)
 
 
 def _frame_packet_digest(paths: Sequence[str]) -> str:
@@ -712,6 +918,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--max-completion-tokens", type=int, default=4096)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--parent-run-root")
+    parser.add_argument("--continuation-plan")
+    parser.add_argument("--expected-continuation-plan-sha256")
     return parser.parse_args()
 
 
