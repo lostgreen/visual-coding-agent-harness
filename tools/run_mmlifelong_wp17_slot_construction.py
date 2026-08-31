@@ -128,6 +128,12 @@ def run(args: argparse.Namespace) -> Path:
             "max_structured_event_items_per_field": WP17_MAX_STRUCTURED_EVENT_ITEMS,
             "max_json_chars": WP17_MAX_OUTPUT_JSON_CHARS,
         },
+        "model_output_json_chars_contract": (
+            "compact_parsed_response_before_evidence_alias_canonicalization"
+        ),
+        "persisted_model_output_json_chars_contract": (
+            "compact_persisted_response_after_evidence_alias_canonicalization"
+        ),
         "segment_count": len(segments),
         "expected_result_count": expected_results,
         "model_call_hard_cap": hard_cap,
@@ -392,6 +398,7 @@ def _run_one(
     repair_contract: dict[str, Any] | None = None
     repair_mode = "base"
     abstain_base: dict[str, Any] | None = None
+    abstain_model_output_json_chars = 0
     illegal_operation_contracts: list[dict[str, Any]] = []
     consumed = 0
     for attempt_index in range(3):
@@ -490,6 +497,7 @@ def _run_one(
                     base = None
                 if arm == "e1c2" and base is not None:
                     abstain_base = base
+                    abstain_model_output_json_chars = model_output_json_chars
                     illegal_operation_contracts.append(semantic_repair)
             else:
                 attempts.append(
@@ -573,7 +581,8 @@ def _run_one(
                 "actual_model": client.model,
                 "input_digests": dict(input_digests),
                 "model_output": abstained_model_output,
-                "model_output_json_chars": len(
+                "model_output_json_chars": abstain_model_output_json_chars,
+                "persisted_model_output_json_chars": len(
                     json.dumps(
                         abstained_model_output,
                         ensure_ascii=False,

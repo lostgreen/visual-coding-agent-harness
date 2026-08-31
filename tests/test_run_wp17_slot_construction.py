@@ -127,6 +127,18 @@ def test_semantic_retry_then_transaction_abstain_preserves_state() -> None:
     assert result["ser_endpoint_eligible"] is False
     assert result["ser_trust_status"] == "untrusted_for_endpoint"
     assert result["model_output"]["slot_operations"] == []
+    compact_chars = len(
+        json.dumps(illegal, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    )
+    assert result["model_output_json_chars"] == compact_chars
+    assert result["persisted_model_output_json_chars"] == len(
+        json.dumps(
+            result["model_output"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
     assert state.digest() == digest_before
     assert result["attempts"][0]["failure_code"] == "write_on_working_slot"
     assert "WP17-slot-memory-repair-v1" in client.prompts[1]

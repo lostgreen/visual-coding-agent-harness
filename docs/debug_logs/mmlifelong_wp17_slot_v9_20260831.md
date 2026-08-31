@@ -14,6 +14,15 @@ then launch a new 121 x 3 construction root.
   not completion-token exhaustion.
 - The preceding capsule had closed encounter/participant records at version 3
   and multiple active slots with excessive accumulated provenance.
+- The first v9 five-segment canary completed 15/15 results with zero terminal
+  failures; independent state/history replay had zero errors. It crossed the
+  original failing segment and used three state-preserving transaction
+  abstentions.
+- That canary's structural audit stopped only because abstain rows measured
+  `model_output_json_chars` after evidence aliases were expanded in the
+  persisted object, while ordinary rows measured the compact parsed response
+  before expansion. This was bookkeeping, not a model-output or lifecycle
+  failure; the root remains read-only diagnostic evidence.
 
 ## Implemented v9 Repairs
 
@@ -26,6 +35,10 @@ then launch a new 121 x 3 construction root.
 - State-preserving transaction abstain with SER endpoint ineligibility.
 - Per-arm failure isolation; full/canary caps 440/24.
 - Zero-model reachability audit and focused runner/state/protocol tests.
+- Abstain rows now retain both explicitly defined lengths: the compact parsed
+  response before evidence-alias canonicalization and the compact persisted
+  response after canonicalization and illegal-operation removal. The audit
+  validates the accounting contract without assuming either length is larger.
 
 ## Latest Checks
 
@@ -43,8 +56,8 @@ then launch a new 121 x 3 construction root.
 
 ## Next Actions
 
-1. Commit and push v9 code.
-2. Run remote full suite and zero-model reachability audit.
-3. Prepare/freeze a unique v9 protocol from the v8 structural manifest.
-4. Run the 5-segment lifecycle canary and independent audit.
+1. Commit and push the output-size accounting repair.
+2. Run the remote full suite and a new zero-model reachability audit.
+3. Prepare and freeze a new protocol manifest bound to the repair commit.
+4. Rerun the exact five-segment lifecycle canary into a unique root and audit it.
 5. If all structural gates pass, launch a unique 121 x 3 full root and monitor.

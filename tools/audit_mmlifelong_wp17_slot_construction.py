@@ -280,6 +280,18 @@ def run(args: argparse.Namespace) -> Path:
             )
         )
         == int(protocol["output_contract"]["target_evidence_ids_per_observation"]),
+        "model_output_size_accounting_exact": run_manifest.get(
+            "model_output_json_chars_contract"
+        )
+        == "compact_parsed_response_before_evidence_alias_canonicalization"
+        and run_manifest.get("persisted_model_output_json_chars_contract")
+        == "compact_persisted_response_after_evidence_alias_canonicalization"
+        and all(
+            int(row.get("model_output_json_chars", 0)) > 0
+            and int(row.get("persisted_model_output_json_chars", 0)) > 0
+            for row in result_rows
+            if row.get("slot_transaction_abstained") is True
+        ),
         "result_count_exact": len(result_rows) == expected_results,
         "all_results_success": len(result_rows) == expected_results
         and all(row.get("status") == "success" for row in result_rows),
