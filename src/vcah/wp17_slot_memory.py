@@ -10,10 +10,11 @@ import re
 from typing import Any, Mapping, Sequence
 
 
-WP17_SLOT_TRANSACTION_CONTRACT = "WP17-slot-memory-transaction-v1"
-WP17_SLOT_STATE_CONTRACT = "WP17-slot-memory-state-v1"
-WP17_SLOT_CAPSULE_CONTRACT = "WP17-slot-memory-capsule-v2"
-WP17_CAPSULE_PROVENANCE_CONTRACT = "WP17-slot-capsule-provenance-summary-v1"
+WP17_SLOT_TRANSACTION_CONTRACT = "WP17-slot-memory-transaction-v2"
+WP17_SLOT_STATE_CONTRACT = "WP17-slot-memory-state-v2"
+WP17_SLOT_CAPSULE_CONTRACT = "WP17-slot-memory-capsule-v3"
+WP17_CAPSULE_PROVENANCE_CONTRACT = "WP17-slot-capsule-provenance-summary-v2"
+WP17_SLOT_REPAIR_CONTRACT = "WP17-slot-memory-repair-v1"
 WP17_BUDGET_TOKENIZER = "VCAH-unicode-budget-tokenizer-v1"
 WP17_SLOT_NAMES = (
     "location",
@@ -53,6 +54,25 @@ _TOKEN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.U
 class SlotTransactionError(ValueError):
     """Raised when a model-authored slot transaction violates the contract."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "slot_validation_error",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = str(code)
+        self.details = deepcopy(dict(details or {}))
+
+    def repair_contract(self) -> dict[str, Any]:
+        return {
+            "contract": WP17_SLOT_REPAIR_CONTRACT,
+            "error_code": self.code,
+            "message": str(self),
+            "details": deepcopy(self.details),
+        }
+
 
 _FORBIDDEN_MODEL_KEYS = {
     "question",
@@ -76,12 +96,15 @@ def budget_token_count(text: str) -> int:
 
 
 def tail_budget_text(text: str, *, max_tokens: int) -> str:
-    """Keep the most recent protocol tokens without exceeding ``max_tokens``."""
+    """Keep a token-bounded suffix without rewriting its bytes or punctuation."""
     limit = max(0, int(max_tokens))
-    tokens = budget_tokens(text)
-    if not tokens or limit == 0:
+    source = str(text)
+    matches = tuple(_TOKEN_RE.finditer(source))
+    if not matches or limit == 0:
         return ""
-    return " ".join(tokens[-limit:])
+    if len(matches) <= limit:
+        return source
+    return source[matches[-limit].start() :]
 
 
 def validate_observations(
@@ -215,12 +238,6 @@ class SlotMemoryState:
             observations_by_id=observations_by_id,
         )
         touched = {row["slot"] for row in normalized_operations}
-        missing_lifecycle = working_before - touched
-        if missing_lifecycle:
-            raise SlotTransactionError(
-                "working slots require an explicit lifecycle operation: "
-                + ",".join(sorted(missing_lifecycle))
-            )
 
         candidate = deepcopy(self.records)
         transaction_events: list[dict[str, Any]] = []
@@ -232,6 +249,22 @@ class SlotMemoryState:
                 observations_by_id=observations_by_id,
             )
             transaction_events.append(event)
+        for name in sorted(working_before - touched):
+            record = candidate[name]
+            transaction_events.append(
+                {
+                    "event": "slot_lifecycle",
+                    "segment_id": str(segment_id),
+                    "slot": name,
+                    "operation": "implicit_retain",
+                    "from_status": str(record["status"]),
+                    "to_status": str(record["status"]),
+                    "from_version": int(record["version"]),
+                    "to_version": int(record["version"]),
+                    "observation_ids": [],
+                    "provenance": list(record["provenance"]),
+                }
+            )
         self._validate_cross_slot_invariants(candidate)
 
         prior_records = self.records
@@ -283,11 +316,30 @@ class SlotMemoryState:
             name: int(record["version"])
             for name, record in sorted(self.records.items())
         }
-        context = "" if not slots and not versions else _canonical_json(
+        working_names = {row["slot"] for row in slots}
+        visible_slots = [
             {
-                "provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
-                "slots": slots,
-                "versions": versions,
+                "slot": row["slot"],
+                "version": row["version"],
+                "status": row["status"],
+                "value": deepcopy(row["value"]),
+            }
+            for row in slots
+        ]
+        inactive_versions = {
+            name: version for name, version in versions.items() if name not in working_names
+        }
+        visible_payload = {
+            "slots": visible_slots,
+            "inactive_versions": inactive_versions,
+        }
+        context = "" if not slots and not versions else _canonical_json(visible_payload)
+        semantic_context = "" if not slots else _canonical_json(
+            {
+                "slots": [
+                    {"slot": row["slot"], "value": deepcopy(row["value"])}
+                    for row in slots
+                ]
             }
         )
         payload = {
@@ -300,6 +352,15 @@ class SlotMemoryState:
         }
         payload["tokenizer"] = WP17_BUDGET_TOKENIZER
         payload["token_count"] = budget_token_count(context)
+        payload["semantic_token_count"] = budget_token_count(semantic_context)
+        payload["overhead_token_count"] = max(
+            0, payload["token_count"] - payload["semantic_token_count"]
+        )
+        payload["overhead_share"] = (
+            payload["overhead_token_count"] / payload["token_count"]
+            if payload["token_count"]
+            else 0.0
+        )
         payload["token_budget"] = self.token_budget
         payload["within_budget"] = payload["token_count"] <= self.token_budget
         return payload
@@ -347,16 +408,26 @@ class SlotMemoryState:
         observations_by_id: Mapping[str, Mapping[str, Any]],
     ) -> tuple[dict[str, Any], ...]:
         normalized = []
-        touched: set[str] = set()
+        operation_counts: dict[str, int] = {}
         for raw in rows:
             row = dict(raw)
             operation = str(row.get("operation", "") or "").strip().casefold()
             slot = str(row.get("slot", "") or "").strip().casefold()
             if operation not in WP17_SLOT_OPERATIONS:
                 raise SlotTransactionError(f"unsupported slot operation: {operation}")
-            if slot not in WP17_SLOT_NAMES or slot in touched:
-                raise SlotTransactionError("each known slot can be operated on at most once")
-            touched.add(slot)
+            if slot not in WP17_SLOT_NAMES:
+                raise SlotTransactionError(
+                    "slot operation references an unknown slot",
+                    code="unknown_slot",
+                    details={"slot": slot, "allowed_slots": list(WP17_SLOT_NAMES)},
+                )
+            operation_counts[slot] = operation_counts.get(slot, 0) + 1
+            if operation_counts[slot] > 3:
+                raise SlotTransactionError(
+                    "each known slot can receive at most three sequential operations",
+                    code="too_many_slot_operations",
+                    details={"slot": slot, "maximum": 3},
+                )
             observation_ids = tuple(
                 dict.fromkeys(
                     str(value).strip()
@@ -371,7 +442,14 @@ class SlotMemoryState:
                 raise SlotTransactionError(
                     "slot operation references unknown observation IDs "
                     f"{unknown_observation_ids}; valid observation IDs are "
-                    f"{sorted(observations_by_id)}"
+                    f"{sorted(observations_by_id)}",
+                    code="unknown_observation_ids",
+                    details={
+                        "slot": slot,
+                        "operation": operation,
+                        "unknown_observation_ids": unknown_observation_ids,
+                        "valid_observation_ids": sorted(observations_by_id),
+                    },
                 )
             if operation in {"write", "update", "close"} and not observation_ids:
                 raise SlotTransactionError(f"{operation} requires current observations")
@@ -405,7 +483,19 @@ class SlotMemoryState:
         prior = deepcopy(records.get(name))
         prior_version = int(prior.get("version", 0) if prior else 0)
         if int(operation["expected_version"]) != prior_version:
-            raise SlotTransactionError(f"slot version mismatch for {name}")
+            raise SlotTransactionError(
+                f"slot version mismatch for {name}",
+                code="slot_version_mismatch",
+                details={
+                    "slot": name,
+                    "operation": action,
+                    "expected_version": int(operation["expected_version"]),
+                    "actual_version": prior_version,
+                    "current_status": str(
+                        prior.get("status", "absent") if prior else "absent"
+                    ),
+                },
+            )
         prior_status = str(prior.get("status", "absent") if prior else "absent")
         observation_ids = tuple(operation["observation_ids"])
         current_evidence = tuple(
@@ -418,7 +508,21 @@ class SlotMemoryState:
 
         if action == "write":
             if prior_status in _WORKING_STATUSES:
-                raise SlotTransactionError(f"cannot write active working slot {name}")
+                required = (
+                    ["close", "archive", "write"]
+                    if prior_status == "active"
+                    else ["archive", "write"]
+                )
+                raise SlotTransactionError(
+                    f"cannot write working slot {name}",
+                    code="write_on_working_slot",
+                    details={
+                        "slot": name,
+                        "current_status": prior_status,
+                        "current_version": prior_version,
+                        "required_operation_sequence": required,
+                    },
+                )
             record = {
                 "slot": name,
                 "version": prior_version + 1,
@@ -429,12 +533,23 @@ class SlotMemoryState:
             }
         elif action == "update":
             if prior_status != "active":
-                raise SlotTransactionError(f"cannot update non-active slot {name}")
+                raise SlotTransactionError(
+                    f"cannot update non-active slot {name}",
+                    code="update_on_non_active_slot",
+                    details={"slot": name, "current_status": prior_status},
+                )
+            value_changed = operation["value"] != prior["value"]
             record = {
                 **prior,
                 "version": prior_version + 1,
                 "value": deepcopy(operation["value"]),
-                "provenance": list(dict.fromkeys(tuple(prior["provenance"]) + current_evidence)),
+                "provenance": (
+                    list(current_evidence)
+                    if value_changed
+                    else list(
+                        dict.fromkeys(tuple(prior["provenance"]) + current_evidence)
+                    )
+                ),
                 "last_verified_segment_id": segment_id,
             }
         elif action == "retain":
@@ -492,16 +607,37 @@ class SlotMemoryState:
             return
         encounter = records.get("active_encounter")
         if not encounter or encounter.get("status") != "active":
-            raise SlotTransactionError("active_participants requires an active encounter")
+            raise SlotTransactionError(
+                "active_participants requires an active encounter",
+                code="participants_without_active_encounter",
+                details={
+                    "participant_slot": "active_participants",
+                    "encounter_slot": "active_encounter",
+                    "encounter_status": (
+                        str(encounter.get("status")) if encounter else "absent"
+                    ),
+                    "repair": "close_or_archive_active_participants_before_closing_encounter",
+                },
+            )
         participant_value = participants.get("value")
         encounter_value = encounter.get("value")
         if not isinstance(participant_value, Mapping) or not isinstance(encounter_value, Mapping):
-            raise SlotTransactionError("encounter/participant values must be objects")
+            raise SlotTransactionError(
+                "encounter/participant values must be objects",
+                code="encounter_participant_value_shape",
+                details={"repair": "write_both_slots_with_the_required_object_shapes"},
+            )
         event_ref = str(participant_value.get("event_ref", "") or "")
         event_id = str(encounter_value.get("event_id", "") or "")
         people = participant_value.get("participants")
         if not event_ref or event_ref != event_id or not isinstance(people, list) or not people:
-            raise SlotTransactionError("active_participants must bind participants to active_encounter.event_id")
+            raise SlotTransactionError(
+                "active_participants must bind participants to active_encounter.event_id",
+                code="participant_encounter_binding_mismatch",
+                details={
+                    "repair": "update_or_close_active_participants_in_the_same_transaction"
+                },
+            )
 
     def _enforce_budget(self, *, segment_id: str) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -523,7 +659,13 @@ class SlotMemoryState:
                     f"{capsule['token_count']} tokens across {active_count} active slots and "
                     f"exceeds the frozen {self.token_budget}-token budget; keep segment-local "
                     "details in structured_event_record, write fewer working slots, and shorten "
-                    "slot values"
+                    "slot values",
+                    code="active_capsule_budget_exceeded",
+                    details={
+                        "token_count": int(capsule["token_count"]),
+                        "token_budget": self.token_budget,
+                        "active_slot_count": active_count,
+                    },
                 )
             name, prior = min(
                 eligible,
@@ -577,6 +719,49 @@ def parse_transaction_response(raw: str) -> dict[str, Any] | None:
     return None
 
 
+def validate_construction_base(
+    payload: Mapping[str, Any],
+    *,
+    allowed_evidence_ids: Sequence[str],
+    evidence_id_map: Mapping[str, str] | None = None,
+    enforce_output_size: bool = True,
+) -> dict[str, Any]:
+    """Validate observations and SER without accepting any slot transition."""
+    _reject_forbidden_model_keys(payload)
+    if enforce_output_size and len(_canonical_json(payload)) > WP17_MAX_OUTPUT_JSON_CHARS:
+        raise SlotTransactionError(
+            f"construction output exceeds {WP17_MAX_OUTPUT_JSON_CHARS} JSON characters",
+            code="construction_output_too_large",
+            details={"maximum_json_chars": WP17_MAX_OUTPUT_JSON_CHARS},
+        )
+    if payload.get("contract") != WP17_SLOT_TRANSACTION_CONTRACT:
+        raise SlotTransactionError(
+            "construction output contract mismatch",
+            code="transaction_contract_mismatch",
+            details={"expected_contract": WP17_SLOT_TRANSACTION_CONTRACT},
+        )
+    operations = tuple(payload.get("slot_operations", ()) or ())
+    if not all(isinstance(row, Mapping) for row in operations):
+        raise SlotTransactionError(
+            "slot_operations must contain objects",
+            code="slot_operations_not_objects",
+        )
+    observations = validate_observations(
+        tuple(payload.get("observations", ()) or ()),
+        allowed_evidence_ids=allowed_evidence_ids,
+        evidence_id_map=evidence_id_map,
+    )
+    ser = validate_structured_event_record(
+        dict(payload.get("structured_event_record", {}) or {})
+    )
+    return {
+        "contract": WP17_SLOT_TRANSACTION_CONTRACT,
+        "observations": [dict(row) for row in observations],
+        "slot_operations": [deepcopy(dict(row)) for row in operations],
+        "structured_event_record": ser,
+    }
+
+
 def validate_construction_output(
     payload: Mapping[str, Any],
     *,
@@ -589,13 +774,12 @@ def validate_construction_output(
 ) -> dict[str, Any]:
     """Validate one arm output and apply state only for the E1C2 treatment."""
     normalized_arm = str(arm).strip().casefold()
-    _reject_forbidden_model_keys(payload)
-    if enforce_output_size and len(_canonical_json(payload)) > WP17_MAX_OUTPUT_JSON_CHARS:
-        raise SlotTransactionError(
-            f"construction output exceeds {WP17_MAX_OUTPUT_JSON_CHARS} JSON characters"
-        )
-    if payload.get("contract") != WP17_SLOT_TRANSACTION_CONTRACT:
-        raise SlotTransactionError("construction output contract mismatch")
+    base = validate_construction_base(
+        payload,
+        allowed_evidence_ids=allowed_evidence_ids,
+        evidence_id_map=evidence_id_map,
+        enforce_output_size=enforce_output_size,
+    )
     if normalized_arm == "e1c2":
         if state is None:
             raise SlotTransactionError("E1C2 requires an arm-local slot state")
@@ -605,23 +789,15 @@ def validate_construction_output(
             allowed_evidence_ids=allowed_evidence_ids,
             evidence_id_map=evidence_id_map,
         )
-    operations = tuple(payload.get("slot_operations", ()) or ())
+    operations = tuple(base["slot_operations"])
     if operations:
         raise SlotTransactionError("non-slot arms must return empty slot_operations")
-    observations = validate_observations(
-        tuple(payload.get("observations", ()) or ()),
-        allowed_evidence_ids=allowed_evidence_ids,
-        evidence_id_map=evidence_id_map,
-    )
-    ser = validate_structured_event_record(
-        dict(payload.get("structured_event_record", {}) or {})
-    )
     return {
         "contract": WP17_SLOT_TRANSACTION_CONTRACT,
         "segment_id": str(segment_id),
-        "observations": [dict(row) for row in observations],
+        "observations": base["observations"],
         "slot_operations": [],
-        "structured_event_record": ser,
+        "structured_event_record": base["structured_event_record"],
     }
 
 

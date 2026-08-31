@@ -8,6 +8,7 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
+    WP17_SLOT_REPAIR_CONTRACT,
     WP17_SLOT_CAPSULE_CONTRACT,
     WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
 )
@@ -31,12 +32,13 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "segment_duration_sec": 120.0,
             "frame_sampling_fps": 1.0,
             "max_frames_per_segment": 120,
-            "expected_segment_count": 4,
-            "expected_base_calls": 12,
-            "model_call_hard_cap": 14,
-            "canary_chain_case_id": "case-a",
-            "expected_canary_segment_count": 3,
-            "canary_model_call_hard_cap": 12,
+            "expected_segment_count": 6,
+            "expected_base_calls": 18,
+            "model_call_hard_cap": 440,
+            "canary_trigger_segment_id": "wp17slot_window-0_seg_0003",
+            "canary_selection_kind": "structural_failure_covering_chain",
+            "expected_canary_segment_count": 5,
+            "canary_model_call_hard_cap": 24,
             "expected_input_sha256": {
                 "timeline": "timeline-sha",
                 "dense_report": "dense-sha",
@@ -86,6 +88,14 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "working_capsule_contains_raw_provenance_ids": False,
             "full_provenance_preserved_in_state_and_ledger": True,
             "retain_may_refresh_provenance_without_value_change": True,
+            "maximum_operations_per_slot_per_transaction": 3,
+            "omitted_working_slot_operation": "implicit_retain",
+            "changed_update_provenance_policy": "replace",
+            "transaction_abstain_preserves_state": True,
+            "transaction_abstain_ser_endpoint_eligible": False,
+            "repair_contract": WP17_SLOT_REPAIR_CONTRACT,
+            "c1_c2_common_history_token_limit": 600,
+            "c1_tail_preserves_original_text": True,
         },
         "output_contract": {
             "structured_event_singletons_normalized_to_lists": True,
@@ -106,7 +116,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             {
                 "window_id": "window-0",
                 "virtual_start_sec": 10.0,
-                "virtual_end_sec": 490.0,
+                "virtual_end_sec": 730.0,
                 "case_ids": ["case-a"],
             }
         ],
@@ -125,13 +135,13 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
     )
 
     assert manifest["structural_gate_passed"] is True
-    assert manifest["counts"]["segments"] == 4
-    assert manifest["counts"]["canary_base_model_calls"] == 9
+    assert manifest["counts"]["segments"] == 6
+    assert manifest["counts"]["canary_base_model_calls"] == 15
     chain = manifest["canary_segment_chain"]
     ordinals = {
         row["segment_id"]: row["window_segment_ordinal"]
         for row in manifest["segments"]
     }
-    assert [ordinals[value] for value in chain] == [1, 2, 3]
+    assert [ordinals[value] for value in chain] == [0, 1, 2, 3, 4]
     assert manifest["segments"][1]["arm_execution_order"] == ["e1c1", "e1c2", "e1c0"]
     assert manifest["model_calls_during_freeze"] == 0

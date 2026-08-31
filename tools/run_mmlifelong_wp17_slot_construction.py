@@ -22,12 +22,14 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_SLOT_REPAIR_CONTRACT,
     WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
     SlotMemoryState,
     SlotTransactionError,
     budget_token_count,
     parse_transaction_response,
     tail_budget_text,
+    validate_construction_base,
     validate_construction_output,
 )
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
@@ -94,8 +96,8 @@ def run(args: argparse.Namespace) -> Path:
         raise ValueError("WP17 slot run selected no segments")
 
     run_manifest = {
-        "schema_version": "MMLifelongWP17SlotConstructionRunV3",
-        "contract": "WP17-3-slot-construction-run-v3",
+        "schema_version": "MMLifelongWP17SlotConstructionRunV4",
+        "contract": "WP17-3-slot-construction-run-v4",
         "mode": mode,
         "source_commit": str(args.source_commit),
         "protocol_manifest_sha256": file_sha256(protocol_path),
@@ -111,6 +113,10 @@ def run(args: argparse.Namespace) -> Path:
         "budget_tokenizer": WP17_BUDGET_TOKENIZER,
         "history_token_budget": history_budget,
         "slot_capsule_contract": WP17_SLOT_CAPSULE_CONTRACT,
+        "slot_repair_contract": WP17_SLOT_REPAIR_CONTRACT,
+        "maximum_attempts_per_result": 3,
+        "transaction_abstain_preserves_state": True,
+        "transaction_abstain_ser_endpoint_eligible": False,
         "capsule_provenance_projection_contract": WP17_CAPSULE_PROVENANCE_CONTRACT,
         "image_preprocessing": preprocessing_policy,
         "ocr_aggregation_contract": WP17_OCR_AGGREGATION_CONTRACT,
@@ -152,6 +158,10 @@ def run(args: argparse.Namespace) -> Path:
             "ocr_aggregation_contract",
             "evidence_alias_contract",
             "slot_capsule_contract",
+            "slot_repair_contract",
+            "maximum_attempts_per_result",
+            "transaction_abstain_preserves_state",
+            "transaction_abstain_ser_endpoint_eligible",
             "capsule_provenance_projection_contract",
             "output_limits",
         ):
@@ -165,6 +175,7 @@ def run(args: argparse.Namespace) -> Path:
     results: dict[tuple[str, str], dict[str, Any]] = {}
     slot_state = SlotMemoryState("e1c2", token_budget=history_budget)
     previous_caption = ""
+    c1_chain_gap = False
     active_window = ""
 
     for segment in segments:
@@ -174,6 +185,7 @@ def run(args: argparse.Namespace) -> Path:
             active_window = window_id
             slot_state = SlotMemoryState("e1c2", token_budget=history_budget)
             previous_caption = ""
+            c1_chain_gap = False
         start = float(segment["virtual_start_sec"])
         end = float(segment["virtual_end_sec"])
         canonical_ocr_packet = build_ocr_packet(
@@ -191,11 +203,11 @@ def run(args: argparse.Namespace) -> Path:
         prior_capsule = slot_state.capsule()
         c2_context = str(prior_capsule["context"])
         c2_tokens = int(prior_capsule["token_count"])
-        c1_context = tail_budget_text(previous_caption, max_tokens=c2_tokens)
+        c1_context = tail_budget_text(previous_caption, max_tokens=history_budget)
         c1_tokens = budget_token_count(c1_context)
         histories = {
             "e1c0": ("", 0, 0),
-            "e1c1": (c1_context, c1_tokens, c2_tokens),
+            "e1c1": (c1_context, c1_tokens, history_budget),
             "e1c2": (c2_context, c2_tokens, history_budget),
         }
 
@@ -252,20 +264,29 @@ def run(args: argparse.Namespace) -> Path:
                     if prior.get("status") == "success":
                         if prior.get("input_digests") != input_digests or prior.get("history_digest") != history_digest:
                             raise RuntimeError("WP17 slot resume input/history digest mismatch")
-                        normalized = validate_construction_output(
-                            dict(prior["model_output"]),
-                            arm=arm,
-                            segment_id=segment_id,
-                            allowed_evidence_ids=canonical_evidence_ids,
-                            state=slot_state if arm == "e1c2" else None,
-                            enforce_output_size=False,
-                        )
+                        if prior.get("slot_transaction_abstained") is True:
+                            normalized = validate_construction_base(
+                                dict(prior["model_output"]),
+                                allowed_evidence_ids=canonical_evidence_ids,
+                                enforce_output_size=False,
+                            )
+                            normalized["state_digest"] = slot_state.digest()
+                        else:
+                            normalized = validate_construction_output(
+                                dict(prior["model_output"]),
+                                arm=arm,
+                                segment_id=segment_id,
+                                allowed_evidence_ids=canonical_evidence_ids,
+                                state=slot_state if arm == "e1c2" else None,
+                                enforce_output_size=False,
+                            )
                         if arm == "e1c2" and normalized.get("state_digest") != prior.get("state_digest"):
                             raise RuntimeError("WP17 slot resume state digest mismatch")
                         if arm == "e1c1":
                             previous_caption = str(
                                 normalized["structured_event_record"]["summary"]
                             )
+                            c1_chain_gap = False
                         results[(segment_id, arm)] = prior
                         _write_summary(out_root, results, expected_results, call_count, hard_cap)
                         continue
@@ -300,6 +321,10 @@ def run(args: argparse.Namespace) -> Path:
                         "history_token_count": history_tokens,
                         "history_token_limit": history_limit,
                         "history_tokenizer": WP17_BUDGET_TOKENIZER,
+                        "history_chain_gap": bool(c1_chain_gap) if arm == "e1c1" else False,
+                        "history_degenerate_to_no_context": bool(
+                            arm == "e1c1" and c1_chain_gap and not history
+                        ),
                         "input_digests": input_digests,
                         "frame_count": len(frames),
                         "ocr_source_evidence_count": sum(
@@ -319,20 +344,20 @@ def run(args: argparse.Namespace) -> Path:
                 )
                 _write_json_atomic(result_path, result)
                 results[(segment_id, arm)] = result
-                if result["status"] != "success":
-                    _write_summary(out_root, results, expected_results, call_count, hard_cap)
-                    raise RuntimeError(
-                        f"WP17 slot arm failed: {segment_id}/{arm}/{result.get('failure_code', 'unknown')}"
-                    )
                 if arm == "e1c1":
-                    previous_caption = str(
-                        result["model_output"]["structured_event_record"]["summary"]
-                    )
+                    if result["status"] == "success":
+                        previous_caption = str(
+                            result["model_output"]["structured_event_record"]["summary"]
+                        )
+                        c1_chain_gap = False
+                    else:
+                        previous_caption = ""
+                        c1_chain_gap = True
                 _write_summary(out_root, results, expected_results, call_count, hard_cap)
                 print(
                     "WP17_SLOT_DONE "
                     f"completed={sum(row.get('status') == 'success' for row in results.values())}/{expected_results} "
-                    f"segment={segment_id} arm={arm} status=success calls={call_count}/{hard_cap}",
+                    f"segment={segment_id} arm={arm} status={result['status']} calls={call_count}/{hard_cap}",
                     flush=True,
                 )
     summary_path = _write_summary(out_root, results, expected_results, call_count, hard_cap)
@@ -363,23 +388,15 @@ def _run_one(
     remaining_calls: int,
 ) -> tuple[dict[str, Any], int]:
     started = time.monotonic()
-    attempts = []
-    repair_error = ""
+    attempts: list[dict[str, Any]] = []
+    repair_contract: dict[str, Any] | None = None
+    repair_mode = "base"
+    abstain_base: dict[str, Any] | None = None
+    illegal_operation_contracts: list[dict[str, Any]] = []
     consumed = 0
-    for attempt_index in range(2):
+    for attempt_index in range(3):
         if consumed >= remaining_calls:
-            return (
-                {
-                    "schema_version": "MMLifelongWP17SlotConstructionResultV2",
-                    "segment_id": segment_id,
-                    "arm": arm,
-                    "status": "failed",
-                    "failure_code": "model_call_hard_cap_exhausted",
-                    "attempts": attempts,
-                    "duration_sec": round(time.monotonic() - started, 3),
-                },
-                consumed,
-            )
+            break
         prompt = construction_prompt(
             arm=arm,
             segment_duration_sec=duration_sec,
@@ -389,7 +406,8 @@ def _run_one(
             history_context=history,
             history_token_count=history_tokens,
             history_token_limit=history_limit,
-            repair_error=repair_error,
+            repair_contract=repair_contract,
+            repair_mode=repair_mode,
         )
         prompt_digest = stable_digest(prompt)
         consumed += 1
@@ -414,9 +432,11 @@ def _run_one(
                     "prompt_digest": prompt_digest,
                 }
             )
+            if arm == "e1c2" and abstain_base is not None:
+                break
             return (
                 {
-                    "schema_version": "MMLifelongWP17SlotConstructionResultV2",
+                    "schema_version": "MMLifelongWP17SlotConstructionResultV3",
                     "segment_id": segment_id,
                     "arm": arm,
                     "status": "failed",
@@ -428,7 +448,22 @@ def _run_one(
             )
         parsed = parse_transaction_response(raw)
         if parsed is None:
-            validation_error = "response_not_json_object"
+            finish_reason = str(metadata.get("finish_reason", "") or "")
+            failure_code = (
+                "response_truncated" if finish_reason == "length" else "response_malformed"
+            )
+            attempts.append(
+                {
+                    "attempt_index": attempt_index + 1,
+                    "status": "validation_failed",
+                    "failure_code": failure_code,
+                    "prompt_digest": prompt_digest,
+                    "response_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                    "response_metadata": metadata,
+                }
+            )
+            repair_mode = "serialization"
+            continue
         else:
             model_output_json_chars = len(
                 json.dumps(parsed, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -443,7 +478,19 @@ def _run_one(
                     evidence_id_map=evidence_id_map,
                 )
             except SlotTransactionError as exc:
-                validation_error = str(exc)
+                failure_code = exc.code
+                semantic_repair = exc.repair_contract()
+                try:
+                    base = validate_construction_base(
+                        parsed,
+                        allowed_evidence_ids=allowed_evidence_ids,
+                        evidence_id_map=evidence_id_map,
+                    )
+                except SlotTransactionError:
+                    base = None
+                if arm == "e1c2" and base is not None:
+                    abstain_base = base
+                    illegal_operation_contracts.append(semantic_repair)
             else:
                 attempts.append(
                     {
@@ -456,7 +503,7 @@ def _run_one(
                 )
                 return (
                     {
-                        "schema_version": "MMLifelongWP17SlotConstructionResultV2",
+                        "schema_version": "MMLifelongWP17SlotConstructionResultV3",
                         "segment_id": segment_id,
                         "arm": arm,
                         "status": "success",
@@ -480,6 +527,10 @@ def _run_one(
                         "attempts": attempts,
                         "attempt_count": len(attempts),
                         "validation_retry_count": attempt_index,
+                        "slot_transaction_abstained": False,
+                        "ser_endpoint_eligible": True,
+                        "ser_trust_status": "trusted",
+                        "illegal_operation_count": len(illegal_operation_contracts),
                         "duration_sec": round(time.monotonic() - started, 3),
                     },
                     consumed,
@@ -488,21 +539,78 @@ def _run_one(
             {
                 "attempt_index": attempt_index + 1,
                 "status": "validation_failed",
-                "failure_code": validation_error[:240],
+                "failure_code": failure_code,
+                "repair_contract": semantic_repair,
                 "prompt_digest": prompt_digest,
                 "response_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
                 "response_metadata": metadata,
             }
         )
-        repair_error = validation_error
+        repair_contract = semantic_repair
+        repair_mode = "semantic"
+        if attempt_index > 0 and abstain_base is not None:
+            break
+    if arm == "e1c2" and state is not None and abstain_base is not None:
+        abstained_model_output = {
+            "contract": abstain_base["contract"],
+            "observations": abstain_base["observations"],
+            "slot_operations": [],
+            "structured_event_record": abstain_base["structured_event_record"],
+        }
+        abstain_event = {
+            "event": "slot_transaction_abstain",
+            "segment_id": segment_id,
+            "operation": "transaction_abstain",
+            "state_changed": False,
+            "ser_endpoint_eligible": False,
+        }
+        return (
+            {
+                "schema_version": "MMLifelongWP17SlotConstructionResultV3",
+                "segment_id": segment_id,
+                "arm": arm,
+                "status": "success",
+                "actual_model": client.model,
+                "input_digests": dict(input_digests),
+                "model_output": abstained_model_output,
+                "model_output_json_chars": len(
+                    json.dumps(
+                        abstained_model_output,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                ),
+                "state_digest": state.digest(),
+                "capsule": state.capsule(),
+                "lifecycle_events": [abstain_event],
+                "long_term_ledger_count": len(state.ledger),
+                "attempts": attempts,
+                "attempt_count": len(attempts),
+                "validation_retry_count": max(0, len(attempts) - 1),
+                "slot_transaction_abstained": True,
+                "ser_endpoint_eligible": False,
+                "ser_trust_status": "untrusted_for_endpoint",
+                "illegal_operation_count": len(illegal_operation_contracts),
+                "illegal_operation_contracts": illegal_operation_contracts,
+                "duration_sec": round(time.monotonic() - started, 3),
+            },
+            consumed,
+        )
+    terminal_code = (
+        "model_call_hard_cap_exhausted"
+        if consumed >= remaining_calls
+        else "validation_retry_exhausted"
+    )
     return (
         {
-            "schema_version": "MMLifelongWP17SlotConstructionResultV2",
+            "schema_version": "MMLifelongWP17SlotConstructionResultV3",
             "segment_id": segment_id,
             "arm": arm,
             "status": "failed",
-            "failure_code": "validation_retry_exhausted",
+            "failure_code": terminal_code,
             "attempts": attempts,
+            "illegal_operation_count": len(illegal_operation_contracts),
             "duration_sec": round(time.monotonic() - started, 3),
         },
         consumed,
@@ -520,8 +628,17 @@ def _write_summary(
     for row in results.values():
         status = str(row.get("status", "unknown"))
         statuses[status] = statuses.get(status, 0) + 1
+    abstentions = sum(
+        row.get("slot_transaction_abstained") is True for row in results.values()
+    )
+    ser_ineligible = sum(
+        row.get("ser_endpoint_eligible") is False for row in results.values()
+    )
+    illegal_operations = sum(
+        int(row.get("illegal_operation_count", 0) or 0) for row in results.values()
+    )
     summary = {
-        "schema_version": "MMLifelongWP17SlotConstructionSummaryV2",
+        "schema_version": "MMLifelongWP17SlotConstructionSummaryV3",
         "expected_results": int(expected_results),
         "completed_results": len(results),
         "successes": statuses.get("success", 0),
@@ -529,6 +646,9 @@ def _write_summary(
         "status_counts": statuses,
         "model_calls": int(model_calls),
         "model_call_hard_cap": int(hard_cap),
+        "slot_transaction_abstentions": abstentions,
+        "ser_endpoint_ineligible": ser_ineligible,
+        "illegal_operation_attempts": illegal_operations,
         "complete": statuses.get("success", 0) == int(expected_results),
     }
     path = Path(out_root) / "run_summary.json"

@@ -9,12 +9,15 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping
 
-from vcah.occurrence_negative_sidecar import file_sha256
+from vcah.occurrence_negative_sidecar import file_sha256, stable_digest
 from vcah.virtual_video import VirtualVideoWorkspace
 from vcah.wp17_slot_memory import (
     WP17_CAPSULE_PROVENANCE_CONTRACT,
     WP17_SLOT_CAPSULE_CONTRACT,
     SlotMemoryState,
+    budget_token_count,
+    tail_budget_text,
+    validate_construction_base,
     validate_construction_output,
 )
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
@@ -52,8 +55,10 @@ def run(args: argparse.Namespace) -> Path:
     result_rows: list[dict[str, Any]] = []
     replay_errors: list[dict[str, str]] = []
     slot_state = SlotMemoryState("e1c2", token_budget=600)
+    previous_caption = ""
     active_window = ""
     context_pairs = []
+    history_replay_errors: list[dict[str, str]] = []
 
     for segment in segments:
         segment_id = str(segment["segment_id"])
@@ -61,6 +66,7 @@ def run(args: argparse.Namespace) -> Path:
         if window_id != active_window:
             active_window = window_id
             slot_state = SlotMemoryState("e1c2", token_budget=600)
+            previous_caption = ""
         start = float(segment["virtual_start_sec"])
         end = float(segment["virtual_end_sec"])
         ocr_packet = build_ocr_packet(
@@ -76,6 +82,8 @@ def run(args: argparse.Namespace) -> Path:
             end_sec=end,
         )
         by_arm = {}
+        expected_c1_context = tail_budget_text(previous_caption, max_tokens=600)
+        expected_c2_context = str(slot_state.capsule()["context"])
         for arm in tuple(segment["arm_execution_order"]):
             path = run_root / "segments" / segment_id / f"{arm}.json"
             if not path.is_file():
@@ -91,20 +99,53 @@ def run(args: argparse.Namespace) -> Path:
                     {"segment_id": segment_id, "arm": str(arm), "error": "non_success"}
                 )
                 continue
+            normalized_arm = str(arm)
+            expected_history = (
+                ""
+                if normalized_arm == "e1c0"
+                else expected_c1_context
+                if normalized_arm == "e1c1"
+                else expected_c2_context
+            )
+            expected_limit = 0 if normalized_arm == "e1c0" else 600
+            if (
+                row.get("history_digest") != stable_digest(expected_history)
+                or int(row.get("history_token_count", -1))
+                != budget_token_count(expected_history)
+                or int(row.get("history_token_limit", -1)) != expected_limit
+            ):
+                history_replay_errors.append(
+                    {
+                        "segment_id": segment_id,
+                        "arm": normalized_arm,
+                        "error": "history_replay_mismatch",
+                    }
+                )
             allowed = (
                 frame_evidence_ids(segment_id, int(row.get("frame_count", 0) or 0))
                 + tuple(str(value["evidence_id"]) for value in ocr_packet)
                 + tuple(str(value["evidence_id"]) for value in asr_packet)
             )
             try:
-                normalized = validate_construction_output(
-                    dict(row["model_output"]),
-                    arm=str(arm),
-                    segment_id=segment_id,
-                    allowed_evidence_ids=allowed,
-                    state=slot_state if str(arm) == "e1c2" else None,
-                    enforce_output_size=False,
-                )
+                if normalized_arm == "e1c2" and row.get(
+                    "slot_transaction_abstained"
+                ) is True:
+                    normalized = validate_construction_base(
+                        dict(row["model_output"]),
+                        allowed_evidence_ids=allowed,
+                        enforce_output_size=False,
+                    )
+                    normalized["state_digest"] = slot_state.digest()
+                    normalized["capsule"] = slot_state.capsule()
+                else:
+                    normalized = validate_construction_output(
+                        dict(row["model_output"]),
+                        arm=normalized_arm,
+                        segment_id=segment_id,
+                        allowed_evidence_ids=allowed,
+                        state=slot_state if normalized_arm == "e1c2" else None,
+                        enforce_output_size=False,
+                    )
             except Exception as exc:
                 replay_errors.append(
                     {
@@ -114,13 +155,17 @@ def run(args: argparse.Namespace) -> Path:
                     }
                 )
                 continue
-            if str(arm) == "e1c2" and normalized.get("state_digest") != row.get("state_digest"):
+            if normalized_arm == "e1c2" and normalized.get("state_digest") != row.get("state_digest"):
                 replay_errors.append(
                     {"segment_id": segment_id, "arm": str(arm), "error": "state_digest"}
                 )
-            if str(arm) == "e1c2" and normalized.get("capsule") != row.get("capsule"):
+            if normalized_arm == "e1c2" and normalized.get("capsule") != row.get("capsule"):
                 replay_errors.append(
                     {"segment_id": segment_id, "arm": str(arm), "error": "capsule"}
+                )
+            if normalized_arm == "e1c1":
+                previous_caption = str(
+                    normalized["structured_event_record"]["summary"]
                 )
         if "e1c1" in by_arm and "e1c2" in by_arm:
             context_pairs.append(
@@ -129,14 +174,20 @@ def run(args: argparse.Namespace) -> Path:
                     "c1_tokens": int(by_arm["e1c1"].get("history_token_count", 0) or 0),
                     "c1_limit": int(by_arm["e1c1"].get("history_token_limit", 0) or 0),
                     "c2_tokens": int(by_arm["e1c2"].get("history_token_count", 0) or 0),
+                    "c2_limit": int(by_arm["e1c2"].get("history_token_limit", 0) or 0),
                 }
             )
 
     safe_metadata_rows = [
-        dict(attempt.get("response_metadata", {}) or {})
+        dict(next(
+            (
+                attempt.get("response_metadata", {})
+                for attempt in reversed(tuple(row.get("attempts", ()) or ()))
+                if attempt.get("response_metadata")
+            ),
+            {},
+        ) or {})
         for row in result_rows
-        for attempt in tuple(row.get("attempts", ()) or ())
-        if attempt.get("status") == "success"
     ]
     all_serialized = json.dumps(
         {"manifest": run_manifest, "summary": summary, "results": result_rows},
@@ -167,7 +218,7 @@ def run(args: argparse.Namespace) -> Path:
         "source_commit_exact": run_manifest.get("source_commit")
         == protocol.get("provenance", {}).get("source_commit"),
         "run_contract_exact": run_manifest.get("contract")
-        == "WP17-3-slot-construction-run-v3",
+        == "WP17-3-slot-construction-run-v4",
         "frame_preprocessing_exact": run_manifest.get("image_preprocessing")
         == protocol["evidence_policy"]["frame_preprocessing"]
         and all(
@@ -237,6 +288,7 @@ def run(args: argparse.Namespace) -> Path:
         "model_call_cap_respected": int(summary.get("model_calls", 0))
         <= int(summary.get("model_call_hard_cap", -1)),
         "independent_transaction_replay_passed": not replay_errors,
+        "history_replay_exact": not history_replay_errors,
         "three_arm_input_digests_exact": all(
             len(
                 {
@@ -248,9 +300,17 @@ def run(args: argparse.Namespace) -> Path:
             == 1
             for segment in segments
         ),
-        "context_limit_pairing_exact": bool(context_pairs)
-        and all(row["c1_limit"] == row["c2_tokens"] for row in context_pairs),
-        "context_mean_budget_gap_within_10pct": abs(c1_mean - c2_mean) / 600.0 <= 0.10,
+        "common_context_cap_exact": bool(context_pairs)
+        and all(
+            row["c1_limit"] == 600 and row["c2_limit"] == 600
+            for row in context_pairs
+        ),
+        "c1_chain_has_no_silent_c0_fallback": all(
+            row.get("history_degenerate_to_no_context") is False
+            and row.get("history_chain_gap") is False
+            for row in result_rows
+            if row.get("arm") == "e1c1"
+        ),
         "capsules_within_600_tokens": all(
             row.get("capsule") is None
             or (
@@ -279,6 +339,36 @@ def run(args: argparse.Namespace) -> Path:
                     and len(str(slot.get("provenance_digest", ""))) == 64
                     for slot in tuple(row["capsule"].get("slots", ()) or ())
                 )
+            )
+            for row in result_rows
+        ),
+        "model_visible_capsule_is_compact": all(
+            row.get("capsule") is None
+            or not row["capsule"].get("context")
+            or (
+                set(json.loads(row["capsule"]["context"]))
+                == {"slots", "inactive_versions"}
+                and all(
+                    set(slot) == {"slot", "version", "status", "value"}
+                    for slot in json.loads(row["capsule"]["context"])["slots"]
+                )
+            )
+            for row in result_rows
+        ),
+        "slot_transaction_abstain_contract_exact": all(
+            (
+                row.get("ser_endpoint_eligible") is False
+                and row.get("ser_trust_status") == "untrusted_for_endpoint"
+                and row.get("model_output", {}).get("slot_operations") == []
+                and len(tuple(row.get("lifecycle_events", ()) or ())) == 1
+                and row["lifecycle_events"][0].get("operation")
+                == "transaction_abstain"
+                and row["lifecycle_events"][0].get("state_changed") is False
+            )
+            if row.get("slot_transaction_abstained") is True
+            else (
+                row.get("ser_endpoint_eligible") is True
+                and row.get("ser_trust_status") == "trusted"
             )
             for row in result_rows
         ),
@@ -321,8 +411,8 @@ def run(args: argparse.Namespace) -> Path:
     }
     gates["structural_gate_passed"] = all(gates.values())
     report = {
-        "schema_version": "MMLifelongWP17SlotConstructionAuditV1",
-        "contract": "WP17-3-slot-construction-audit-v1",
+        "schema_version": "MMLifelongWP17SlotConstructionAuditV2",
+        "contract": "WP17-3-slot-construction-audit-v2",
         "decision": (
             "WP17_3_SLOT_CANARY_PASSED"
             if gates["structural_gate_passed"] and mode == "canary"
@@ -338,14 +428,46 @@ def run(args: argparse.Namespace) -> Path:
             "successes": sum(row.get("status") == "success" for row in result_rows),
             "model_calls": int(summary.get("model_calls", 0)),
             "replay_errors": len(replay_errors),
+            "history_replay_errors": len(history_replay_errors),
+            "transaction_abstentions": sum(
+                row.get("slot_transaction_abstained") is True
+                for row in result_rows
+            ),
+            "ser_endpoint_ineligible": sum(
+                row.get("ser_endpoint_eligible") is False for row in result_rows
+            ),
+            "illegal_operation_attempts": sum(
+                int(row.get("illegal_operation_count", 0) or 0)
+                for row in result_rows
+            ),
+            "implicit_retains": sum(
+                event.get("operation") == "implicit_retain"
+                for row in result_rows
+                for event in tuple(row.get("lifecycle_events", ()) or ())
+            ),
         },
         "context_budget": {
             "c1_mean_tokens": round(c1_mean, 3),
             "c2_mean_tokens": round(c2_mean, 3),
             "absolute_mean_gap": round(abs(c1_mean - c2_mean), 3),
             "budget": 600,
+            "mean_gap_is_diagnostic_not_gate": True,
         },
         "replay_error_fingerprints": replay_errors[:5],
+        "history_replay_error_fingerprints": history_replay_errors[:5],
+        "capsule_overhead": {
+            "mean_share": round(
+                mean(
+                    float(row["capsule"].get("overhead_share", 0.0))
+                    for row in result_rows
+                    if row.get("capsule") is not None
+                ),
+                6,
+            )
+            if any(row.get("capsule") is not None for row in result_rows)
+            else 0.0,
+            "diagnostic_not_gate": True,
+        },
         "gates": gates,
         "structural_gate_passed": gates["structural_gate_passed"],
         "endpoint_values_evaluated": False,

@@ -222,7 +222,8 @@ def construction_prompt(
     history_context: str,
     history_token_count: int,
     history_token_limit: int,
-    repair_error: str = "",
+    repair_contract: Mapping[str, Any] | None = None,
+    repair_mode: str = "base",
 ) -> str:
     normalized_arm = str(arm).strip().casefold()
     if normalized_arm not in {"e1c0", "e1c1", "e1c2"}:
@@ -231,9 +232,12 @@ def construction_prompt(
         "Return slot_operations=[] for this non-slot arm."
         if normalized_arm != "e1c2"
         else (
-            "Maintain the working slots using only the allowed operations. Every slot currently present "
-            "in history.slots must receive exactly one operation in this segment. Use expected_version "
-            "from history.versions (0 when absent). write/update/close require observation_ids from this "
+            "Maintain the working slots using only the allowed operations. A slot omitted from "
+            "slot_operations is retained unchanged by runtime. A slot may receive up to three ordered "
+            "operations in one transaction; increment expected_version after each operation. This permits "
+            "close -> archive -> write for an encounter handoff. Use the version in each history.slots row, "
+            "history.inactive_versions for inactive slots, and 0 when absent. write/update/close require "
+            "observation_ids from this "
             "segment; each slot_operations.observation_ids entry must exactly copy an observation_id "
             "from the observations array, never a frame/OCR/ASR evidence ID. retain cannot rewrite a "
             "value but may cite current observations to refresh provenance and last verification; an "
@@ -241,19 +245,31 @@ def construction_prompt(
             "attach observations. active_participants value must be "
             '{"event_ref":"<active encounter event_id>","participants":[...]}. '
             "active_encounter value must contain event_id. Do not put merely visible entities into "
-            "active_participants. The slot capsule is sparse cross-segment working memory, not a copy "
+            "active_participants. When replacing an encounter, also close/archive its active_participants "
+            "or write participants bound to the replacement event_id in the same transaction. The slot "
+            "capsule is sparse cross-segment working memory, not a copy "
             "of the current event record: do not instantiate every allowed slot, keep segment-local "
             "details only in structured_event_record, and use terse names/IDs/states as slot values. "
             "The serialized capsule must remain within 600 protocol tokens; target at most 400 tokens "
-            "before runtime overhead."
+            "before runtime overhead. Do not copy provenance metadata into slot values."
         )
     )
-    repair = "" if not repair_error else (
-        "\nThe previous response was rejected by the deterministic validator. Return a complete JSON "
-        "object with every required field (not a patch), preserve all array field types, and repair this "
-        "error: "
-        + str(repair_error)[:280]
-    )
+    normalized_repair_mode = str(repair_mode).strip().casefold()
+    if normalized_repair_mode not in {"base", "semantic", "serialization"}:
+        raise ValueError(f"unknown WP17 repair mode: {repair_mode}")
+    repair_parts: list[str] = []
+    if normalized_repair_mode == "serialization":
+        repair_parts.append(
+            "The previous response was not a valid complete JSON object. Re-emit exactly one complete "
+            "JSON object matching the schema; do not add markdown or explanatory prose."
+        )
+    if repair_contract:
+        repair_parts.append(
+            "The previous response was rejected. Return a complete JSON object, not a patch. "
+            "Preserve all required array types and follow this deterministic repair contract:\n"
+            + _canonical_json(dict(repair_contract))
+        )
+    repair = "" if not repair_parts else "\n" + "\n".join(repair_parts)
     schema = {
         "contract": WP17_SLOT_TRANSACTION_CONTRACT,
         "observations": [

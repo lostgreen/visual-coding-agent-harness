@@ -87,7 +87,7 @@ def test_slot_transaction_validates_observations_before_ops_and_binds_participan
     )
 
 
-def test_working_slots_require_explicit_lifecycle() -> None:
+def test_omitted_working_slots_are_implicitly_retained_without_version_change() -> None:
     state = SlotMemoryState("e1c2")
     state.apply(
         _transaction(
@@ -102,12 +102,157 @@ def test_working_slots_require_explicit_lifecycle() -> None:
         segment_id="segment-1",
         allowed_evidence_ids=("frame:1",),
     )
-    with pytest.raises(SlotTransactionError, match="explicit lifecycle"):
+    result = state.apply(
+        _transaction(),
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:1",),
+    )
+
+    assert state.records["current_activity"]["version"] == 1
+    assert result["lifecycle_events"][0]["operation"] == "implicit_retain"
+    assert result["lifecycle_events"][0]["from_version"] == 1
+    assert result["lifecycle_events"][0]["to_version"] == 1
+
+
+def test_closed_slot_can_archive_and_write_replacement_in_one_transaction() -> None:
+    state = SlotMemoryState("e1c2")
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "active_encounter",
+                "expected_version": 0,
+                "value": {"event_id": "enc-1"},
+                "observation_ids": ["obs-1"],
+            },
+            {
+                "operation": "close",
+                "slot": "active_encounter",
+                "expected_version": 1,
+                "observation_ids": ["obs-1"],
+            },
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+
+    result = state.apply(
+        _transaction(
+            {
+                "operation": "archive",
+                "slot": "active_encounter",
+                "expected_version": 2,
+                "observation_ids": [],
+            },
+            {
+                "operation": "write",
+                "slot": "active_encounter",
+                "expected_version": 3,
+                "value": {"event_id": "enc-2"},
+                "observation_ids": ["obs-1"],
+            },
+        ),
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:1",),
+    )
+
+    assert state.records["active_encounter"]["version"] == 4
+    assert state.records["active_encounter"]["value"] == {"event_id": "enc-2"}
+    assert [row["operation"] for row in result["lifecycle_events"]] == [
+        "archive",
+        "write",
+    ]
+
+
+def test_multi_operation_failure_is_atomic_and_returns_structured_repair() -> None:
+    state = SlotMemoryState("e1c2")
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "first"},
+                "observation_ids": ["obs-1"],
+            }
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    digest_before = state.digest()
+
+    with pytest.raises(SlotTransactionError) as captured:
         state.apply(
-            _transaction(),
+            _transaction(
+                {
+                    "operation": "close",
+                    "slot": "current_activity",
+                    "expected_version": 1,
+                    "observation_ids": ["obs-1"],
+                },
+                {
+                    "operation": "archive",
+                    "slot": "current_activity",
+                    "expected_version": 99,
+                    "observation_ids": [],
+                },
+            ),
             segment_id="segment-2",
             allowed_evidence_ids=("frame:1",),
         )
+
+    assert state.digest() == digest_before
+    repair = captured.value.repair_contract()
+    assert repair["error_code"] == "slot_version_mismatch"
+    assert repair["details"]["actual_version"] == 2
+    assert "value" not in json.dumps(repair)
+
+
+def test_participant_invariant_rejects_encounter_close_without_state_mutation() -> None:
+    state = SlotMemoryState("e1c2")
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "active_encounter",
+                "expected_version": 0,
+                "value": {"event_id": "enc-1"},
+                "observation_ids": ["obs-1"],
+            },
+            {
+                "operation": "write",
+                "slot": "active_participants",
+                "expected_version": 0,
+                "value": {
+                    "event_ref": "enc-1",
+                    "participants": ["player", "boss"],
+                },
+                "observation_ids": ["obs-1"],
+            },
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    digest_before = state.digest()
+
+    with pytest.raises(
+        SlotTransactionError, match="requires an active encounter"
+    ) as captured:
+        state.apply(
+            _transaction(
+                {
+                    "operation": "close",
+                    "slot": "active_encounter",
+                    "expected_version": 1,
+                    "observation_ids": ["obs-1"],
+                }
+            ),
+            segment_id="segment-2",
+            allowed_evidence_ids=("frame:1",),
+        )
+
+    assert state.digest() == digest_before
+    assert captured.value.code == "participants_without_active_encounter"
 
 
 def test_retain_can_refresh_provenance_without_rewriting_value() -> None:
@@ -161,6 +306,41 @@ def test_retain_can_refresh_provenance_without_rewriting_value() -> None:
             segment_id="segment-2",
             allowed_evidence_ids=("frame:1",),
         )
+
+
+def test_update_changed_value_replaces_instead_of_unions_provenance() -> None:
+    state = SlotMemoryState("e1c2")
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "walking"},
+                "observation_ids": ["obs-1"],
+            }
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    payload = _transaction(
+        {
+            "operation": "update",
+            "slot": "current_activity",
+            "expected_version": 1,
+            "value": {"activity": "running"},
+            "observation_ids": ["obs-1"],
+        }
+    )
+    payload["observations"][0]["evidence_ids"] = ["frame:2"]
+
+    state.apply(
+        payload,
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:2",),
+    )
+
+    assert state.records["current_activity"]["provenance"] == ["frame:2"]
 
 
 def test_archive_and_evict_remove_working_context_but_preserve_ledger() -> None:
@@ -258,9 +438,11 @@ def test_capsule_summarizes_lineage_but_state_and_ledger_keep_full_provenance() 
 
 
 def test_budget_tokenizer_and_response_parser_are_deterministic() -> None:
-    text = "older context 新状态 most recent"
+    text = "older context，新状态！ most recent"
     tail = tail_budget_text(text, max_tokens=3)
     assert budget_token_count(tail) == 3
+    assert tail == "！ most recent"
+    assert tail_budget_text(text, max_tokens=99) == text
     payload = _transaction()
     assert parse_transaction_response("```json\n" + json.dumps(payload) + "\n```") == payload
 

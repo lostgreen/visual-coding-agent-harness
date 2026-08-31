@@ -13,6 +13,7 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_SLOT_REPAIR_CONTRACT,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
     WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
@@ -23,8 +24,8 @@ from vcah.wp17_slot_runner import (
 )
 
 
-WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v8"
-WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v8"
+WP17_3_PROTOCOL_CONTRACT = "WP17-3-slot-memory-2min-protocol-v9"
+WP17_3_MANIFEST_CONTRACT = "WP17-3-slot-memory-2min-manifest-v9"
 WP17_3_ARMS = ("e1c0", "e1c1", "e1c2")
 
 
@@ -49,7 +50,6 @@ def build_wp17_3_protocol_manifest(
 
     segments: list[dict[str, Any]] = []
     by_window: dict[str, list[str]] = {}
-    case_windows: dict[str, list[str]] = {}
     for raw_window in tuple(timeline.get("windows", ()) or ()):
         window = dict(raw_window)
         window_id = str(window["window_id"])
@@ -78,19 +78,20 @@ def build_wp17_3_protocol_manifest(
             )
             ids.append(segment_id)
         by_window[window_id] = ids
-        for case_id in tuple(window.get("case_ids", ()) or ()):
-            case_windows.setdefault(str(case_id), []).append(window_id)
-
-    canary_case_id = str(scope["canary_chain_case_id"])
-    windows = case_windows.get(canary_case_id, [])
-    if len(windows) != 1:
-        raise ValueError("WP17-3 canary case must resolve to exactly one merged window")
-    canary_ids = by_window[windows[0]]
+    trigger_id = str(scope["canary_trigger_segment_id"])
+    matching = [row for row in segments if row["segment_id"] == trigger_id]
+    if len(matching) != 1:
+        raise ValueError("WP17-3 canary trigger must resolve to exactly one segment")
+    trigger = matching[0]
+    canary_ids = by_window[str(trigger["window_id"])]
     canary_count = int(scope["expected_canary_segment_count"])
     if len(canary_ids) < canary_count:
         raise ValueError("WP17-3 canary window is too short")
-    middle = len(canary_ids) // 2
-    first = max(0, min(len(canary_ids) - canary_count, middle - canary_count // 2))
+    trigger_index = canary_ids.index(trigger_id)
+    first = max(
+        0,
+        min(len(canary_ids) - canary_count, trigger_index - canary_count + 1),
+    )
     canary_chain = canary_ids[first : first + canary_count]
 
     base_calls = len(segments) * len(WP17_3_ARMS)
@@ -116,13 +117,23 @@ def build_wp17_3_protocol_manifest(
         "segment_count_exact": len(segments) == int(scope["expected_segment_count"]),
         "base_call_count_exact": base_calls == int(scope["expected_base_calls"]),
         "full_hard_cap_covers_base": int(scope["model_call_hard_cap"]) >= base_calls,
+        "full_hard_cap_exact": int(scope["model_call_hard_cap"]) == 440,
+        "retry_capacity_at_least_20pct": (
+            int(scope["model_call_hard_cap"]) - base_calls
+        )
+        / base_calls
+        >= 0.20,
         "canary_chain_exact": len(canary_chain) == canary_count
+        and canary_count == 5
         and all(
             int(segments[next(i for i, row in enumerate(segments) if row["segment_id"] == right)]["window_segment_ordinal"])
             == int(segments[next(i for i, row in enumerate(segments) if row["segment_id"] == left)]["window_segment_ordinal"]) + 1
             for left, right in zip(canary_chain, canary_chain[1:])
         ),
-        "canary_call_cap_exact": int(scope["canary_model_call_hard_cap"]) == 12,
+        "canary_covers_structural_failure_trigger": trigger_id in canary_chain
+        and scope.get("canary_selection_kind")
+        == "structural_failure_covering_chain",
+        "canary_call_cap_exact": int(scope["canary_model_call_hard_cap"]) == 24,
         "question_gold_official_intervals_hidden": all(
             visibility.get(key) is False
             for key in (
@@ -206,6 +217,20 @@ def build_wp17_3_protocol_manifest(
             "retain_may_refresh_provenance_without_value_change"
         )
         is True,
+        "v9_lifecycle_contract_exact": state_policy.get(
+            "maximum_operations_per_slot_per_transaction"
+        )
+        == 3
+        and state_policy.get("omitted_working_slot_operation") == "implicit_retain"
+        and state_policy.get("changed_update_provenance_policy") == "replace"
+        and state_policy.get("transaction_abstain_preserves_state") is True
+        and state_policy.get("transaction_abstain_ser_endpoint_eligible") is False
+        and state_policy.get("repair_contract") == WP17_SLOT_REPAIR_CONTRACT,
+        "common_history_cap_and_byte_preservation": state_policy.get(
+            "c1_c2_common_history_token_limit"
+        )
+        == 600
+        and state_policy.get("c1_tail_preserves_original_text") is True,
         "no_slot_count_cap": state_policy.get("slot_count_cap") is None,
         "archive_evict_preserve_long_term": state_policy.get(
             "archive_evict_delete_long_term_memory"
@@ -222,7 +247,7 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV8",
+        "schema_version": "MMLifelongWP17SlotMemory2minManifestV9",
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"
