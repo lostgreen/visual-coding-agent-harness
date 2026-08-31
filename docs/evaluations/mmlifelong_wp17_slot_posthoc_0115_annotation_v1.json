@@ -1,0 +1,32 @@
+{
+  "schema_version": "MMLifelongWP17SlotPosthocAnnotationV1",
+  "contract": "WP17-slot-posthoc-development-annotation-v1",
+  "annotation_timing": "after_parent_partial_outputs_before_merged_completion_and_endpoint_read",
+  "unbiased_publication_claim_allowed": false,
+  "cases": {
+    "mmlifelong-game-test-0115": {
+      "entity_terms": ["Yin Tiger", "寅虎"],
+      "event_terms": [
+        "challenge Yin Tiger",
+        "fight Yin Tiger",
+        "battle with Yin Tiger",
+        "boss fight"
+      ],
+      "state_terms": [
+        "equipment upgrade",
+        "gourd upgrade",
+        "upgraded gourd",
+        "葫芦升级"
+      ],
+      "occurrence_terms": [
+        "second challenge",
+        "second fight",
+        "challenge again",
+        "fought again",
+        "rechallenge",
+        "occurrence 2"
+      ],
+      "ordinal_terms": ["second", "2nd", "occurrence 2", "第二次"]
+    }
+  }
+}
