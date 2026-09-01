@@ -678,8 +678,9 @@ class SlotMemoryState:
                         dict.fromkeys(tuple(prior["provenance"]) + current_evidence)
                     ),
                     "last_verified_segment_id": segment_id,
-                    "closed_at_transaction_index": self.transaction_index + 1,
                 }
+                if self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10:
+                    record["closed_at_transaction_index"] = self.transaction_index + 1
         elif action == "archive":
             if (
                 self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10

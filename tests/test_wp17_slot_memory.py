@@ -275,6 +275,7 @@ def test_v10_sweeps_closed_slot_after_one_untouched_transaction() -> None:
         segment_id="segment-1",
         allowed_evidence_ids=("frame:1",),
     )
+    assert state.records["current_activity"]["closed_at_transaction_index"] == 1
     result = state.apply(
         _transaction(),
         segment_id="segment-2",
@@ -316,6 +317,7 @@ def test_v9_compatibility_keeps_untouched_closed_slot() -> None:
         allowed_evidence_ids=("frame:1",),
     )
     assert state.records["current_activity"]["status"] == "closed"
+    assert "closed_at_transaction_index" not in state.records["current_activity"]
 
 
 def test_v9_serialization_and_digest_remain_byte_compatible() -> None:
