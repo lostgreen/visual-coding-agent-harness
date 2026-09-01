@@ -18,6 +18,15 @@ def continuation_semantic_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def cumulative_experiment_model_calls(summary: Mapping[str, Any]) -> int:
+    """Return model calls accumulated through all continuation hops."""
+
+    continuation = dict(summary.get("continuation", {}) or {})
+    if "total_experiment_model_calls" in continuation:
+        return int(continuation["total_experiment_model_calls"] or 0)
+    return int(summary.get("model_calls", 0) or 0)
+
+
 def build_continuation_entries(
     segments: Sequence[Mapping[str, Any]],
     parent_rows: Mapping[tuple[str, str], Mapping[str, Any]],

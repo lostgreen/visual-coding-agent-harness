@@ -35,6 +35,7 @@ from vcah.wp17_slot_memory import (
 from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
 from vcah.wp17_slot_continuation import (
     WP17_SLOT_CONTINUATION_CONTRACT,
+    cumulative_experiment_model_calls,
     index_continuation_entries,
 )
 from vcah.wp17_slot_runner import (
@@ -219,7 +220,7 @@ def run(args: argparse.Namespace) -> Path:
                 "parent_run_summary_sha256"
             ),
             "parent_source_commit": continuation_plan.get("parent_source_commit"),
-            "parent_model_calls": int(parent_summary.get("model_calls", 0) or 0),
+            "parent_model_calls": cumulative_experiment_model_calls(parent_summary),
             "planned_reuse_results": int(
                 continuation_plan.get("counts", {}).get("reuse", 0)
             ),

@@ -6,6 +6,7 @@ from vcah.wp17_slot_continuation import (
     WP17_SLOT_CONTINUATION_PLAN_CONTRACT,
     build_continuation_entries,
     continuation_semantic_payload,
+    cumulative_experiment_model_calls,
     index_continuation_entries,
 )
 
@@ -124,3 +125,14 @@ def test_chained_reuse_still_detects_semantic_mutation() -> None:
     }
 
     assert continuation_semantic_payload(child) != continuation_semantic_payload(parent)
+
+
+def test_cumulative_model_calls_use_full_parent_lineage() -> None:
+    base_summary = {"model_calls": 440}
+    continuation_summary = {
+        "model_calls": 121,
+        "continuation": {"total_experiment_model_calls": 561},
+    }
+
+    assert cumulative_experiment_model_calls(base_summary) == 440
+    assert cumulative_experiment_model_calls(continuation_summary) == 561
