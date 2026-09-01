@@ -5,6 +5,7 @@ import pytest
 from vcah.wp17_slot_continuation import (
     WP17_SLOT_CONTINUATION_PLAN_CONTRACT,
     build_continuation_entries,
+    continuation_semantic_payload,
     index_continuation_entries,
 )
 
@@ -86,3 +87,40 @@ def test_continuation_plan_rejects_duplicate_keys() -> None:
 
     with pytest.raises(ValueError, match="duplicate"):
         index_continuation_entries(plan)
+
+
+def test_chained_reuse_compares_semantic_payload_not_hop_provenance() -> None:
+    parent = {
+        "segment_id": "s1",
+        "arm": "e1c0",
+        "status": "success",
+        "structured_event_record": {"summary": "event"},
+        "continuation_provenance": {
+            "action": "rerun",
+            "plan_sha256": "first-hop",
+        },
+    }
+    child = {
+        **parent,
+        "continuation_provenance": {
+            "action": "reuse",
+            "plan_sha256": "second-hop",
+        },
+    }
+
+    assert continuation_semantic_payload(child) == continuation_semantic_payload(parent)
+
+
+def test_chained_reuse_still_detects_semantic_mutation() -> None:
+    parent = {
+        "status": "success",
+        "structured_event_record": {"summary": "event"},
+        "continuation_provenance": {"plan_sha256": "first-hop"},
+    }
+    child = {
+        **parent,
+        "structured_event_record": {"summary": "changed"},
+        "continuation_provenance": {"plan_sha256": "second-hop"},
+    }
+
+    assert continuation_semantic_payload(child) != continuation_semantic_payload(parent)

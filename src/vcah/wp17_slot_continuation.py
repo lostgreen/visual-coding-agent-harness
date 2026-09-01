@@ -10,6 +10,14 @@ WP17_SLOT_CONTINUATION_CONTRACT = "WP17-slot-construction-continuation-v1"
 WP17_SLOT_CONTINUATION_PLAN_CONTRACT = "WP17-slot-continuation-plan-v1"
 
 
+def continuation_semantic_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the result payload excluding hop-specific continuation metadata."""
+
+    payload = dict(row)
+    payload.pop("continuation_provenance", None)
+    return payload
+
+
 def build_continuation_entries(
     segments: Sequence[Mapping[str, Any]],
     parent_rows: Mapping[tuple[str, str], Mapping[str, Any]],

@@ -24,6 +24,7 @@ from vcah.wp17_slot_protocol import WP17_3_MANIFEST_CONTRACT
 from vcah.wp17_slot_continuation import (
     WP17_SLOT_CONTINUATION_CONTRACT,
     build_continuation_entries,
+    continuation_semantic_payload,
     index_continuation_entries,
 )
 from vcah.wp17_slot_runner import (
@@ -264,9 +265,9 @@ def run(args: argparse.Namespace) -> Path:
                 )
                 continue
             if entry.get("action") == "reuse":
-                copied = dict(row)
-                copied.pop("continuation_provenance", None)
-                if copied != parent_rows[key]:
+                copied = continuation_semantic_payload(row)
+                parent_payload = continuation_semantic_payload(parent_rows[key])
+                if copied != parent_payload:
                     continuation_errors.append(
                         {"segment_id": key[0], "arm": key[1], "error": "reuse_mutated"}
                     )
