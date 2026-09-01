@@ -106,6 +106,11 @@ def build_wp17_3_protocol_manifest(
     lifecycle_policy = str(
         state_policy.get("lifecycle_policy", WP17_SLOT_LIFECYCLE_POLICY_V9)
     )
+    expected_full_hard_cap = (
+        500
+        if lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+        else 440
+    )
     serialized_segments = json.dumps(segments, ensure_ascii=False)
     checks = {
         "protocol_frozen_before_wp17_3_outcomes": protocol.get(
@@ -122,7 +127,8 @@ def build_wp17_3_protocol_manifest(
         "segment_count_exact": len(segments) == int(scope["expected_segment_count"]),
         "base_call_count_exact": base_calls == int(scope["expected_base_calls"]),
         "full_hard_cap_covers_base": int(scope["model_call_hard_cap"]) >= base_calls,
-        "full_hard_cap_exact": int(scope["model_call_hard_cap"]) == 440,
+        "full_hard_cap_exact": int(scope["model_call_hard_cap"])
+        == expected_full_hard_cap,
         "retry_capacity_at_least_20pct": (
             int(scope["model_call_hard_cap"]) - base_calls
         )

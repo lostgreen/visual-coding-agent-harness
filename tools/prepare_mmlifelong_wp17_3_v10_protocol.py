@@ -121,7 +121,7 @@ def build_protocol(
             "max_frames_per_segment": next(iter(max_frames)),
             "expected_segment_count": 121,
             "expected_base_calls": 363,
-            "model_call_hard_cap": 440,
+            "model_call_hard_cap": 500,
             "canary_trigger_segment_id": str(trigger_segment_id),
             "canary_selection_kind": "structural_failure_covering_chain",
             "expected_canary_segment_count": 5,
@@ -175,7 +175,7 @@ def run(args: argparse.Namespace) -> Path:
     )
     temporary.replace(out_path)
     print(
-        "WP17_V10_PROTOCOL_PREPARED segments=121 base_calls=363 full_cap=440 "
+        "WP17_V10_PROTOCOL_PREPARED segments=121 base_calls=363 full_cap=500 "
         "canary_segments=5 canary_cap=24 model_calls=0 endpoints=false",
         flush=True,
     )

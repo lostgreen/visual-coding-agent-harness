@@ -159,6 +159,7 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
             "committed_memory_scope_requires_successful_transaction": True,
         }
     )
+    protocol["scope"]["model_call_hard_cap"] = 500
     protocol["endpoint_analysis_policy"] = {"development_cases_burned": True}
     v10_manifest = build_wp17_3_protocol_manifest(
         protocol,

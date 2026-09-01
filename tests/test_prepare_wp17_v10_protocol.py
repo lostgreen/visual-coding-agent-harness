@@ -54,6 +54,7 @@ def test_v10_preparation_freezes_reliability_variant_and_endpoint_scopes() -> No
     )
 
     assert protocol["contract"] == WP17_3_PROTOCOL_CONTRACT
+    assert protocol["scope"]["model_call_hard_cap"] == 500
     state_policy = protocol["state_policy"]
     assert state_policy["lifecycle_policy"] == WP17_SLOT_LIFECYCLE_POLICY_V10
     assert state_policy["closed_sweep_after_untouched_transactions"] == 1
