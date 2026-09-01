@@ -22,6 +22,8 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_SLOT_LIFECYCLE_POLICY_V9,
+    WP17_SLOT_LIFECYCLE_POLICY_V10,
     WP17_SLOT_REPAIR_CONTRACT,
     WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
     SlotMemoryState,
@@ -131,6 +133,21 @@ def run(args: argparse.Namespace) -> Path:
         raise ValueError("WP17 slot actual model mismatch")
     max_completion_tokens = max(4096, int(args.max_completion_tokens))
     history_budget = int(protocol["state_policy"]["history_token_budget"])
+    lifecycle_policy = str(
+        protocol["state_policy"].get(
+            "lifecycle_policy", WP17_SLOT_LIFECYCLE_POLICY_V9
+        )
+    )
+    if lifecycle_policy not in {
+        WP17_SLOT_LIFECYCLE_POLICY_V9,
+        WP17_SLOT_LIFECYCLE_POLICY_V10,
+    }:
+        raise ValueError("WP17 slot lifecycle policy is invalid")
+    closed_sweep_after_untouched_transactions = int(
+        protocol["state_policy"].get(
+            "closed_sweep_after_untouched_transactions", 1
+        )
+    )
     preprocessing_policy = dict(protocol["evidence_policy"]["frame_preprocessing"])
 
     all_segments = tuple(dict(row) for row in protocol["segments"])
@@ -172,6 +189,13 @@ def run(args: argparse.Namespace) -> Path:
         "history_token_budget": history_budget,
         "slot_capsule_contract": WP17_SLOT_CAPSULE_CONTRACT,
         "slot_repair_contract": WP17_SLOT_REPAIR_CONTRACT,
+        "lifecycle_policy": lifecycle_policy,
+        "closed_sweep_after_untouched_transactions": (
+            closed_sweep_after_untouched_transactions
+        ),
+        "reliability_policy_variant": (
+            lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+        ),
         "maximum_attempts_per_result": 3,
         "transaction_abstain_preserves_state": True,
         "transaction_abstain_ser_endpoint_eligible": False,
@@ -245,6 +269,9 @@ def run(args: argparse.Namespace) -> Path:
             "evidence_alias_contract",
             "slot_capsule_contract",
             "slot_repair_contract",
+            "lifecycle_policy",
+            "closed_sweep_after_untouched_transactions",
+            "reliability_policy_variant",
             "maximum_attempts_per_result",
             "transaction_abstain_preserves_state",
             "transaction_abstain_ser_endpoint_eligible",
@@ -260,7 +287,14 @@ def run(args: argparse.Namespace) -> Path:
     prior_summary = _read_json(out_root / "run_summary.json") if (out_root / "run_summary.json").is_file() else {}
     call_count = int(prior_summary.get("model_calls", 0) or 0)
     results: dict[tuple[str, str], dict[str, Any]] = {}
-    slot_state = SlotMemoryState("e1c2", token_budget=history_budget)
+    slot_state = SlotMemoryState(
+        "e1c2",
+        token_budget=history_budget,
+        lifecycle_policy=lifecycle_policy,
+        closed_sweep_after_untouched_transactions=(
+            closed_sweep_after_untouched_transactions
+        ),
+    )
     previous_caption = ""
     c1_chain_gap = False
     active_window = ""
@@ -270,7 +304,14 @@ def run(args: argparse.Namespace) -> Path:
         window_id = str(segment["window_id"])
         if window_id != active_window:
             active_window = window_id
-            slot_state = SlotMemoryState("e1c2", token_budget=history_budget)
+            slot_state = SlotMemoryState(
+                "e1c2",
+                token_budget=history_budget,
+                lifecycle_policy=lifecycle_policy,
+                closed_sweep_after_untouched_transactions=(
+                    closed_sweep_after_untouched_transactions
+                ),
+            )
             previous_caption = ""
             c1_chain_gap = False
         start = float(segment["virtual_start_sec"])
@@ -431,6 +472,7 @@ def run(args: argparse.Namespace) -> Path:
                     allowed_evidence_ids=prompt_evidence_ids,
                     evidence_id_map=evidence_alias_map,
                     state=slot_state if arm == "e1c2" else None,
+                    lifecycle_policy=lifecycle_policy,
                     max_completion_tokens=max_completion_tokens,
                     remaining_calls=hard_cap - call_count,
                 )
@@ -530,6 +572,7 @@ def _run_one(
     allowed_evidence_ids: Sequence[str],
     evidence_id_map: Mapping[str, str],
     state: SlotMemoryState | None,
+    lifecycle_policy: str,
     max_completion_tokens: int,
     remaining_calls: int,
 ) -> tuple[dict[str, Any], int]:
@@ -553,6 +596,7 @@ def _run_one(
             history_context=history,
             history_token_count=history_tokens,
             history_token_limit=history_limit,
+            lifecycle_policy=lifecycle_policy,
             repair_contract=repair_contract,
             repair_mode=repair_mode,
         )

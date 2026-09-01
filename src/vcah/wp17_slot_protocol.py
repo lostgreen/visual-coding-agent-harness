@@ -13,6 +13,8 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_OUTPUT_JSON_CHARS,
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_SLOT_LIFECYCLE_POLICY_V9,
+    WP17_SLOT_LIFECYCLE_POLICY_V10,
     WP17_SLOT_REPAIR_CONTRACT,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
@@ -101,6 +103,9 @@ def build_wp17_3_protocol_manifest(
     evidence_policy = dict(protocol.get("evidence_policy", {}) or {})
     output_contract = dict(protocol.get("output_contract", {}) or {})
     visibility = dict(protocol.get("construction_input_visibility", {}) or {})
+    lifecycle_policy = str(
+        state_policy.get("lifecycle_policy", WP17_SLOT_LIFECYCLE_POLICY_V9)
+    )
     serialized_segments = json.dumps(segments, ensure_ascii=False)
     checks = {
         "protocol_frozen_before_wp17_3_outcomes": protocol.get(
@@ -226,6 +231,34 @@ def build_wp17_3_protocol_manifest(
         and state_policy.get("transaction_abstain_preserves_state") is True
         and state_policy.get("transaction_abstain_ser_endpoint_eligible") is False
         and state_policy.get("repair_contract") == WP17_SLOT_REPAIR_CONTRACT,
+        "lifecycle_policy_known": lifecycle_policy
+        in {WP17_SLOT_LIFECYCLE_POLICY_V9, WP17_SLOT_LIFECYCLE_POLICY_V10},
+        "v10_reliability_policy_exact": (
+            lifecycle_policy != WP17_SLOT_LIFECYCLE_POLICY_V10
+            or (
+                int(
+                    state_policy.get(
+                        "closed_sweep_after_untouched_transactions", 0
+                    )
+                )
+                == 1
+                and state_policy.get("monotone_terminal_operations_idempotent")
+                is True
+                and state_policy.get("repair_operations_include_explicit_versions")
+                is True
+                and state_policy.get(
+                    "all_illegal_transitions_have_structured_repair"
+                )
+                is True
+                and state_policy.get("reliability_policy_variant") is True
+                and state_policy.get("raw_ser_scope_includes_transaction_abstain")
+                is True
+                and state_policy.get(
+                    "committed_memory_scope_requires_successful_transaction"
+                )
+                is True
+            )
+        ),
         "common_history_cap_and_byte_preservation": state_policy.get(
             "c1_c2_common_history_token_limit"
         )
@@ -247,7 +280,11 @@ def build_wp17_3_protocol_manifest(
     }
     checks["structural_gate_passed"] = all(checks.values())
     return {
-        "schema_version": "MMLifelongWP17SlotMemory2minManifestV9",
+        "schema_version": (
+            "MMLifelongWP17SlotMemory2minManifestV10"
+            if lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+            else "MMLifelongWP17SlotMemory2minManifestV9"
+        ),
         "contract": WP17_3_MANIFEST_CONTRACT,
         "decision": (
             "WP17_3_SLOT_PROTOCOL_FROZEN"
@@ -274,6 +311,9 @@ def build_wp17_3_protocol_manifest(
         "output_contract": output_contract,
         "structural_gates": list(protocol["structural_gates"]),
         "construction_endpoints": list(protocol["construction_endpoints"]),
+        "endpoint_analysis_policy": dict(
+            protocol.get("endpoint_analysis_policy", {}) or {}
+        ),
         "development_decisions": dict(protocol["development_decisions"]),
         "construction_input_visibility": visibility,
         "gates": checks,

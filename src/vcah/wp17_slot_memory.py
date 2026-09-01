@@ -16,6 +16,9 @@ WP17_SLOT_CAPSULE_CONTRACT = "WP17-slot-memory-capsule-v3"
 WP17_CAPSULE_PROVENANCE_CONTRACT = "WP17-slot-capsule-provenance-summary-v2"
 WP17_SLOT_REPAIR_CONTRACT = "WP17-slot-memory-repair-v1"
 WP17_BUDGET_TOKENIZER = "VCAH-unicode-budget-tokenizer-v1"
+WP17_SLOT_LIFECYCLE_POLICY_V9 = "WP17-slot-lifecycle-v9"
+WP17_SLOT_LIFECYCLE_POLICY_V10 = "WP17-slot-lifecycle-reliability-v10"
+WP17_CLOSED_SWEEP_AFTER_UNTOUCHED_TRANSACTIONS = 1
 WP17_SLOT_NAMES = (
     "location",
     "active_encounter",
@@ -194,6 +197,10 @@ class SlotMemoryState:
 
     arm: str
     token_budget: int = 600
+    lifecycle_policy: str = WP17_SLOT_LIFECYCLE_POLICY_V9
+    closed_sweep_after_untouched_transactions: int = (
+        WP17_CLOSED_SWEEP_AFTER_UNTOUCHED_TRANSACTIONS
+    )
     records: dict[str, dict[str, Any]] = field(default_factory=dict)
     ledger: list[dict[str, Any]] = field(default_factory=list)
     transaction_index: int = 0
@@ -203,6 +210,17 @@ class SlotMemoryState:
         self.token_budget = int(self.token_budget)
         if self.token_budget <= 0:
             raise ValueError("slot token budget must be positive")
+        self.lifecycle_policy = str(self.lifecycle_policy)
+        if self.lifecycle_policy not in {
+            WP17_SLOT_LIFECYCLE_POLICY_V9,
+            WP17_SLOT_LIFECYCLE_POLICY_V10,
+        }:
+            raise ValueError(f"unknown slot lifecycle policy: {self.lifecycle_policy}")
+        self.closed_sweep_after_untouched_transactions = int(
+            self.closed_sweep_after_untouched_transactions
+        )
+        if self.closed_sweep_after_untouched_transactions <= 0:
+            raise ValueError("closed slot sweep horizon must be positive")
         unknown = set(self.records) - set(WP17_SLOT_NAMES)
         if unknown:
             raise ValueError(f"unknown slot records: {sorted(unknown)}")
@@ -274,13 +292,19 @@ class SlotMemoryState:
         self.transaction_index += 1
         self.ledger = list(self.ledger) + transaction_events
         try:
-            automatic_events = self._enforce_budget(segment_id=str(segment_id))
+            lifecycle_policy_events = self._enforce_lifecycle_policy(
+                segment_id=str(segment_id),
+                touched=touched,
+            )
+            self.ledger.extend(lifecycle_policy_events)
+            budget_events = self._enforce_budget(segment_id=str(segment_id))
         except Exception:
             self.records = prior_records
             self.ledger = prior_ledger
             self.transaction_index = prior_index
             raise
-        self.ledger.extend(automatic_events)
+        self.ledger.extend(budget_events)
+        automatic_events = lifecycle_policy_events + budget_events
         capsule = self.capsule()
         result = {
             "contract": WP17_SLOT_TRANSACTION_CONTRACT,
@@ -350,6 +374,8 @@ class SlotMemoryState:
             "versions": versions,
             "context": context,
         }
+        if self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10:
+            payload["lifecycle_policy"] = self.lifecycle_policy
         payload["tokenizer"] = WP17_BUDGET_TOKENIZER
         payload["token_count"] = budget_token_count(context)
         payload["semantic_token_count"] = budget_token_count(semantic_context)
@@ -366,7 +392,7 @@ class SlotMemoryState:
         return payload
 
     def snapshot(self) -> dict[str, Any]:
-        return {
+        payload = {
             "contract": WP17_SLOT_STATE_CONTRACT,
             "arm": self.arm,
             "token_budget": self.token_budget,
@@ -375,6 +401,12 @@ class SlotMemoryState:
             "ledger": deepcopy(self.ledger),
             "digest": self.digest(),
         }
+        if self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10:
+            payload["lifecycle_policy"] = self.lifecycle_policy
+            payload["closed_sweep_after_untouched_transactions"] = (
+                self.closed_sweep_after_untouched_transactions
+            )
+        return payload
 
     @classmethod
     def from_snapshot(cls, payload: Mapping[str, Any]) -> "SlotMemoryState":
@@ -383,6 +415,15 @@ class SlotMemoryState:
         state = cls(
             arm=str(payload["arm"]),
             token_budget=int(payload["token_budget"]),
+            lifecycle_policy=str(
+                payload.get("lifecycle_policy", WP17_SLOT_LIFECYCLE_POLICY_V9)
+            ),
+            closed_sweep_after_untouched_transactions=int(
+                payload.get(
+                    "closed_sweep_after_untouched_transactions",
+                    WP17_CLOSED_SWEEP_AFTER_UNTOUCHED_TRANSACTIONS,
+                )
+            ),
             records=deepcopy(dict(payload.get("records", {}) or {})),
             ledger=deepcopy(list(payload.get("ledger", ()) or ())),
             transaction_index=int(payload.get("transaction_index", 0) or 0),
@@ -399,6 +440,11 @@ class SlotMemoryState:
             "records": self.records,
             "ledger": self.ledger,
         }
+        if self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10:
+            payload["lifecycle_policy"] = self.lifecycle_policy
+            payload["closed_sweep_after_untouched_transactions"] = (
+                self.closed_sweep_after_untouched_transactions
+            )
         return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
     def _normalize_operations(
@@ -494,6 +540,13 @@ class SlotMemoryState:
                     "current_status": str(
                         prior.get("status", "absent") if prior else "absent"
                     ),
+                    "repair_operations": self._repair_operations(
+                        operation,
+                        prior_status=str(
+                            prior.get("status", "absent") if prior else "absent"
+                        ),
+                        prior_version=prior_version,
+                    ),
                 },
             )
         prior_status = str(prior.get("status", "absent") if prior else "absent")
@@ -521,6 +574,11 @@ class SlotMemoryState:
                         "current_status": prior_status,
                         "current_version": prior_version,
                         "required_operation_sequence": required,
+                        "repair_operations": self._repair_operations(
+                            operation,
+                            prior_status=prior_status,
+                            prior_version=prior_version,
+                        ),
                     },
                 )
             record = {
@@ -536,7 +594,16 @@ class SlotMemoryState:
                 raise SlotTransactionError(
                     f"cannot update non-active slot {name}",
                     code="update_on_non_active_slot",
-                    details={"slot": name, "current_status": prior_status},
+                    details={
+                        "slot": name,
+                        "current_status": prior_status,
+                        "current_version": prior_version,
+                        "repair_operations": self._repair_operations(
+                            operation,
+                            prior_status=prior_status,
+                            prior_version=prior_version,
+                        ),
+                    },
                 )
             value_changed = operation["value"] != prior["value"]
             record = {
@@ -554,7 +621,20 @@ class SlotMemoryState:
             }
         elif action == "retain":
             if prior_status not in _WORKING_STATUSES:
-                raise SlotTransactionError(f"cannot retain non-working slot {name}")
+                raise SlotTransactionError(
+                    f"cannot retain non-working slot {name}",
+                    code="retain_on_non_working_slot",
+                    details={
+                        "slot": name,
+                        "current_status": prior_status,
+                        "current_version": prior_version,
+                        "repair_operations": self._repair_operations(
+                            operation,
+                            prior_status=prior_status,
+                            prior_version=prior_version,
+                        ),
+                    },
+                )
             record = (
                 {
                     **prior,
@@ -568,23 +648,88 @@ class SlotMemoryState:
                 else prior
             )
         elif action == "close":
-            if prior_status != "active":
-                raise SlotTransactionError(f"cannot close non-active slot {name}")
-            record = {
-                **prior,
-                "version": prior_version + 1,
-                "status": "closed",
-                "provenance": list(dict.fromkeys(tuple(prior["provenance"]) + current_evidence)),
-                "last_verified_segment_id": segment_id,
-            }
+            if (
+                self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+                and prior_status in {"closed", "archived", "evicted"}
+            ):
+                record = prior
+                action = "redundant_close"
+            else:
+                if prior_status != "active":
+                    raise SlotTransactionError(
+                        f"cannot close non-active slot {name}",
+                        code="close_on_non_active_slot",
+                        details={
+                            "slot": name,
+                            "current_status": prior_status,
+                            "current_version": prior_version,
+                            "repair_operations": self._repair_operations(
+                                operation,
+                                prior_status=prior_status,
+                                prior_version=prior_version,
+                            ),
+                        },
+                    )
+                record = {
+                    **prior,
+                    "version": prior_version + 1,
+                    "status": "closed",
+                    "provenance": list(
+                        dict.fromkeys(tuple(prior["provenance"]) + current_evidence)
+                    ),
+                    "last_verified_segment_id": segment_id,
+                    "closed_at_transaction_index": self.transaction_index + 1,
+                }
         elif action == "archive":
-            if prior_status != "closed" or observation_ids:
-                raise SlotTransactionError(f"archive requires a closed unchanged slot: {name}")
-            record = {**prior, "version": prior_version + 1, "status": "archived"}
+            if (
+                self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+                and prior_status in {"archived", "evicted"}
+                and not observation_ids
+            ):
+                record = prior
+                action = "redundant_archive"
+            else:
+                if prior_status != "closed" or observation_ids:
+                    raise SlotTransactionError(
+                        f"archive requires a closed unchanged slot: {name}",
+                        code="archive_on_non_closed_slot",
+                        details={
+                            "slot": name,
+                            "current_status": prior_status,
+                            "current_version": prior_version,
+                            "repair_operations": self._repair_operations(
+                                operation,
+                                prior_status=prior_status,
+                                prior_version=prior_version,
+                            ),
+                        },
+                    )
+                record = {**prior, "version": prior_version + 1, "status": "archived"}
         elif action == "evict":
-            if prior_status not in {"closed", "archived"} or observation_ids:
-                raise SlotTransactionError(f"evict requires a closed/archived unchanged slot: {name}")
-            record = {**prior, "version": prior_version + 1, "status": "evicted"}
+            if (
+                self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+                and prior_status == "evicted"
+                and not observation_ids
+            ):
+                record = prior
+                action = "redundant_evict"
+            else:
+                if prior_status not in {"closed", "archived"} or observation_ids:
+                    raise SlotTransactionError(
+                        f"evict requires a closed/archived unchanged slot: {name}",
+                        code="evict_on_non_terminal_slot",
+                        details={
+                            "slot": name,
+                            "current_status": prior_status,
+                            "current_version": prior_version,
+                            "repair_operations": self._repair_operations(
+                                operation,
+                                prior_status=prior_status,
+                                prior_version=prior_version,
+                            ),
+                        },
+                    )
+                record = {**prior, "version": prior_version + 1, "status": "evicted"}
         else:  # pragma: no cover - normalized above
             raise AssertionError(action)
         records[name] = record
@@ -600,6 +745,121 @@ class SlotMemoryState:
             "observation_ids": list(observation_ids),
             "provenance": list(record["provenance"]),
         }
+
+    def _repair_operations(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        prior_status: str,
+        prior_version: int,
+    ) -> list[dict[str, Any]]:
+        action = str(operation["operation"])
+        slot = str(operation["slot"])
+        observation_ids = list(operation.get("observation_ids", ()) or ())
+
+        def row(
+            value: str,
+            version: int,
+            *,
+            include_observations: bool = False,
+            include_value: bool = False,
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = {
+                "operation": value,
+                "slot": slot,
+                "expected_version": int(version),
+                "observation_ids": observation_ids if include_observations else [],
+            }
+            if include_value:
+                result["value"] = deepcopy(operation["value"])
+            return result
+
+        if action == "write":
+            if prior_status == "active":
+                return [
+                    row("close", prior_version, include_observations=True),
+                    row("archive", prior_version + 1),
+                    row(
+                        "write",
+                        prior_version + 2,
+                        include_observations=True,
+                        include_value=True,
+                    ),
+                ]
+            if prior_status == "closed":
+                return [
+                    row("archive", prior_version),
+                    row(
+                        "write",
+                        prior_version + 1,
+                        include_observations=True,
+                        include_value=True,
+                    ),
+                ]
+            return [
+                row(
+                    "write",
+                    prior_version,
+                    include_observations=True,
+                    include_value=True,
+                )
+            ]
+        if action == "update":
+            if prior_status == "active":
+                return [
+                    row(
+                        "update",
+                        prior_version,
+                        include_observations=True,
+                        include_value=True,
+                    )
+                ]
+            if prior_status == "closed":
+                return [
+                    row("archive", prior_version),
+                    row(
+                        "write",
+                        prior_version + 1,
+                        include_observations=True,
+                        include_value=True,
+                    ),
+                ]
+            return [
+                row(
+                    "write",
+                    prior_version,
+                    include_observations=True,
+                    include_value=True,
+                )
+            ]
+        if action == "retain":
+            return (
+                [row("retain", prior_version, include_observations=bool(observation_ids))]
+                if prior_status in _WORKING_STATUSES
+                else []
+            )
+        if action == "close":
+            if prior_status == "active" or (
+                self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+                and prior_status in {"closed", "archived", "evicted"}
+            ):
+                return [row("close", prior_version, include_observations=True)]
+            return []
+        if action == "archive":
+            if prior_status == "closed" or (
+                self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+                and prior_status in {"archived", "evicted"}
+            ):
+                return [row("archive", prior_version)]
+            return []
+        if action == "evict":
+            if prior_status in {"closed", "archived"} or (
+                self.lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10
+                and prior_status == "evicted"
+            ):
+                return [row("evict", prior_version)]
+            return []
+        return []
 
     def _validate_cross_slot_invariants(self, records: Mapping[str, Mapping[str, Any]]) -> None:
         participants = records.get("active_participants")
@@ -688,6 +948,50 @@ class SlotMemoryState:
                     "from_version": int(prior["version"]),
                     "to_version": int(record["version"]),
                     "provenance": list(record["provenance"]),
+                    "long_term_memory_preserved": True,
+                }
+            )
+        return events
+
+    def _enforce_lifecycle_policy(
+        self,
+        *,
+        segment_id: str,
+        touched: set[str],
+    ) -> list[dict[str, Any]]:
+        if self.lifecycle_policy != WP17_SLOT_LIFECYCLE_POLICY_V10:
+            return []
+        events = []
+        for name, prior in sorted(self.records.items()):
+            if prior.get("status") != "closed" or name in touched:
+                continue
+            closed_at = int(
+                prior.get("closed_at_transaction_index", self.transaction_index - 1)
+            )
+            if (
+                self.transaction_index - closed_at
+                < self.closed_sweep_after_untouched_transactions
+            ):
+                continue
+            record = {
+                **prior,
+                "version": int(prior["version"]) + 2,
+                "status": "evicted",
+            }
+            self.records[name] = record
+            events.append(
+                {
+                    "event": "runtime_lifecycle_sweep",
+                    "segment_id": segment_id,
+                    "slot": name,
+                    "operation": "runtime_lifecycle_sweep",
+                    "from_status": "closed",
+                    "to_status": "evicted",
+                    "from_version": int(prior["version"]),
+                    "to_version": int(record["version"]),
+                    "observation_ids": [],
+                    "provenance": list(record["provenance"]),
+                    "archive_then_evict": True,
                     "long_term_memory_preserved": True,
                 }
             )

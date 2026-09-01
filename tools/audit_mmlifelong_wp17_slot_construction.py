@@ -14,6 +14,8 @@ from vcah.virtual_video import VirtualVideoWorkspace
 from vcah.wp17_slot_memory import (
     WP17_CAPSULE_PROVENANCE_CONTRACT,
     WP17_SLOT_CAPSULE_CONTRACT,
+    WP17_SLOT_LIFECYCLE_POLICY_V9,
+    WP17_SLOT_LIFECYCLE_POLICY_V10,
     SlotMemoryState,
     budget_token_count,
     tail_budget_text,
@@ -57,6 +59,16 @@ def run(args: argparse.Namespace) -> Path:
     if any(continuation_values) and not all(continuation_values):
         raise ValueError("WP17 continuation audit inputs are incomplete")
     mode = str(run_manifest["mode"])
+    lifecycle_policy = str(
+        protocol["state_policy"].get(
+            "lifecycle_policy", WP17_SLOT_LIFECYCLE_POLICY_V9
+        )
+    )
+    closed_sweep_after_untouched_transactions = int(
+        protocol["state_policy"].get(
+            "closed_sweep_after_untouched_transactions", 1
+        )
+    )
     all_segments = tuple(dict(row) for row in protocol["segments"])
     if mode == "canary":
         selected = set(str(value) for value in protocol["canary_segment_chain"])
@@ -103,7 +115,14 @@ def run(args: argparse.Namespace) -> Path:
     evidence_rows = _read_jsonl(Path(args.dense_root) / "evidence_store.jsonl")
     result_rows: list[dict[str, Any]] = []
     replay_errors: list[dict[str, str]] = []
-    slot_state = SlotMemoryState("e1c2", token_budget=600)
+    slot_state = SlotMemoryState(
+        "e1c2",
+        token_budget=600,
+        lifecycle_policy=lifecycle_policy,
+        closed_sweep_after_untouched_transactions=(
+            closed_sweep_after_untouched_transactions
+        ),
+    )
     previous_caption = ""
     active_window = ""
     context_pairs = []
@@ -114,7 +133,14 @@ def run(args: argparse.Namespace) -> Path:
         window_id = str(segment["window_id"])
         if window_id != active_window:
             active_window = window_id
-            slot_state = SlotMemoryState("e1c2", token_budget=600)
+            slot_state = SlotMemoryState(
+                "e1c2",
+                token_budget=600,
+                lifecycle_policy=lifecycle_policy,
+                closed_sweep_after_untouched_transactions=(
+                    closed_sweep_after_untouched_transactions
+                ),
+            )
             previous_caption = ""
         start = float(segment["virtual_start_sec"])
         end = float(segment["virtual_end_sec"])
@@ -319,6 +345,33 @@ def run(args: argparse.Namespace) -> Path:
     )
     c1_mean = mean(row["c1_tokens"] for row in context_pairs) if context_pairs else 0.0
     c2_mean = mean(row["c2_tokens"] for row in context_pairs) if context_pairs else 0.0
+    e1c2_rows = [row for row in result_rows if row.get("arm") == "e1c2"]
+    abstention_count = sum(
+        row.get("slot_transaction_abstained") is True for row in e1c2_rows
+    )
+    abstention_rate = abstention_count / len(e1c2_rows) if e1c2_rows else 1.0
+    lifecycle_events = [
+        event
+        for row in e1c2_rows
+        for event in tuple(row.get("lifecycle_events", ()) or ())
+    ]
+    runtime_lifecycle_sweeps = sum(
+        event.get("operation") == "runtime_lifecycle_sweep"
+        for event in lifecycle_events
+    )
+    redundant_operations = sum(
+        str(event.get("operation", "")).startswith("redundant_")
+        for event in lifecycle_events
+    )
+    explicit_model_operations = sum(
+        len(tuple(row.get("model_output", {}).get("slot_operations", ()) or ()))
+        for row in e1c2_rows
+    )
+    abstention_gate = lifecycle_policy != WP17_SLOT_LIFECYCLE_POLICY_V10 or (
+        abstention_count == 0
+        if mode == "canary"
+        else abstention_rate < 0.05
+    )
     gates = {
         "protocol_structural_gate_passed": bool(protocol.get("structural_gate_passed")),
         "protocol_sha_exact": run_manifest.get("protocol_manifest_sha256")
@@ -329,6 +382,16 @@ def run(args: argparse.Namespace) -> Path:
         == protocol.get("provenance", {}).get("source_commit"),
         "run_contract_exact": run_manifest.get("contract")
         == "WP17-3-slot-construction-run-v4",
+        "lifecycle_policy_exact": run_manifest.get(
+            "lifecycle_policy", WP17_SLOT_LIFECYCLE_POLICY_V9
+        )
+        == lifecycle_policy
+        and int(
+            run_manifest.get("closed_sweep_after_untouched_transactions", 1)
+        )
+        == closed_sweep_after_untouched_transactions
+        and bool(run_manifest.get("reliability_policy_variant", False))
+        == (lifecycle_policy == WP17_SLOT_LIFECYCLE_POLICY_V10),
         "frame_preprocessing_exact": run_manifest.get("image_preprocessing")
         == protocol["evidence_policy"]["frame_preprocessing"]
         and all(
@@ -494,6 +557,7 @@ def run(args: argparse.Namespace) -> Path:
             )
             for row in result_rows
         ),
+        "e1c2_transaction_abstention_below_policy_limit": abstention_gate,
         "response_usage_metadata_keys_present": len(safe_metadata_rows) == expected_results
         and all(
             all(
@@ -556,6 +620,11 @@ def run(args: argparse.Namespace) -> Path:
                 row.get("slot_transaction_abstained") is True
                 for row in result_rows
             ),
+            "e1c2_results": len(e1c2_rows),
+            "e1c2_transaction_abstentions": abstention_count,
+            "runtime_lifecycle_sweeps": runtime_lifecycle_sweeps,
+            "redundant_operations": redundant_operations,
+            "explicit_model_operations": explicit_model_operations,
             "ser_endpoint_ineligible": sum(
                 row.get("ser_endpoint_eligible") is False for row in result_rows
             ),
@@ -576,6 +645,25 @@ def run(args: argparse.Namespace) -> Path:
             "absolute_mean_gap": round(abs(c1_mean - c2_mean), 3),
             "budget": 600,
             "mean_gap_is_diagnostic_not_gate": True,
+        },
+        "reliability_policy": {
+            "lifecycle_policy": lifecycle_policy,
+            "closed_sweep_after_untouched_transactions": (
+                closed_sweep_after_untouched_transactions
+            ),
+            "e1c2_transaction_abstention_rate": round(abstention_rate, 6),
+            "required_abstention_rate": "0" if mode == "canary" else "<0.05",
+            "runtime_lifecycle_sweep_rate": round(
+                runtime_lifecycle_sweeps / len(e1c2_rows), 6
+            )
+            if e1c2_rows
+            else 0.0,
+            "redundant_operation_rate": round(
+                redundant_operations / explicit_model_operations, 6
+            )
+            if explicit_model_operations
+            else 0.0,
+            "diagnostics_not_endpoint_gates": True,
         },
         "replay_error_fingerprints": replay_errors[:5],
         "history_replay_error_fingerprints": history_replay_errors[:5],

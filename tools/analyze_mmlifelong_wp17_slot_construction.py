@@ -23,6 +23,13 @@ REPRESENTATION_METRICS = (
     "occurrence_coverage",
     "ordinal_accuracy",
 )
+FACT_METRICS = (
+    "canonical_entity_coverage",
+    "event_coverage",
+    "relation_state_coverage",
+    "occurrence_coverage",
+    "ordinal_accuracy",
+)
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -81,83 +88,37 @@ def run(args: argparse.Namespace) -> Path:
             rows[(segment_id, arm)] = row
             result_paths[(segment_id, arm)] = path
 
-    case_scores = []
     annotations = dict(analysis_protocol["cases"])
-    for case_id, raw_annotation in sorted(annotations.items()):
-        annotation = dict(raw_annotation)
-        anchor_segment_ids = tuple(
-            str(segment["segment_id"])
-            for segment in segments
-            if _overlaps_any(segment, annotation["anchor_intervals"])
-        )
-        if not anchor_segment_ids:
-            raise ValueError(f"WP17 annotation has no construction segment: {case_id}")
-        for arm in ARMS:
-            selected = [rows[(segment_id, arm)] for segment_id in anchor_segment_ids]
-            trusted = [
-                row
-                for row in selected
-                if row.get("ser_endpoint_eligible") is True
-                and row.get("slot_transaction_abstained") is not True
-            ]
-            artifact = _normalize_text(
-                " ".join(
-                    _flatten_text(row["model_output"]["structured_event_record"])
-                    for row in trusted
-                )
-            )
-            entity_match = _first_match(artifact, annotation["entity_terms"])
-            event_match = _first_match(artifact, annotation["event_terms"])
-            state_match = _first_match(artifact, annotation["state_terms"])
-            occurrence_match = _first_match(
-                artifact, annotation.get("occurrence_terms", ())
-            )
-            ordinal_match = _first_match(artifact, annotation.get("ordinal_terms", ()))
-            case_scores.append(
-                {
-                    "case_id": case_id,
-                    "arm": arm,
-                    "anchor_segment_count": len(anchor_segment_ids),
-                    "ser_endpoint_ineligible_anchor_rows": len(selected) - len(trusted),
-                    "anchor_representation_coverage": int(
-                        entity_match is not None and event_match is not None
-                    ),
-                    "canonical_entity_coverage": int(entity_match is not None),
-                    "event_coverage": int(event_match is not None),
-                    "relation_state_coverage": int(state_match is not None),
-                    "occurrence_coverage": (
-                        int(occurrence_match is not None)
-                        if annotation.get("occurrence_terms")
-                        else None
-                    ),
-                    "ordinal_accuracy": (
-                        int(ordinal_match is not None)
-                        if annotation.get("ordinal_terms")
-                        else None
-                    ),
-                    "matched_annotation_terms": {
-                        "entity": entity_match,
-                        "event": event_match,
-                        "state": state_match,
-                        "occurrence": occurrence_match,
-                        "ordinal": ordinal_match,
-                    },
-                    "annotation_timing": annotation["annotation_timing"],
-                }
-            )
-
-    arm_metrics = {
-        arm: {
-            metric: _rate_summary(
-                [
-                    row[metric]
-                    for row in case_scores
-                    if row["arm"] == arm and row.get(metric) is not None
-                ]
-            )
-            for metric in REPRESENTATION_METRICS
-        }
-        for arm in ARMS
+    raw_case_scores = _build_case_scores(
+        annotations,
+        segments=segments,
+        rows=rows,
+        scope="raw_ser_coverage",
+    )
+    committed_case_scores = _build_case_scores(
+        annotations,
+        segments=segments,
+        rows=rows,
+        scope="committed_memory_coverage",
+    )
+    case_scores = committed_case_scores
+    raw_arm_metrics = _arm_metrics(raw_case_scores)
+    arm_metrics = _arm_metrics(committed_case_scores)
+    raw_paired = {
+        "e1c2_minus_e1c1": _paired_metrics(
+            raw_case_scores,
+            treatment="e1c2",
+            control="e1c1",
+            samples=int(args.bootstrap_samples),
+            seed=int(args.seed),
+        ),
+        "e1c1_minus_e1c0": _paired_metrics(
+            raw_case_scores,
+            treatment="e1c1",
+            control="e1c0",
+            samples=int(args.bootstrap_samples),
+            seed=int(args.seed) + 101,
+        ),
     }
     paired = {
         "e1c2_minus_e1c1": _paired_metrics(
@@ -234,7 +195,62 @@ def run(args: argparse.Namespace) -> Path:
         ),
     }
 
+    ser_structure = {
+        arm: _ser_structure_summary(
+            [row for (segment_id, value), row in rows.items() if value == arm]
+        )
+        for arm in ARMS
+    }
+    occurrence_counter_events = [
+        event
+        for event in lifecycle_events
+        if event.get("slot") == "occurrence_counter"
+    ]
+    reliability = {
+        "lifecycle_policy": run_manifest.get("lifecycle_policy", "historical_v9"),
+        "transaction_abstention_rate": (
+            per_arm_cost["e1c2"]["transaction_abstentions"] / len(e1c2_rows)
+            if e1c2_rows
+            else 0.0
+        ),
+        "runtime_lifecycle_sweep_rate": (
+            sum(
+                event.get("operation") == "runtime_lifecycle_sweep"
+                for event in lifecycle_events
+            )
+            / len(e1c2_rows)
+            if e1c2_rows
+            else 0.0
+        ),
+        "redundant_operation_rate": (
+            sum(
+                str(event.get("operation", "")).startswith("redundant_")
+                for event in lifecycle_events
+            )
+            / max(
+                1,
+                sum(
+                    len(
+                        tuple(
+                            row.get("model_output", {}).get(
+                                "slot_operations", ()
+                            )
+                            or ()
+                        )
+                    )
+                    for row in e1c2_rows
+                ),
+            )
+        ),
+        "occurrence_counter_lifecycle_events": len(occurrence_counter_events),
+        "occurrence_counter_write_update_events": sum(
+            event.get("operation") in {"write", "update"}
+            for event in occurrence_counter_events
+        ),
+    }
+
     primary = paired["e1c2_minus_e1c1"]
+    raw_primary = raw_paired["e1c2_minus_e1c1"]
     decision_metrics = (
         "anchor_representation_coverage",
         "canonical_entity_coverage",
@@ -255,12 +271,24 @@ def run(args: argparse.Namespace) -> Path:
         if raw_go
         else "NO_GO_UNDER_DEVELOPMENT_ENDPOINTS"
     )
+    legacy_committed_decision = decision
+    if run_manifest.get("reliability_policy_variant") is True:
+        decision = "V10_EXPLORATORY_PENDING_ARM_BLIND_SEMANTIC_JUDGE"
+    raw_positive = [
+        metric
+        for metric in decision_metrics
+        if raw_primary[metric]["paired_delta"] > 0
+    ]
 
     report = {
         "schema_version": "MMLifelongWP17SlotConstructionEndpointReportV1",
         "contract": "WP17-slot-construction-endpoint-report-v1",
         "decision": decision,
+        "legacy_committed_decision": legacy_committed_decision,
+        "legacy_decision_scope": "committed_memory_coverage",
         "decision_is_development_only": True,
+        "development_cases_burned": True,
+        "new_endpoint_results_are_exploratory": True,
         "unbiased_publication_claim_allowed": False,
         "construction_protocol_sha256": file_sha256(construction_protocol_path),
         "analysis_protocol_sha256": file_sha256(analysis_protocol_path),
@@ -281,15 +309,44 @@ def run(args: argparse.Namespace) -> Path:
         },
         "arm_metrics": arm_metrics,
         "paired_effects": paired,
+        "endpoint_scopes": {
+            "raw_ser_coverage": {
+                "includes_transaction_abstain": True,
+                "arm_metrics": raw_arm_metrics,
+                "paired_effects": raw_paired,
+                "positive_endpoints": raw_positive,
+                "event_match_given_entity_match": _event_given_entity(
+                    raw_case_scores
+                ),
+                "fact_level_coverage": _fact_level_coverage(raw_case_scores),
+            },
+            "committed_memory_coverage": {
+                "requires_successful_slot_transaction": True,
+                "arm_metrics": arm_metrics,
+                "paired_effects": paired,
+                "legacy_no_go_decision": legacy_committed_decision,
+                "event_match_given_entity_match": _event_given_entity(
+                    committed_case_scores
+                ),
+                "fact_level_coverage": _fact_level_coverage(
+                    committed_case_scores
+                ),
+            },
+        },
+        "raw_ser_arm_metrics": raw_arm_metrics,
+        "raw_ser_paired_effects": raw_paired,
         "primary_positive_endpoints": positive,
         "context_token_distribution": context_cost,
         "provenance": provenance,
         "slot_churn": slot_churn,
+        "ser_structure": ser_structure,
+        "reliability_policy_diagnostics": reliability,
         "cost": {
             "per_arm_final_artifact": per_arm_cost,
             "continuation_accounting": summary.get("continuation", {}),
         },
         "case_scores": case_scores,
+        "raw_ser_case_scores": raw_case_scores,
         "gates": {
             "structural_audit_passed": True,
             "all_results_success": len(rows) == expected_results,
@@ -298,12 +355,19 @@ def run(args: argparse.Namespace) -> Path:
             "unsupported_state_write_references_zero": provenance_ok,
             "visual_provenance_complete": False,
             "endpoint_values_were_not_structural_gates": True,
+            "committed_endpoint_available": (
+                run_manifest.get("reliability_policy_variant") is not True
+                or reliability["transaction_abstention_rate"] < 0.05
+            ),
         },
         "warnings": [
             "The 11-case local timeline is underpowered and development-only.",
             "Case 0115 occurrence/ordinal endpoints are post-hoc and do not drive GO/NO-GO.",
             "The lexical annotation matcher is conservative and may miss valid paraphrases.",
             "A final GO claim remains blocked until the frozen blind visual-provenance sample is complete.",
+            "The legacy NO-GO decision applies to committed/end-to-end memory coverage, not raw SER coverage.",
+            "All v10 metrics use 11 already-observed development cases and are exploratory only.",
+            "Frozen lexical matching is secondary; the primary arm-blind semantic judge must be frozen before reuse on untouched data.",
         ],
         "endpoint_values_evaluated": True,
         "model_calls": 0,
@@ -325,6 +389,180 @@ def run(args: argparse.Namespace) -> Path:
         flush=True,
     )
     return report_path
+
+
+def _build_case_scores(
+    annotations: Mapping[str, Any],
+    *,
+    segments: Sequence[Mapping[str, Any]],
+    rows: Mapping[tuple[str, str], Mapping[str, Any]],
+    scope: str,
+) -> list[dict[str, Any]]:
+    if scope not in {"raw_ser_coverage", "committed_memory_coverage"}:
+        raise ValueError(f"unknown WP17 endpoint scope: {scope}")
+    scores: list[dict[str, Any]] = []
+    for case_id, raw_annotation in sorted(annotations.items()):
+        annotation = dict(raw_annotation)
+        anchor_segment_ids = tuple(
+            str(segment["segment_id"])
+            for segment in segments
+            if _overlaps_any(segment, annotation["anchor_intervals"])
+        )
+        if not anchor_segment_ids:
+            raise ValueError(f"WP17 annotation has no construction segment: {case_id}")
+        for arm in ARMS:
+            selected = [rows[(segment_id, arm)] for segment_id in anchor_segment_ids]
+            committed = [
+                row
+                for row in selected
+                if row.get("ser_endpoint_eligible") is True
+                and row.get("slot_transaction_abstained") is not True
+            ]
+            included = selected if scope == "raw_ser_coverage" else committed
+            artifact = _normalize_text(
+                " ".join(
+                    _flatten_text(row["model_output"]["structured_event_record"])
+                    for row in included
+                )
+            )
+            entity_match = _first_match(artifact, annotation["entity_terms"])
+            event_match = _first_match(artifact, annotation["event_terms"])
+            state_match = _first_match(artifact, annotation["state_terms"])
+            occurrence_match = _first_match(
+                artifact, annotation.get("occurrence_terms", ())
+            )
+            ordinal_match = _first_match(
+                artifact, annotation.get("ordinal_terms", ())
+            )
+            scores.append(
+                {
+                    "case_id": case_id,
+                    "arm": arm,
+                    "endpoint_scope": scope,
+                    "anchor_segment_count": len(anchor_segment_ids),
+                    "included_anchor_rows": len(included),
+                    "ser_endpoint_ineligible_anchor_rows": (
+                        len(selected) - len(committed)
+                    ),
+                    "anchor_representation_coverage": int(
+                        entity_match is not None and event_match is not None
+                    ),
+                    "canonical_entity_coverage": int(entity_match is not None),
+                    "event_coverage": int(event_match is not None),
+                    "relation_state_coverage": int(state_match is not None),
+                    "occurrence_coverage": (
+                        int(occurrence_match is not None)
+                        if annotation.get("occurrence_terms")
+                        else None
+                    ),
+                    "ordinal_accuracy": (
+                        int(ordinal_match is not None)
+                        if annotation.get("ordinal_terms")
+                        else None
+                    ),
+                    "matched_annotation_terms": {
+                        "entity": entity_match,
+                        "event": event_match,
+                        "state": state_match,
+                        "occurrence": occurrence_match,
+                        "ordinal": ordinal_match,
+                    },
+                    "annotation_timing": annotation["annotation_timing"],
+                }
+            )
+    return scores
+
+
+def _arm_metrics(case_scores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        arm: {
+            metric: _rate_summary(
+                [
+                    row[metric]
+                    for row in case_scores
+                    if row["arm"] == arm and row.get(metric) is not None
+                ]
+            )
+            for metric in REPRESENTATION_METRICS
+        }
+        for arm in ARMS
+    }
+
+
+def _event_given_entity(
+    case_scores: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    report = {}
+    for arm in ARMS:
+        eligible = [
+            row
+            for row in case_scores
+            if row["arm"] == arm and int(row["canonical_entity_coverage"]) == 1
+        ]
+        count = sum(int(row["event_coverage"]) for row in eligible)
+        report[arm] = {
+            "count": count,
+            "denominator": len(eligible),
+            "rate": count / len(eligible) if eligible else None,
+        }
+    return report
+
+
+def _fact_level_coverage(
+    case_scores: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    report = {}
+    for arm in ARMS:
+        values = [
+            int(row[metric])
+            for row in case_scores
+            if row["arm"] == arm
+            for metric in FACT_METRICS
+            if row.get(metric) is not None
+        ]
+        by_type = {
+            metric: _rate_summary(
+                [
+                    int(row[metric])
+                    for row in case_scores
+                    if row["arm"] == arm and row.get(metric) is not None
+                ]
+            )
+            for metric in FACT_METRICS
+        }
+        report[arm] = {
+            "overall": _rate_summary(values),
+            "by_fact_type": by_type,
+            "unit": "case_x_predeclared_fact_type",
+            "exploratory": True,
+        }
+    return report
+
+
+def _ser_structure_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    records = [
+        dict(row.get("model_output", {}).get("structured_event_record", {}) or {})
+        for row in rows
+    ]
+    return {
+        key: _distribution(
+            [len(tuple(record.get(key, ()) or ())) for record in records]
+        )
+        for key in (
+            "entities",
+            "events",
+            "state_changes",
+            "relations",
+            "occurrence_refs",
+        )
+    } | {
+        "summary_normalized_word_count": _distribution(
+            [
+                len(_normalize_text(str(record.get("summary", ""))).split())
+                for record in records
+            ]
+        )
+    }
 
 
 def _overlaps_any(segment: Mapping[str, Any], intervals: Sequence[Sequence[float]]) -> bool:

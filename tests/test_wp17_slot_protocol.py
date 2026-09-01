@@ -8,6 +8,7 @@ from vcah.wp17_slot_memory import (
     WP17_MAX_STRUCTURED_EVENT_ITEMS,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
+    WP17_SLOT_LIFECYCLE_POLICY_V10,
     WP17_SLOT_REPAIR_CONTRACT,
     WP17_SLOT_CAPSULE_CONTRACT,
     WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
@@ -145,3 +146,33 @@ def test_wp17_3_manifest_freezes_three_arms_and_consecutive_canary() -> None:
     assert [ordinals[value] for value in chain] == [0, 1, 2, 3, 4]
     assert manifest["segments"][1]["arm_execution_order"] == ["e1c1", "e1c2", "e1c0"]
     assert manifest["model_calls_during_freeze"] == 0
+
+    protocol["state_policy"].update(
+        {
+            "lifecycle_policy": WP17_SLOT_LIFECYCLE_POLICY_V10,
+            "closed_sweep_after_untouched_transactions": 1,
+            "monotone_terminal_operations_idempotent": True,
+            "repair_operations_include_explicit_versions": True,
+            "all_illegal_transitions_have_structured_repair": True,
+            "reliability_policy_variant": True,
+            "raw_ser_scope_includes_transaction_abstain": True,
+            "committed_memory_scope_requires_successful_transaction": True,
+        }
+    )
+    protocol["endpoint_analysis_policy"] = {"development_cases_burned": True}
+    v10_manifest = build_wp17_3_protocol_manifest(
+        protocol,
+        timeline=timeline,
+        dense_report={"structural_gate_passed": True},
+        dense_audit={"structural_and_promotion_gate_passed": True},
+        input_sha256={
+            "timeline": "timeline-sha",
+            "dense_report": "dense-sha",
+            "dense_audit": "audit-sha",
+        },
+        source_commit="source-v10",
+    )
+    assert v10_manifest["structural_gate_passed"] is True
+    assert v10_manifest["schema_version"].endswith("V10")
+    assert v10_manifest["gates"]["v10_reliability_policy_exact"] is True
+    assert v10_manifest["endpoint_analysis_policy"]["development_cases_burned"] is True

@@ -4,7 +4,11 @@ import importlib.util
 import json
 from pathlib import Path
 
-from vcah.wp17_slot_memory import WP17_SLOT_TRANSACTION_CONTRACT, SlotMemoryState
+from vcah.wp17_slot_memory import (
+    WP17_SLOT_LIFECYCLE_POLICY_V9,
+    WP17_SLOT_TRANSACTION_CONTRACT,
+    SlotMemoryState,
+)
 
 
 MODULE_PATH = (
@@ -84,6 +88,7 @@ def _run(client: _SequenceClient, *, arm: str, state: SlotMemoryState | None):
         allowed_evidence_ids=("f001",),
         evidence_id_map={"f001": "frame:segment-2:0001"},
         state=state,
+        lifecycle_policy=WP17_SLOT_LIFECYCLE_POLICY_V9,
         max_completion_tokens=8192,
         remaining_calls=3,
     )

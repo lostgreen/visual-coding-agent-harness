@@ -79,9 +79,36 @@ def build_protocol(
             "development_diagnostic_only": True,
         },
         "unbiased_publication_claim_allowed": False,
+        "development_data_status": {
+            "case_count": 11,
+            "outcomes_already_observed": True,
+            "new_metrics_are_exploratory_only": True,
+            "holdout_confirmation_required": True,
+        },
+        "endpoint_scopes": {
+            "raw_ser_coverage": {
+                "include_valid_base_ser_when_slot_transaction_abstains": True,
+                "measures": "perception_plus_context",
+            },
+            "committed_memory_coverage": {
+                "require_successful_slot_transaction": True,
+                "measures": "end_to_end_memory_availability",
+                "legacy_no_go_scope": True,
+            },
+        },
+        "evaluator_policy": {
+            "primary": "arm_blind_semantic_judge",
+            "primary_prompt_must_be_frozen_before_evaluation": True,
+            "arm_labels_hidden": True,
+            "same_prompt_all_arms": True,
+            "lexical_matcher": "frozen_conservative_secondary",
+            "post_outcome_synonym_tuning_can_support_confirmatory_claim": False,
+        },
         "matching_policy": {
-            "artifact": "trusted structured_event_record only",
-            "transaction_abstain": "score_zero_not_excluded",
+            "artifact": "scope_dependent structured_event_record",
+            "transaction_abstain": (
+                "included_in_raw_ser_scope_and_scored_zero_in_committed_scope"
+            ),
             "normalization": "unicode_nfkc_casefold_punctuation_and_underscore_to_space",
             "term_match": "normalized_contiguous_substring",
             "canonical_entity_coverage": "any entity term",
@@ -102,6 +129,14 @@ def build_protocol(
             "history_context_token_distribution",
             "slot_churn_rate",
             "transaction_abstain_rate",
+            "raw_ser_coverage",
+            "committed_memory_coverage",
+            "event_match_given_entity_match",
+            "fact_level_coverage",
+            "runtime_lifecycle_sweep_rate",
+            "redundant_operation_rate",
+            "ser_structural_item_counts",
+            "occurrence_counter_activation_rate",
             "model_and_storage_cost",
         ],
         "effects": {

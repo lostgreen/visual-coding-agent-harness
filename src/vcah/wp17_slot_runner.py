@@ -8,6 +8,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.wp17_slot_memory import (
+    WP17_SLOT_LIFECYCLE_POLICY_V9,
+    WP17_SLOT_LIFECYCLE_POLICY_V10,
     WP17_TARGET_OBSERVATION_EVIDENCE_IDS,
     WP17_SLOT_NAMES,
     WP17_SLOT_OPERATIONS,
@@ -222,12 +224,29 @@ def construction_prompt(
     history_context: str,
     history_token_count: int,
     history_token_limit: int,
+    lifecycle_policy: str = WP17_SLOT_LIFECYCLE_POLICY_V9,
     repair_contract: Mapping[str, Any] | None = None,
     repair_mode: str = "base",
 ) -> str:
     normalized_arm = str(arm).strip().casefold()
     if normalized_arm not in {"e1c0", "e1c1", "e1c2"}:
         raise ValueError(f"unknown WP17 slot arm: {arm}")
+    normalized_lifecycle_policy = str(lifecycle_policy)
+    if normalized_lifecycle_policy not in {
+        WP17_SLOT_LIFECYCLE_POLICY_V9,
+        WP17_SLOT_LIFECYCLE_POLICY_V10,
+    }:
+        raise ValueError(f"unknown WP17 slot lifecycle policy: {lifecycle_policy}")
+    reliability_policy_instruction = (
+        ""
+        if normalized_lifecycle_policy != WP17_SLOT_LIFECYCLE_POLICY_V10
+        else (
+            " Runtime treats repeated close/archive/evict operations toward an already-reached "
+            "terminal state as idempotent no-ops. It also archives and evicts a closed slot after "
+            "one subsequent transaction in which that slot is untouched. Do not emit operations "
+            "solely to maintain a stale closed slot."
+        )
+    )
     slot_instruction = (
         "Return slot_operations=[] for this non-slot arm."
         if normalized_arm != "e1c2"
@@ -252,6 +271,7 @@ def construction_prompt(
             "details only in structured_event_record, and use terse names/IDs/states as slot values. "
             "The serialized capsule must remain within 600 protocol tokens; target at most 400 tokens "
             "before runtime overhead. Do not copy provenance metadata into slot values."
+            + reliability_policy_instruction
         )
     )
     normalized_repair_mode = str(repair_mode).strip().casefold()

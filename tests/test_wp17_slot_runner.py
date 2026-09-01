@@ -9,6 +9,7 @@ from vcah.wp17_slot_runner import (
     frame_evidence_ids,
     packet_digest,
 )
+from vcah.wp17_slot_memory import WP17_SLOT_LIFECYCLE_POLICY_V10
 
 
 def test_packets_are_segment_scoped_compact_and_path_free() -> None:
@@ -104,3 +105,21 @@ def test_prompt_hides_evaluation_fields_and_freezes_arm_contract() -> None:
     assert "target at most 6 directly useful evidence IDs" in prompt
     assert "official interval" in prompt
     assert "slot_capsule" in prompt
+
+
+def test_v10_prompt_declares_runtime_owned_reliability_policy() -> None:
+    prompt = construction_prompt(
+        arm="e1c2",
+        segment_duration_sec=120.0,
+        frame_ids=("f001",),
+        ocr_packet=(),
+        asr_packet=(),
+        history_context="",
+        history_token_count=0,
+        history_token_limit=600,
+        lifecycle_policy=WP17_SLOT_LIFECYCLE_POLICY_V10,
+    )
+
+    assert "idempotent no-ops" in prompt
+    assert "after one subsequent transaction" in prompt
+    assert "Do not emit operations solely to maintain a stale closed slot" in prompt

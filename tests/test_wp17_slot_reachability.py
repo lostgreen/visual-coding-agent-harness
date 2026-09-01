@@ -23,3 +23,20 @@ def test_v9_state_machine_reachability_gate_passes_without_model_calls() -> None
     assert report["endpoint_values_evaluated"] is False
     assert report["operation_counts"]["implicit_retain"] == 1
     assert report["checks"]["same_segment_handoff_reachable"] is True
+
+
+def test_v10_exhaustive_recoverability_gate_passes_without_model_calls() -> None:
+    report = REACHABILITY.build_v10_report(source_commit="test")
+
+    assert report["structural_gate_passed"] is True
+    assert report["matrix_counts"] == {
+        "combinations": 30,
+        "expected_legal": 16,
+        "expected_illegal": 14,
+        "legality_mismatches": 0,
+        "unstructured_repairs": 0,
+        "nonrecoverable_repairs": 0,
+    }
+    assert report["checks"]["monotone_operations_idempotent"] is True
+    assert report["checks"]["closed_slot_sweep_bounded"] is True
+    assert report["model_calls"] == 0

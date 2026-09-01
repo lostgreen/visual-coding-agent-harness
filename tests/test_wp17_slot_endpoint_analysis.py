@@ -79,6 +79,12 @@ def test_protocol_marks_0115_posthoc_and_preserves_frozen10() -> None:
         "annotation_timing"
     ].startswith("post_hoc")
     assert protocol["unbiased_publication_claim_allowed"] is False
+    assert protocol["development_data_status"]["outcomes_already_observed"] is True
+    assert protocol["endpoint_scopes"]["raw_ser_coverage"][
+        "include_valid_base_ser_when_slot_transaction_abstains"
+    ] is True
+    assert protocol["evaluator_policy"]["primary"] == "arm_blind_semantic_judge"
+    assert protocol["evaluator_policy"]["lexical_matcher"].endswith("secondary")
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -204,3 +210,19 @@ def test_analysis_scores_abstain_as_zero_and_reports_paired_effect(tmp_path: Pat
     assert report["paired_effects"]["e1c2_minus_e1c1"][
         "anchor_representation_coverage"
     ]["paired_delta"] == -1.0
+    assert report["raw_ser_arm_metrics"]["e1c2"][
+        "anchor_representation_coverage"
+    ]["rate"] == 1.0
+    assert report["raw_ser_paired_effects"]["e1c2_minus_e1c1"][
+        "anchor_representation_coverage"
+    ]["paired_delta"] == 0.0
+    assert report["endpoint_scopes"]["raw_ser_coverage"][
+        "includes_transaction_abstain"
+    ] is True
+    assert report["endpoint_scopes"]["raw_ser_coverage"][
+        "event_match_given_entity_match"
+    ]["e1c2"]["rate"] == 1.0
+    assert report["endpoint_scopes"]["raw_ser_coverage"][
+        "fact_level_coverage"
+    ]["e1c2"]["unit"] == "case_x_predeclared_fact_type"
+    assert report["legacy_decision_scope"] == "committed_memory_coverage"

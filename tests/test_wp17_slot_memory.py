@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
 
 from vcah.wp17_slot_memory import (
     WP17_CAPSULE_PROVENANCE_CONTRACT,
+    WP17_SLOT_LIFECYCLE_POLICY_V10,
     WP17_SLOT_TRANSACTION_CONTRACT,
     SlotMemoryState,
     SlotTransactionError,
@@ -162,6 +164,185 @@ def test_closed_slot_can_archive_and_write_replacement_in_one_transaction() -> N
         "archive",
         "write",
     ]
+
+
+def test_v10_write_repair_has_literal_stepwise_versions() -> None:
+    state = SlotMemoryState(
+        "e1c2",
+        lifecycle_policy=WP17_SLOT_LIFECYCLE_POLICY_V10,
+    )
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "first"},
+                "observation_ids": ["obs-1"],
+            }
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    with pytest.raises(SlotTransactionError) as captured:
+        state.apply(
+            _transaction(
+                {
+                    "operation": "write",
+                    "slot": "current_activity",
+                    "expected_version": 1,
+                    "value": {"activity": "second"},
+                    "observation_ids": ["obs-1"],
+                }
+            ),
+            segment_id="segment-2",
+            allowed_evidence_ids=("frame:1",),
+        )
+
+    repair = captured.value.repair_contract()["details"]["repair_operations"]
+    assert [row["operation"] for row in repair] == ["close", "archive", "write"]
+    assert [row["expected_version"] for row in repair] == [1, 2, 3]
+    state.apply(
+        _transaction(*repair),
+        segment_id="segment-2-repair",
+        allowed_evidence_ids=("frame:1",),
+    )
+    assert state.records["current_activity"]["version"] == 4
+    assert state.records["current_activity"]["value"] == {"activity": "second"}
+
+
+def test_v10_terminal_operations_are_idempotent_and_recorded() -> None:
+    state = SlotMemoryState(
+        "e1c2",
+        lifecycle_policy=WP17_SLOT_LIFECYCLE_POLICY_V10,
+    )
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "walking"},
+                "observation_ids": ["obs-1"],
+            },
+            {
+                "operation": "close",
+                "slot": "current_activity",
+                "expected_version": 1,
+                "observation_ids": ["obs-1"],
+            },
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    redundant = state.apply(
+        _transaction(
+            {
+                "operation": "close",
+                "slot": "current_activity",
+                "expected_version": 2,
+                "observation_ids": ["obs-1"],
+            }
+        ),
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:1",),
+    )
+    assert redundant["lifecycle_events"][0]["operation"] == "redundant_close"
+    assert state.records["current_activity"]["version"] == 2
+
+
+def test_v10_sweeps_closed_slot_after_one_untouched_transaction() -> None:
+    state = SlotMemoryState(
+        "e1c2",
+        lifecycle_policy=WP17_SLOT_LIFECYCLE_POLICY_V10,
+    )
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "walking"},
+                "observation_ids": ["obs-1"],
+            },
+            {
+                "operation": "close",
+                "slot": "current_activity",
+                "expected_version": 1,
+                "observation_ids": ["obs-1"],
+            },
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    result = state.apply(
+        _transaction(),
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:1",),
+    )
+
+    assert state.records["current_activity"]["status"] == "evicted"
+    assert state.records["current_activity"]["version"] == 4
+    assert any(
+        row["operation"] == "runtime_lifecycle_sweep"
+        for row in result["lifecycle_events"]
+    )
+
+
+def test_v9_compatibility_keeps_untouched_closed_slot() -> None:
+    state = SlotMemoryState("e1c2")
+    state.apply(
+        _transaction(
+            {
+                "operation": "write",
+                "slot": "current_activity",
+                "expected_version": 0,
+                "value": {"activity": "walking"},
+                "observation_ids": ["obs-1"],
+            },
+            {
+                "operation": "close",
+                "slot": "current_activity",
+                "expected_version": 1,
+                "observation_ids": ["obs-1"],
+            },
+        ),
+        segment_id="segment-1",
+        allowed_evidence_ids=("frame:1",),
+    )
+    state.apply(
+        _transaction(),
+        segment_id="segment-2",
+        allowed_evidence_ids=("frame:1",),
+    )
+    assert state.records["current_activity"]["status"] == "closed"
+
+
+def test_v9_serialization_and_digest_remain_byte_compatible() -> None:
+    state = SlotMemoryState("e1c2")
+    capsule = state.capsule()
+    snapshot = state.snapshot()
+    expected_digest_payload = {
+        "arm": "e1c2",
+        "token_budget": 600,
+        "transaction_index": 0,
+        "records": {},
+        "ledger": [],
+    }
+    expected_digest = hashlib.sha256(
+        json.dumps(
+            expected_digest_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert "lifecycle_policy" not in capsule
+    assert "lifecycle_policy" not in snapshot
+    assert "closed_sweep_after_untouched_transactions" not in snapshot
+    assert state.digest() == expected_digest
+    assert SlotMemoryState.from_snapshot(snapshot).digest() == expected_digest
 
 
 def test_multi_operation_failure_is_atomic_and_returns_structured_repair() -> None:
